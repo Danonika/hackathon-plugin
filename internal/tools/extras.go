@@ -13,12 +13,12 @@ import (
 )
 
 var classificationRules = map[string][]string{
-	"security":   {"уязвим", "атак", "фишинг", "phishing", "malware", "взлом", "подозрительн", "exploit", "cve", "инцидент", "утечк"},
-	"finance":    {"платеж", "транзакц", "счет", "баланс", "кредит", "fraud", "мошеннич", "выручк", "списан"},
-	"medical":    {"диагноз", "пациент", "симптом", "лечен", "дозировк", "анализ крови", "прием"},
-	"legal":      {"договор", "иск", "суд", "претенз", "закон", "статья", "юрид", "соглашен"},
-	"spam":       {"выигрыш", "бесплатно", "акция", "скидк", "подпишись", "spam", "розыгрыш"},
-	"incident":   {"error", "warning", "alert", "exception", "failed", "timeout", "critical", "panic"},
+	"security": {"уязвим", "атак", "фишинг", "phishing", "malware", "взлом", "подозрительн", "exploit", "cve", "инцидент", "утечк"},
+	"finance":  {"платеж", "транзакц", "счет", "баланс", "кредит", "fraud", "мошеннич", "выручк", "списан"},
+	"medical":  {"диагноз", "пациент", "симптом", "лечен", "дозировк", "анализ крови", "прием"},
+	"legal":    {"договор", "иск", "суд", "претенз", "закон", "статья", "юрид", "соглашен"},
+	"spam":     {"выигрыш", "бесплатно", "акция", "скидк", "подпишись", "spam", "розыгрыш"},
+	"incident": {"error", "warning", "alert", "exception", "failed", "timeout", "critical", "panic"},
 }
 
 type chartPoint struct {
@@ -71,7 +71,13 @@ func registerClassification(reg *mcp.Registry, d Deps) {
 			scores := map[string]float64{}
 			matched := map[string][]string{}
 			best, bestScore := "unknown", 0.0
-			for category, keywords := range rules {
+			ordered := make([]string, 0, len(rules))
+			for category := range rules {
+				ordered = append(ordered, category)
+			}
+			sort.Strings(ordered)
+			for _, category := range ordered {
+				keywords := rules[category]
 				hits := 0
 				terms := []string{}
 				for _, kw := range keywords {
@@ -101,8 +107,8 @@ func registerClassification(reg *mcp.Registry, d Deps) {
 				}).WithWarnings("no rule matched; label is unknown"), nil
 			}
 			return mcp.OK(trace(ctx), map[string]any{
-				"label":           best,
-				"scores":          scores,
+				"label":            best,
+				"scores":           scores,
 				"matched_keywords": matched[best],
 			}), nil
 		},
@@ -319,11 +325,16 @@ func renderChartSVG(title, kind string, series []chartSeries) string {
 			if label == "" {
 				label = fmt.Sprintf("%d", idx)
 			}
-			if len(label) > 24 {
-				label = label[:24] + "..."
+			if runes := []rune(label); len(runes) > 24 {
+				label = string(runes[:24]) + "..."
+			}
+			labelX := xPos(idx, len(longest.Points))
+			if kind == "bar" {
+				slot := plotW / float64(len(longest.Points))
+				labelX = left + slot*float64(idx) + slot/2
 			}
 			fmt.Fprintf(&b, `<text x="%.0f" y="%.0f" font-size="11" fill="#6b7280" text-anchor="middle">%s</text>`+"\n",
-				xPos(idx, len(longest.Points)), top+plotH+18, xmlEscape(label))
+				labelX, top+plotH+18, xmlEscape(label))
 		}
 	}
 
@@ -344,7 +355,7 @@ func registerReports(reg *mcp.Registry, d Deps) {
 		"reports.create",
 		"Compose a markdown or HTML report from titled sections and store it as an artifact.",
 		map[string]any{
-			"title": strProp("Report title"),
+			"title":  strProp("Report title"),
 			"format": strProp("md (default) or html"),
 			"sections": arrProp("Sections: [{heading, body}]", map[string]any{
 				"type": "object",
@@ -500,12 +511,16 @@ func registerMedia(reg *mcp.Registry, d Deps) {
 			if !d.OpenAI.Available() {
 				return mcp.Fail(trace(ctx), "OPENAI_API_KEY is not configured; vision.analyze requires OpenAI"), nil
 			}
+			st, serr := os.Stat(full)
+			if serr != nil {
+				return mcp.Fail(trace(ctx), serr.Error()), nil
+			}
+			if st.Size() > 20<<20 {
+				return mcp.Fail(trace(ctx), "image larger than 20MB is not supported"), nil
+			}
 			raw, rerr := os.ReadFile(full)
 			if rerr != nil {
 				return mcp.Fail(trace(ctx), rerr.Error()), nil
-			}
-			if len(raw) > 20<<20 {
-				return mcp.Fail(trace(ctx), "image larger than 20MB is not supported"), nil
 			}
 			prompt := argString(args, "prompt")
 			if prompt == "" {

@@ -15,21 +15,35 @@ import (
 	"github.com/ledongthuc/pdf"
 )
 
-func pdfText(path string) (string, error) {
+const maxExtractedChars = 10_000_000
+const maxRawTextBytes = 20 << 20
+
+func pdfText(path string) (text string, truncated bool, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			text = ""
+			truncated = false
+			err = fmt.Errorf("pdf parse failed: %v", r)
+		}
+	}()
 	f, r, err := pdf.Open(path)
 	if err != nil {
-		return "", err
+		return "", false, err
 	}
 	defer f.Close()
 	reader, err := r.GetPlainText()
 	if err != nil {
-		return "", err
+		return "", false, err
 	}
-	raw, err := io.ReadAll(reader)
+	raw, err := io.ReadAll(io.LimitReader(reader, maxExtractedChars+1))
 	if err != nil {
-		return "", err
+		return "", false, err
 	}
-	return strings.TrimSpace(string(raw)), nil
+	if len(raw) > maxExtractedChars {
+		raw = raw[:maxExtractedChars]
+		truncated = true
+	}
+	return strings.TrimSpace(trimPartialRune(string(raw))), truncated, nil
 }
 
 func isTextExt(ext string) bool {
@@ -46,7 +60,7 @@ func extractText(path string) (string, []string, error) {
 	case "docx":
 		text, err := docxText(path)
 		return text, nil, err
-	case "xlsx", "xls":
+	case "xlsx":
 		sheets, warnings, err := readXLSXSheets(path)
 		if err != nil {
 			return "", warnings, err
@@ -60,25 +74,44 @@ func extractText(path string) (string, []string, error) {
 			b.WriteString(tableAsText(s.Table))
 		}
 		return strings.TrimSpace(b.String()), warnings, nil
+	case "xls":
+		return "", nil, fmt.Errorf("legacy .xls (BIFF) workbooks are not supported; convert the file to .xlsx or .csv first")
 	case "pdf":
-		text, err := pdfText(path)
+		text, truncated, err := pdfText(path)
 		if err != nil {
 			return "", []string{"pdf text extraction failed: " + err.Error()}, nil
 		}
-		if strings.TrimSpace(text) == "" {
-			return "", []string{"pdf contains no extractable text (possibly a scanned document); OCR is required"}, nil
+		warnings := []string{}
+		if truncated {
+			warnings = append(warnings, fmt.Sprintf("pdf text truncated at %d bytes", maxExtractedChars))
 		}
-		return text, nil, nil
+		if strings.TrimSpace(text) == "" {
+			return "", append(warnings, "pdf contains no extractable text (possibly a scanned document); OCR is required"), nil
+		}
+		return text, warnings, nil
 	default:
-		b, err := os.ReadFile(path)
-		if err != nil {
-			return "", nil, err
+		st, statErr := os.Stat(path)
+		if statErr != nil {
+			return "", nil, statErr
 		}
 		warnings := []string{}
+		limit := int64(maxRawTextBytes)
+		if st.Size() > limit {
+			warnings = append(warnings, fmt.Sprintf("file is larger than %dMB; only the first %dMB was read", maxRawTextBytes>>20, maxRawTextBytes>>20))
+		}
+		f, err := os.Open(path)
+		if err != nil {
+			return "", warnings, err
+		}
+		defer f.Close()
+		b, err := io.ReadAll(io.LimitReader(f, limit))
+		if err != nil {
+			return "", warnings, err
+		}
 		if !isTextExt(ext) {
 			warnings = append(warnings, fmt.Sprintf("file type %q has no dedicated processor; raw content returned as text", ext))
 		}
-		return string(b), warnings, nil
+		return trimPartialRune(string(b)), warnings, nil
 	}
 }
 
@@ -153,7 +186,7 @@ func docxText(path string) (string, error) {
 func registerDocuments(reg *mcp.Registry, d Deps) {
 	reg.Register(tool(
 		"documents.ingest",
-		"Extract text from an input file and store it as a reusable artifact. Supports txt, md, csv, tsv, json, log, docx, xlsx and text-like formats.",
+		"Extract text from an input file and store it as a reusable artifact. Supports txt, md, csv, tsv, json, log, docx, pdf, xlsx and text-like formats. XLSX input yields every worksheet; a scanned PDF returns empty text plus a warning (OCR required).",
 		map[string]any{
 			"path": strProp("Relative path under data/input"),
 		},
@@ -223,6 +256,9 @@ func registerDocuments(reg *mcp.Registry, d Deps) {
 			if maxChars <= 0 || maxChars > 10_000_000 {
 				maxChars = d.Cfg.Config().Tools.MaxTextChars
 			}
+			if maxChars <= 0 {
+				maxChars = 60000
+			}
 			truncated := false
 			r := []rune(text)
 			if len(r) > maxChars {
@@ -264,6 +300,9 @@ func registerDocuments(reg *mcp.Registry, d Deps) {
 			maxChars := argInt(args, "max_chars", d.Cfg.Config().Tools.MaxTextChars)
 			if maxChars <= 0 || maxChars > 10_000_000 {
 				maxChars = d.Cfg.Config().Tools.MaxTextChars
+			}
+			if maxChars <= 0 {
+				maxChars = 60000
 			}
 			offset := argInt(args, "offset", 0)
 			if offset < 0 {

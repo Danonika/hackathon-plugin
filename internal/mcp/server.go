@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"runtime/debug"
 	"time"
 
 	"hackathonkit.local/agentkit/internal/observability"
@@ -51,38 +52,62 @@ func (s *Server) Serve(ctx context.Context) error {
 }
 
 func (s *Server) ServeStreams(ctx context.Context, in io.Reader, out io.Writer) error {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
 	if in == nil {
 		in = stdinReader()
 	}
 	if out == nil {
 		out = stdoutWriter()
 	}
-	scanner := bufio.NewScanner(in)
-	scanner.Buffer(make([]byte, 0, 64*1024), 32*1024*1024)
+	lines := make(chan []byte)
+	scanErr := make(chan error, 1)
+	go func() {
+		defer close(lines)
+		scanner := bufio.NewScanner(in)
+		scanner.Buffer(make([]byte, 0, 64*1024), 32*1024*1024)
+		for scanner.Scan() {
+			line := bytes.TrimSpace(scanner.Bytes())
+			if len(line) == 0 {
+				continue
+			}
+			buf := append([]byte(nil), line...)
+			select {
+			case lines <- buf:
+			case <-ctx.Done():
+				scanErr <- ctx.Err()
+				return
+			}
+		}
+		scanErr <- scanner.Err()
+	}()
 	enc := json.NewEncoder(out)
-	for scanner.Scan() {
-		line := bytes.TrimSpace(scanner.Bytes())
-		if len(line) == 0 {
-			continue
-		}
-		var req Request
-		if err := json.Unmarshal(line, &req); err != nil {
-			_ = enc.Encode(Response{
-				JSONRPC: "2.0",
-				ID:      json.RawMessage("null"),
-				Error:   &RPCError{Code: CodeParseError, Message: "parse error: " + err.Error()},
-			})
-			continue
-		}
-		resp := s.handle(ctx, &req)
-		if resp == nil {
-			continue
-		}
-		if err := enc.Encode(resp); err != nil {
-			return err
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case line, ok := <-lines:
+			if !ok {
+				return <-scanErr
+			}
+			var req Request
+			if err := json.Unmarshal(line, &req); err != nil {
+				_ = enc.Encode(Response{
+					JSONRPC: "2.0",
+					ID:      json.RawMessage("null"),
+					Error:   &RPCError{Code: CodeParseError, Message: "parse error: " + err.Error()},
+				})
+				continue
+			}
+			resp := s.handle(ctx, &req)
+			if resp == nil {
+				continue
+			}
+			if err := enc.Encode(resp); err != nil {
+				return err
+			}
 		}
 	}
-	return scanner.Err()
 }
 
 func (s *Server) handle(ctx context.Context, req *Request) *Response {
@@ -92,16 +117,8 @@ func (s *Server) handle(ctx context.Context, req *Request) *Response {
 	resp := &Response{JSONRPC: "2.0", ID: req.ID}
 	switch req.Method {
 	case "initialize":
-		var p struct {
-			ProtocolVersion string `json:"protocolVersion"`
-		}
-		_ = json.Unmarshal(req.Params, &p)
-		pv := p.ProtocolVersion
-		if pv == "" {
-			pv = DefaultProtocolVersion
-		}
 		resp.Result = map[string]any{
-			"protocolVersion": pv,
+			"protocolVersion": DefaultProtocolVersion,
 			"capabilities": map[string]any{
 				"tools": map[string]any{"listChanged": false},
 			},
@@ -124,6 +141,12 @@ func (s *Server) handle(ctx context.Context, req *Request) *Response {
 }
 
 func (s *Server) toolDescriptors() []map[string]any {
+	return s.ToolDescriptors()
+}
+
+// ToolDescriptors returns the same descriptors served by tools/list, so CLI
+// listings and the live server cannot drift apart.
+func (s *Server) ToolDescriptors() []map[string]any {
 	tools := make([]map[string]any, 0, len(s.registry.List()))
 	for _, t := range s.registry.List() {
 		schema := t.InputSchema
@@ -215,6 +238,12 @@ func (s *Server) handleToolCall(ctx context.Context, req *Request, resp *Respons
 func (s *Server) invokeTool(ctx context.Context, tool *Tool, args map[string]any) (result any, err error) {
 	defer func() {
 		if r := recover(); r != nil {
+			stack := debug.Stack()
+			observability.Log(s.opts.Logger, "error", "tool_panic", map[string]any{
+				"tool":  tool.Name,
+				"error": fmt.Sprintf("%v", r),
+				"stack": string(stack),
+			})
 			err = fmt.Errorf("tool %s panicked: %v", tool.Name, r)
 		}
 	}()
@@ -259,10 +288,21 @@ func (s *Server) SelfTest(ctx context.Context, out io.Writer) error {
 			summary["ok"] = false
 		} else {
 			entry["result"] = resp.Result
+			if result, ok := resp.Result.(map[string]any); ok {
+				if isErr, ok := result["isError"].(bool); ok && isErr {
+					summary["ok"] = false
+				}
+			}
 		}
 		summary["steps"] = append(summary["steps"].([]any), entry)
 	}
 	summary["tool_count"] = len(s.registry.Names())
 	summary["tools"] = s.registry.Names()
-	return enc.Encode(summary)
+	if err := enc.Encode(summary); err != nil {
+		return err
+	}
+	if ok, _ := summary["ok"].(bool); !ok {
+		return fmt.Errorf("selftest failed: one or more steps returned an error")
+	}
+	return nil
 }

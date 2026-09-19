@@ -1,4 +1,4 @@
-FROM golang:1.27-alpine AS build
+FROM golang:1.27-alpine3.24 AS build
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
@@ -6,17 +6,19 @@ COPY . .
 RUN CGO_ENABLED=0 go build -trimpath -o /out/hackathonkit-mcp ./cmd/hackathonkit-mcp
 RUN CGO_ENABLED=0 go build -trimpath -o /out/hackathonkit-demo-api ./cmd/demo-api
 
-FROM alpine:3.20 AS hackathonkit-mcp
-RUN apk add --no-cache ca-certificates
+FROM alpine:3.24.2 AS runtime-base
+RUN apk add --no-cache ca-certificates && adduser -D -u 1000 hackathonkit
 WORKDIR /workspace
-COPY --from=build /out/hackathonkit-mcp /usr/local/bin/hackathonkit-mcp
+RUN mkdir -p /workspace/configs /workspace/logs /workspace/data/input /workspace/data/artifacts /workspace/data/index && chown -R 1000:1000 /workspace
 ENV HACKATHONKIT_REPO_ROOT=/workspace
+USER 1000:1000
+
+FROM runtime-base AS hackathonkit-mcp
+COPY --from=build /out/hackathonkit-mcp /usr/local/bin/hackathonkit-mcp
 ENTRYPOINT ["hackathonkit-mcp"]
 
-FROM alpine:3.20 AS demo-api
-RUN apk add --no-cache ca-certificates
-WORKDIR /workspace
+FROM runtime-base AS demo-api
 COPY --from=build /out/hackathonkit-demo-api /usr/local/bin/hackathonkit-demo-api
-ENV HACKATHONKIT_REPO_ROOT=/workspace
 EXPOSE 8787
+HEALTHCHECK --interval=30s --timeout=3s --start-period=5s CMD wget -qO- "http://127.0.0.1:${HACKATHONKIT_DEMO_PORT:-8787}/healthz" || exit 1
 ENTRYPOINT ["hackathonkit-demo-api"]

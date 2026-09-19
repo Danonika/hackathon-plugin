@@ -43,11 +43,11 @@ type Recorder interface {
 
 type Disabled struct{}
 
-func (Disabled) Enabled() bool                                             { return false }
-func (Disabled) RecordArtifact(context.Context, ArtifactRecord) error      { return nil }
-func (Disabled) RecordRoutingRun(context.Context, RoutingRun) error        { return nil }
-func (Disabled) RecordFlyPrediction(context.Context, FlyPrediction) error  { return nil }
-func (Disabled) Close()                                                    {}
+func (Disabled) Enabled() bool                                            { return false }
+func (Disabled) RecordArtifact(context.Context, ArtifactRecord) error     { return nil }
+func (Disabled) RecordRoutingRun(context.Context, RoutingRun) error       { return nil }
+func (Disabled) RecordFlyPrediction(context.Context, FlyPrediction) error { return nil }
+func (Disabled) Close()                                                   {}
 
 const schema = `
 CREATE TABLE IF NOT EXISTS artifacts (
@@ -100,7 +100,9 @@ func OpenPostgres(ctx context.Context, dsn string) (*Postgres, error) {
 		pool.Close()
 		return nil, err
 	}
-	if _, err := pool.Exec(ctx, schema); err != nil {
+	ddlCtx, ddlCancel := context.WithTimeout(ctx, 15*time.Second)
+	defer ddlCancel()
+	if _, err := pool.Exec(ddlCtx, schema); err != nil {
 		pool.Close()
 		return nil, err
 	}
@@ -135,9 +137,15 @@ func (p *Postgres) RecordFlyPrediction(ctx context.Context, pred FlyPrediction) 
 	if !p.Enabled() {
 		return nil
 	}
-	scores, _ := json.Marshal(pred.CategoryScores)
-	recs, _ := json.Marshal(pred.Recommendations)
-	_, err := p.pool.Exec(ctx,
+	scores, err := json.Marshal(pred.CategoryScores)
+	if err != nil {
+		return fmt.Errorf("metadata: marshal category scores: %w", err)
+	}
+	recs, err := json.Marshal(pred.Recommendations)
+	if err != nil {
+		return fmt.Errorf("metadata: marshal recommendations: %w", err)
+	}
+	_, err = p.pool.Exec(ctx,
 		`INSERT INTO fly_predictions (trace_id, route, encoder, max_score, threshold, category_scores, recommendations)
 		 VALUES ($1,$2,$3,$4,$5,$6,$7)`,
 		pred.TraceID, pred.Route, pred.Encoder, pred.MaxScore, pred.Threshold, scores, recs)

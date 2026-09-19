@@ -85,6 +85,14 @@
   </div>
 </div>
 <script>
+const HACKATHONKIT_TOKEN = "__HACKATHONKIT_DEMO_TOKEN__";
+
+function esc(v) {
+  return String(v).replace(/[&<>"']/g, c => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+  })[c]);
+}
+
 async function j(url, opts) {
   const r = await fetch(url, opts);
   if (!r.ok) throw new Error(url + " -> " + r.status);
@@ -92,7 +100,11 @@ async function j(url, opts) {
 }
 
 async function setMode(mode) {
-  await j('/routing', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ mode }) });
+  await j('/routing', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-HackathonKit-Token': HACKATHONKIT_TOKEN },
+    body: JSON.stringify({ mode })
+  });
   refresh();
 }
 
@@ -119,11 +131,11 @@ function renderFly(events) {
   const sorted = Object.entries(scores).sort((a, b) => b[1] - a[1]);
   bars.innerHTML = sorted.map(([cat, val], i) =>
     '<div class="bar-row' + (i === 0 ? ' top' : '') + '">' +
-    '<span>' + cat.toUpperCase() + '</span>' +
+    '<span>' + esc(cat.toUpperCase()) + '</span>' +
     '<div class="bar"><span style="width:' + Math.round(val * 100) + '%"></span></div>' +
     '<span>' + Math.round(val * 100) + '%</span></div>').join('');
   recs.innerHTML = (ev.recommendations || []).map(r =>
-    '<div class="rec">' + r.capability + ' — ' + Math.round(r.score * 100) + '%</div>').join('');
+    '<div class="rec">' + esc(r.capability) + ' — ' + Math.round(r.score * 100) + '%</div>').join('');
   meta.textContent = 'route: ' + ev.route + ' · encoder: ' + ev.encoder +
     ' · max_score: ' + ev.max_score + ' · threshold: ' + ev.threshold + ' · ' + (ev.task || '');
 }
@@ -132,7 +144,7 @@ function renderCalls(calls) {
   const el = document.getElementById('calls');
   if (!calls.length) { el.innerHTML = '<li class="muted">ожидание вызовов…</li>'; return; }
   el.innerHTML = calls.slice().reverse().map(c =>
-    '<li><span class="tool">' + c.tool + '</span>' +
+    '<li><span class="tool">' + esc(c.tool) + '</span>' +
     (c.status === 'error' ? '<span class="err">error</span>' : '') +
     '<span class="dur">' + c.duration_ms + ' ms</span></li>').join('');
 }
@@ -141,7 +153,7 @@ function renderFiles(id, files) {
   const el = document.getElementById(id);
   if (!files.length) { el.innerHTML = '<li class="muted">пусто</li>'; return; }
   el.innerHTML = files.map(f =>
-    '<li><span>' + f.path + '</span><span class="size">' + fmtSize(f.size_bytes) + '</span></li>').join('');
+    '<li><span>' + esc(f.path) + '</span><span class="size">' + fmtSize(f.size_bytes) + '</span></li>').join('');
 }
 
 async function refresh() {

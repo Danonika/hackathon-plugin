@@ -21,8 +21,10 @@ type table struct {
 func readAnyTable(path string, sheet string) (*table, []string, error) {
 	ext := strings.ToLower(strings.TrimPrefix(filepath.Ext(path), "."))
 	switch ext {
-	case "xlsx", "xls":
+	case "xlsx":
 		return readXLSXTable(path, sheet)
+	case "xls":
+		return nil, nil, fmt.Errorf("legacy .xls (BIFF) tables are not supported; convert the file to .xlsx or .csv first")
 	case "tsv":
 		t, err := readCSVTable(path, "\t")
 		return t, nil, err

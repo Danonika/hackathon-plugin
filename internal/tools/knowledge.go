@@ -129,7 +129,8 @@ func registerKnowledge(reg *mcp.Registry, d Deps) {
 			if len(chunks) == 0 {
 				return mcp.Fail(trace(ctx), "no text to index"), nil
 			}
-			doc := indexDoc{Source: source, ArtifactID: artifactID, Corpus: argString(args, "corpus"), CreatedAt: time.Now().UTC().Format(time.RFC3339)}
+			corpus := argString(args, "corpus")
+			doc := indexDoc{Source: source, ArtifactID: artifactID, Corpus: corpus, CreatedAt: time.Now().UTC().Format(time.RFC3339)}
 			for i, chunk := range chunks {
 				terms := map[string]int{}
 				for _, tok := range tokenize(chunk) {
@@ -142,8 +143,12 @@ func registerKnowledge(reg *mcp.Registry, d Deps) {
 				return mcp.Fail(trace(ctx), err.Error()), nil
 			}
 			base := strings.TrimSuffix(filepath.Base(source), filepath.Ext(source))
+			indexKey := source
+			if corpus != "" {
+				indexKey = source + "\x00" + corpus
+			}
 			indexID, werr := d.Store.WriteIndex(
-				fmt.Sprintf("knowledge/%s-%s.json", slugify(base), shortHash(source)),
+				fmt.Sprintf("knowledge/%s-%s.json", slugify(base), shortHash(indexKey)),
 				payload,
 			)
 			if werr != nil {
@@ -165,12 +170,12 @@ func registerKnowledge(reg *mcp.Registry, d Deps) {
 		"knowledge.search",
 		"Search previously indexed text (TF-IDF style) and return grounded chunks with sources.",
 		map[string]any{
-			"query":       strProp("Search query"),
-			"limit":       numProp("Maximum hits (default 5)"),
-			"corpus":      strProp("Restrict the search to one corpus label"),
-			"index_id":    strProp("Restrict the search to a single index_id returned by knowledge.index"),
-			"index_ids":   arrProp("Restrict the search to several index_ids", map[string]any{"type": "string"}),
-			"text_chars":  numProp("Characters of chunk text to return per hit (default 300, max 4000)"),
+			"query":      strProp("Search query"),
+			"limit":      numProp("Maximum hits (default 5)"),
+			"corpus":     strProp("Restrict the search to one corpus label"),
+			"index_id":   strProp("Restrict the search to a single index_id returned by knowledge.index"),
+			"index_ids":  arrProp("Restrict the search to several index_ids", map[string]any{"type": "string"}),
+			"text_chars": numProp("Characters of chunk text to return per hit (default 300, max 4000)"),
 		},
 		[]string{"query"},
 		func(ctx context.Context, args map[string]any) (any, error) {
@@ -280,10 +285,10 @@ func registerKnowledge(reg *mcp.Registry, d Deps) {
 				hits = hits[:limit]
 			}
 			env := mcp.OK(trace(ctx), map[string]any{
-				"hits":          hits,
-				"index_count":   len(docs),
-				"total_chunks":  totalChunks,
-				"matched":       len(hits),
+				"hits":         hits,
+				"index_count":  len(docs),
+				"total_chunks": totalChunks,
+				"matched":      len(hits),
 			})
 			for _, h := range hits {
 				artifactID := h.ArtifactID

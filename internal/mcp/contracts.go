@@ -2,15 +2,21 @@ package mcp
 
 type Source struct {
 	ArtifactID string `json:"artifact_id,omitempty"`
-	Page       int    `json:"page,omitempty"`
+	Page       *int   `json:"page,omitempty"`
 	Block      string `json:"block,omitempty"`
 	Sheet      string `json:"sheet,omitempty"`
-	Row        int    `json:"row,omitempty"`
+	Row        *int   `json:"row,omitempty"`
 	Column     string `json:"column,omitempty"`
 	Timestamp  string `json:"timestamp,omitempty"`
 	StartTime  string `json:"start_time,omitempty"`
 	EndTime    string `json:"end_time,omitempty"`
 	Region     string `json:"region,omitempty"`
+}
+
+// IntPtr returns a pointer to v, so callers can express an explicit zero index
+// in a Source without it being indistinguishable from "not set".
+func IntPtr(v int) *int {
+	return &v
 }
 
 type Envelope struct {

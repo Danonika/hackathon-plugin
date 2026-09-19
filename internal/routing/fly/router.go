@@ -34,6 +34,7 @@ type Router struct {
 
 	mu        sync.Mutex
 	centroids map[string][]float64
+	building  chan struct{}
 }
 
 func NewRouter(settings config.RoutingSettings) *Router {
@@ -119,6 +120,7 @@ func (r *Router) Recommend(ctx context.Context, task string, meta map[string]any
 			scores[category] = s
 		}
 	}
+	keywordSignal := len(scores) > 0
 	encoder := "keyword"
 	if embeddingScores, ok := r.embeddingCategoryScores(ctx, task); ok {
 		encoder = "keyword+embedding"
@@ -130,8 +132,10 @@ func (r *Router) Recommend(ctx context.Context, task string, meta map[string]any
 			scores[category] = combined
 		}
 	}
-	applyMetadata(scores, meta)
-	boost(scores, "reports", 0.15)
+	metadataSignal := applyMetadata(scores, meta)
+	if keywordSignal || metadataSignal {
+		boost(scores, "reports", 0.15)
+	}
 
 	avail := map[string]bool{}
 	for _, c := range available {
@@ -141,7 +145,7 @@ func (r *Router) Recommend(ctx context.Context, task string, meta map[string]any
 	route := ""
 	routeScore := 0.0
 	for category, s := range scores {
-		if s > routeScore {
+		if s > routeScore || (s == routeScore && (route == "" || category < route)) {
 			route = category
 			routeScore = s
 		}
@@ -184,41 +188,47 @@ func (r *Router) Recommend(ctx context.Context, task string, meta map[string]any
 	}
 }
 
-func applyMetadata(scores map[string]float64, meta map[string]any) {
+func applyMetadata(scores map[string]float64, meta map[string]any) bool {
 	if meta == nil {
-		return
+		return false
+	}
+	applied := false
+	boostChecked := func(category string, delta float64) {
+		boost(scores, category, delta)
+		applied = true
 	}
 	types := stringSlice(meta["types"])
 	for _, t := range types {
 		switch t {
 		case "csv", "xlsx", "xls", "tsv":
-			boost(scores, "data", 0.5)
-			boost(scores, "timeseries", 0.3)
+			boostChecked("data", 0.5)
+			boostChecked("timeseries", 0.3)
 		case "pdf", "docx", "doc":
-			boost(scores, "documents", 0.7)
-			boost(scores, "knowledge", 0.3)
+			boostChecked("documents", 0.7)
+			boostChecked("knowledge", 0.3)
 		case "audio", "mp3", "wav", "m4a", "ogg":
-			boost(scores, "speech", 0.7)
-			boost(scores, "media", 0.2)
+			boostChecked("speech", 0.7)
+			boostChecked("media", 0.2)
 		case "image", "png", "jpg", "jpeg":
-			boost(scores, "vision", 0.7)
+			boostChecked("vision", 0.7)
 		case "video", "mp4", "mov", "mkv":
-			boost(scores, "media", 0.5)
-			boost(scores, "vision", 0.3)
-			boost(scores, "speech", 0.3)
+			boostChecked("media", 0.5)
+			boostChecked("vision", 0.3)
+			boostChecked("speech", 0.3)
 		case "log", "logs", "txt":
-			boost(scores, "classification", 0.3)
-			boost(scores, "data", 0.15)
+			boostChecked("classification", 0.3)
+			boostChecked("data", 0.15)
 		}
 	}
 	if v, ok := meta["has_timestamp"].(bool); ok && v {
-		boost(scores, "timeseries", 0.4)
-		boost(scores, "data", 0.1)
+		boostChecked("timeseries", 0.4)
+		boostChecked("data", 0.1)
 	}
 	if v, ok := meta["rows"].(float64); ok && v >= 500 {
-		boost(scores, "timeseries", 0.1)
-		boost(scores, "data", 0.15)
+		boostChecked("timeseries", 0.1)
+		boostChecked("data", 0.15)
 	}
+	return applied
 }
 
 func boost(scores map[string]float64, category string, delta float64) {

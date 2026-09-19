@@ -55,7 +55,7 @@ func registerFiles(reg *mcp.Registry, d Deps) {
 					data["headers"] = t.Headers
 					data["has_timestamp"] = hasTS
 				}
-			case "xlsx", "xls":
+			case "xlsx":
 				sheets, warns, terr := readXLSXSheets(full)
 				warnings = append(warnings, warns...)
 				if terr != nil {
@@ -81,6 +81,8 @@ func registerFiles(reg *mcp.Registry, d Deps) {
 						data["first_sheet"] = sheets[0].Name
 					}
 				}
+			case "xls":
+				warnings = append(warnings, "legacy .xls (BIFF) workbooks are not supported; convert the file to .xlsx or .csv first")
 			default:
 				if isTextExt(ext) {
 					if b, rerr := os.ReadFile(full); rerr == nil {

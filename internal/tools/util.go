@@ -5,6 +5,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 func parseNumber(s string) (float64, bool) {
@@ -96,8 +97,9 @@ func slugify(s string) string {
 	if out == "" {
 		return "item"
 	}
-	if len(out) > 60 {
-		out = out[:60]
+	runes := []rune(out)
+	if len(runes) > 60 {
+		out = string(runes[:60])
 	}
 	return out
 }
@@ -108,6 +110,19 @@ func snippet(text string, limit int) string {
 		return string(r)
 	}
 	return string(r[:limit]) + "..."
+}
+
+// trimPartialRune drops a trailing byte fragment of a multi-byte UTF-8
+// sequence left behind by byte-based truncation.
+func trimPartialRune(s string) string {
+	for len(s) > 0 {
+		r, size := utf8.DecodeLastRuneInString(s)
+		if r != utf8.RuneError || size != 1 {
+			break
+		}
+		s = s[:len(s)-1]
+	}
+	return s
 }
 
 func mean(values []float64) float64 {

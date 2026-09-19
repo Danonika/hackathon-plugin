@@ -1,6 +1,7 @@
 package observability
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
@@ -97,29 +98,65 @@ func AppendJSONL(path string, entry any) error {
 	if err != nil {
 		return err
 	}
-	defer f.Close()
 	enc := json.NewEncoder(f)
-	return enc.Encode(entry)
+	writeErr := enc.Encode(entry)
+	closeErr := f.Close()
+	if writeErr != nil {
+		return writeErr
+	}
+	return closeErr
 }
 
+// TailJSONL returns up to limit trailing JSONL records. It reads backwards
+// from the end of the file instead of loading the whole log, skips lines that
+// are not complete JSON (a concurrent writer may be mid-append), and copies
+// every returned line so the backing buffer can be garbage collected.
 func TailJSONL(path string, limit int) ([]json.RawMessage, error) {
 	if limit <= 0 || limit > 1000 {
 		limit = 50
 	}
-	data, err := os.ReadFile(path)
+	f, err := os.Open(path)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return []json.RawMessage{}, nil
 		}
 		return nil, err
 	}
+	defer f.Close()
+	st, err := f.Stat()
+	if err != nil {
+		return nil, err
+	}
+	const chunkSize = 64 * 1024
+	const maxTailBytes = 4 << 20
+	var buf []byte
+	offset := st.Size()
+	for offset > 0 && len(buf) < maxTailBytes {
+		readSize := int64(chunkSize)
+		if offset < readSize {
+			readSize = offset
+		}
+		offset -= readSize
+		tmp := make([]byte, readSize)
+		n, err := f.ReadAt(tmp, offset)
+		if err != nil && err != io.EOF {
+			return nil, err
+		}
+		if n == 0 {
+			break
+		}
+		buf = append(tmp[:n], buf...)
+		if bytes.Count(buf, []byte{'\n'}) > limit+1 {
+			break
+		}
+	}
 	lines := []json.RawMessage{}
-	for _, line := range splitLines(data) {
+	for _, line := range splitLines(buf) {
 		trimmed := trimSpace(line)
-		if len(trimmed) == 0 {
+		if len(trimmed) == 0 || !json.Valid(trimmed) {
 			continue
 		}
-		lines = append(lines, json.RawMessage(trimmed))
+		lines = append(lines, json.RawMessage(append([]byte(nil), trimmed...)))
 	}
 	if len(lines) > limit {
 		lines = lines[len(lines)-limit:]

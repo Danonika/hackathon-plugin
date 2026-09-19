@@ -5,7 +5,10 @@ import (
 	"embed"
 	"encoding/json"
 	"fmt"
+	"log"
+	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
@@ -58,8 +61,10 @@ func main() {
 			http.Error(w, "static page missing", http.StatusInternalServerError)
 			return
 		}
+		quoted, _ := json.Marshal(token)
+		rendered := strings.ReplaceAll(string(page), `"__HACKATHONKIT_DEMO_TOKEN__"`, string(quoted))
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		_, _ = w.Write(page)
+		_, _ = w.Write([]byte(rendered))
 	})
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{
@@ -102,19 +107,29 @@ func main() {
 		}
 	})
 	mux.HandleFunc("/inputs", func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, http.StatusOK, map[string]any{"files": listFiles(mgr, mgr.Config().Storage.InputDir)})
+		files, err := listFiles(mgr, mgr.Config().Storage.InputDir)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"files": files})
 	})
 	mux.HandleFunc("/artifacts", func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, http.StatusOK, map[string]any{"files": listFiles(mgr, mgr.Config().Storage.ArtifactDir)})
+		files, err := listFiles(mgr, mgr.Config().Storage.ArtifactDir)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"files": files})
 	})
 	mux.HandleFunc("/calls", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{
-			"calls": tail(root, "logs/mcp-calls.jsonl", queryLimit(r, 50)),
+			"calls": tail(logger, root, "logs/mcp-calls.jsonl", queryLimit(r, 50)),
 		})
 	})
 	mux.HandleFunc("/fly-events", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{
-			"events": tail(root, "logs/fly-events.jsonl", queryLimit(r, 10)),
+			"events": tail(logger, root, "logs/fly-events.jsonl", queryLimit(r, 10)),
 		})
 	})
 	mux.HandleFunc("/metrics", func(w http.ResponseWriter, r *http.Request) {
@@ -123,7 +138,7 @@ func main() {
 		fmt.Fprintf(w, "hackathonkit_routing_mode{mode=%q} 1\n", mgr.Routing().Mode)
 	})
 
-	addr := host + ":" + port
+	addr := net.JoinHostPort(host, port)
 	server := &http.Server{
 		Addr:              addr,
 		Handler:           withCORS(mux),
@@ -136,9 +151,10 @@ func main() {
 	}
 }
 
-func tail(root, rel string, limit int) []json.RawMessage {
+func tail(logger *log.Logger, root, rel string, limit int) []json.RawMessage {
 	entries, err := observability.TailJSONL(filepath.Join(root, filepath.FromSlash(rel)), limit)
 	if err != nil {
+		observability.Log(logger, "warn", "tail_failed", map[string]any{"path": rel, "error": err.Error()})
 		return []json.RawMessage{}
 	}
 	return entries
@@ -159,20 +175,23 @@ type fileInfo struct {
 	Modified  string `json:"modified"`
 }
 
-func listFiles(mgr *config.Manager, relDir string) []fileInfo {
+func listFiles(mgr *config.Manager, relDir string) ([]fileInfo, error) {
 	base := filepath.Join(mgr.Root(), filepath.FromSlash(relDir))
 	out := []fileInfo{}
-	_ = filepath.WalkDir(base, func(path string, d os.DirEntry, err error) error {
-		if err != nil || d.IsDir() {
+	err := filepath.WalkDir(base, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
 			return nil
 		}
 		rel, relErr := filepath.Rel(base, path)
 		if relErr != nil {
-			return nil
+			return relErr
 		}
 		st, statErr := d.Info()
 		if statErr != nil {
-			return nil
+			return statErr
 		}
 		out = append(out, fileInfo{
 			Path:      filepath.ToSlash(rel),
@@ -184,8 +203,11 @@ func listFiles(mgr *config.Manager, relDir string) []fileInfo {
 		}
 		return nil
 	})
+	if os.IsNotExist(err) {
+		err = nil
+	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Path < out[j].Path })
-	return out
+	return out, err
 }
 
 func originAllowed(r *http.Request) bool {
@@ -193,14 +215,25 @@ func originAllowed(r *http.Request) bool {
 	if origin == "" {
 		return true
 	}
-	return strings.HasPrefix(origin, "http://127.0.0.1") || strings.HasPrefix(origin, "http://localhost")
+	u, err := url.Parse(origin)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") {
+		return false
+	}
+	switch strings.ToLower(u.Hostname()) {
+	case "127.0.0.1", "localhost", "::1":
+		return true
+	}
+	return false
 }
 
 func withCORS(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+		w.Header().Add("Vary", "Origin")
+		if origin := r.Header.Get("Origin"); origin != "" && originAllowed(r) {
+			w.Header().Set("Access-Control-Allow-Origin", origin)
+			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, X-HackathonKit-Token")
+		}
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)
 			return

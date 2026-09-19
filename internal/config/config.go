@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -39,6 +40,19 @@ type File struct {
 	Storage StorageSettings `yaml:"storage"`
 	Tools   ToolSettings    `yaml:"tools"`
 	Routing RoutingSettings `yaml:"routing"`
+}
+
+// filePatch mirrors the numeric fields with pointers so an explicit zero can be
+// distinguished from an absent key.
+type filePatch struct {
+	Tools struct {
+		DefaultTimeoutSec *int `yaml:"default_timeout_sec"`
+		MaxTextChars      *int `yaml:"max_text_chars"`
+	} `yaml:"tools"`
+	Routing struct {
+		FlyThreshold *float64 `yaml:"fly_threshold"`
+		TopK         *int     `yaml:"top_k"`
+	} `yaml:"routing"`
 }
 
 type RoutingState struct {
@@ -116,13 +130,43 @@ func DiscoverRoot() string {
 func NewManager(root string) *Manager {
 	m := &Manager{root: root, cfg: defaults()}
 	path := filepath.Join(root, "configs", "config.yaml")
-	if data, err := os.ReadFile(path); err == nil {
-		var loaded File
-		if yaml.Unmarshal(data, &loaded) == nil {
-			mergeFile(&m.cfg, loaded)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			log.Printf("config: cannot read %s: %v (using built-in defaults)", path, err)
 		}
+		return m
+	}
+	var loaded File
+	if err := yaml.Unmarshal(data, &loaded); err != nil {
+		log.Printf("config: cannot parse %s: %v (using built-in defaults)", path, err)
+		return m
+	}
+	mergeFile(&m.cfg, loaded)
+	var patch filePatch
+	if err := yaml.Unmarshal(data, &patch); err == nil {
+		mergeNumeric(&m.cfg, patch)
 	}
 	return m
+}
+
+func mergeNumeric(dst *File, src filePatch) {
+	if src.Tools.DefaultTimeoutSec != nil {
+		dst.Tools.DefaultTimeoutSec = *src.Tools.DefaultTimeoutSec
+	}
+	if src.Tools.MaxTextChars != nil {
+		if v := *src.Tools.MaxTextChars; v > 0 {
+			dst.Tools.MaxTextChars = v
+		} else {
+			log.Printf("config: ignoring non-positive max_text_chars %d (keeping %d)", v, dst.Tools.MaxTextChars)
+		}
+	}
+	if src.Routing.FlyThreshold != nil {
+		dst.Routing.FlyThreshold = *src.Routing.FlyThreshold
+	}
+	if src.Routing.TopK != nil {
+		dst.Routing.TopK = *src.Routing.TopK
+	}
 }
 
 func mergeFile(dst *File, src File) {
@@ -187,6 +231,19 @@ func (m *Manager) Routing() RoutingState {
 		if data, readErr := os.ReadFile(path); readErr == nil {
 			var doc routingDoc
 			if yaml.Unmarshal(data, &doc) == nil && doc.Routing.Mode != "" {
+				mode := normalizeMode(doc.Routing.Mode)
+				if mode == "" {
+					log.Printf("config: ignoring invalid routing mode %q in %s (expected normal or fly)", doc.Routing.Mode, path)
+					fallback := RoutingState{Mode: "normal", Version: doc.Routing.Version}
+					if fallback.Version <= 0 {
+						fallback.Version = 1
+					}
+					m.routingCache = fallback
+					m.routingMtime = st.ModTime()
+					m.routingInit = true
+					return fallback
+				}
+				doc.Routing.Mode = mode
 				m.routingCache = doc.Routing
 				m.routingMtime = st.ModTime()
 				m.routingInit = true
@@ -200,11 +257,20 @@ func (m *Manager) Routing() RoutingState {
 	return RoutingState{Mode: "normal", Version: 1}
 }
 
-func (m *Manager) SetRoutingMode(mode string) (RoutingState, error) {
+func normalizeMode(mode string) string {
 	mode = strings.ToLower(strings.TrimSpace(mode))
 	if mode != "normal" && mode != "fly" {
+		return ""
+	}
+	return mode
+}
+
+func (m *Manager) SetRoutingMode(mode string) (RoutingState, error) {
+	normalized := normalizeMode(mode)
+	if normalized == "" {
 		return RoutingState{}, fmt.Errorf("invalid routing mode %q: expected normal or fly", mode)
 	}
+	mode = normalized
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -213,6 +279,9 @@ func (m *Manager) SetRoutingMode(mode string) (RoutingState, error) {
 		var doc routingDoc
 		if yaml.Unmarshal(data, &doc) == nil && doc.Routing.Mode != "" {
 			current = doc.Routing
+			if normalized := normalizeMode(current.Mode); normalized != "" {
+				current.Mode = normalized
+			}
 		}
 	}
 	next := RoutingState{Mode: mode, Version: current.Version + 1}
@@ -220,14 +289,33 @@ func (m *Manager) SetRoutingMode(mode string) (RoutingState, error) {
 	if err != nil {
 		return RoutingState{}, err
 	}
-	if err := os.MkdirAll(filepath.Dir(m.RoutingPath()), 0o755); err != nil {
+	dir := filepath.Dir(m.RoutingPath())
+	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return RoutingState{}, err
 	}
-	tmp := m.RoutingPath() + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o644); err != nil {
+	tmp, err := os.CreateTemp(dir, "routing-*.tmp")
+	if err != nil {
 		return RoutingState{}, err
 	}
-	if err := os.Rename(tmp, m.RoutingPath()); err != nil {
+	tmpName := tmp.Name()
+	cleanup := func() {
+		tmp.Close()
+		os.Remove(tmpName)
+	}
+	if _, err := tmp.Write(data); err != nil {
+		cleanup()
+		return RoutingState{}, err
+	}
+	if err := tmp.Chmod(0o644); err != nil {
+		cleanup()
+		return RoutingState{}, err
+	}
+	if err := tmp.Close(); err != nil {
+		os.Remove(tmpName)
+		return RoutingState{}, err
+	}
+	if err := os.Rename(tmpName, m.RoutingPath()); err != nil {
+		os.Remove(tmpName)
 		return RoutingState{}, err
 	}
 	m.routingCache = next

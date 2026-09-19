@@ -141,18 +141,18 @@ func registerTimeSeries(reg *mcp.Registry, d Deps) {
 			}
 			first, last := points[0], points[len(points)-1]
 			env := mcp.OK(trace(ctx), map[string]any{
-				"time_column":  timeCol,
-				"value_column": valueCol,
-				"count":        len(points),
-				"start":        first.T.UTC().Format(time.RFC3339),
-				"end":          last.T.UTC().Format(time.RFC3339),
-				"min":          round2(minOf(values)),
-				"max":          round2(maxOf(values)),
-				"mean":         round2(mean(values)),
-				"std":          round2(stddev(values)),
+				"time_column":    timeCol,
+				"value_column":   valueCol,
+				"count":          len(points),
+				"start":          first.T.UTC().Format(time.RFC3339),
+				"end":            last.T.UTC().Format(time.RFC3339),
+				"min":            round2(minOf(values)),
+				"max":            round2(maxOf(values)),
+				"mean":           round2(mean(values)),
+				"std":            round2(stddev(values)),
 				"slope_per_hour": round2(seriesSlopePerHour(points)),
-				"series":       series,
-			}).WithSources(mcp.Source{Row: 0, Column: valueCol, Timestamp: first.Raw})
+				"series":         series,
+			}).WithSources(mcp.Source{Row: mcp.IntPtr(0), Column: valueCol, Timestamp: first.Raw})
 			if len(warnings) > 0 {
 				env = env.WithWarnings(warnings...)
 			}
@@ -274,12 +274,12 @@ func registerTimeSeries(reg *mcp.Registry, d Deps) {
 				anomalies = anomalies[:limit]
 			}
 			env := mcp.OK(trace(ctx), map[string]any{
-				"time_column":  timeCol,
-				"value_column": valueCol,
-				"method":       method,
-				"count":        len(points),
+				"time_column":   timeCol,
+				"value_column":  valueCol,
+				"method":        method,
+				"count":         len(points),
 				"anomaly_count": len(anomalies),
-				"anomalies":    anomalies,
+				"anomalies":     anomalies,
 			})
 			for _, a := range anomalies {
 				env = env.WithSources(mcp.Source{Timestamp: a.Timestamp, Column: valueCol})
