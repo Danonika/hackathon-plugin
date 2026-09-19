@@ -11,6 +11,11 @@ if (-not (Test-Path -LiteralPath ".env")) {
 & (Join-Path $root "scripts\sync-skills.ps1")
 if ($LASTEXITCODE -ne 0) { Write-Error "[setup] sync-skills failed"; exit 1 }
 
+$template = Get-Content -LiteralPath (Join-Path $root "plugins\hackathonkit\.mcp.json.template") -Raw
+$template.Replace("{{REPO_ROOT}}", $root.Replace("\", "/")) |
+  Set-Content -LiteralPath (Join-Path $root "plugins\hackathonkit\.mcp.json") -NoNewline -Encoding UTF8
+Write-Host "[setup] generated plugins/hackathonkit/.mcp.json with the absolute repository root"
+
 $dockerOk = $false
 if (Get-Command docker -ErrorAction SilentlyContinue) {
   cmd /c "docker info >nul 2>nul"
@@ -37,6 +42,7 @@ if ($dockerOk) {
 $codex = Get-Command codex -ErrorAction SilentlyContinue
 if ($codex) {
   Write-Host "[setup] registering repo marketplace and installing the Hackathon Agent Kit plugin"
+  cmd /c "codex plugin remove hackathonkit >nul 2>nul"
   cmd /c "codex plugin marketplace add `"$root`" >nul 2>nul"
   cmd /c "codex plugin add hackathonkit@hackathonkit-local >nul 2>nul"
   if ($LASTEXITCODE -eq 0) {

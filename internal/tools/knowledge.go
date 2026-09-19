@@ -23,6 +23,7 @@ type indexChunk struct {
 type indexDoc struct {
 	Source     string       `json:"source"`
 	ArtifactID string       `json:"artifact_id,omitempty"`
+	Corpus     string       `json:"corpus,omitempty"`
 	CreatedAt  string       `json:"created_at"`
 	Chunks     []indexChunk `json:"chunks"`
 }
@@ -93,6 +94,7 @@ func registerKnowledge(reg *mcp.Registry, d Deps) {
 		map[string]any{
 			"path":        strProp("Relative path under data/input (alternative to artifact_id)"),
 			"artifact_id": strProp("Stored artifact id from documents.ingest (alternative to path)"),
+			"corpus":      strProp("Optional corpus label used to scope later searches"),
 			"chunk_chars": numProp("Chunk size in characters (default 800)"),
 			"overlap":     numProp("Chunk overlap in characters (default 100)"),
 		},
@@ -127,7 +129,7 @@ func registerKnowledge(reg *mcp.Registry, d Deps) {
 			if len(chunks) == 0 {
 				return mcp.Fail(trace(ctx), "no text to index"), nil
 			}
-			doc := indexDoc{Source: source, ArtifactID: artifactID, CreatedAt: time.Now().UTC().Format(time.RFC3339)}
+			doc := indexDoc{Source: source, ArtifactID: artifactID, Corpus: argString(args, "corpus"), CreatedAt: time.Now().UTC().Format(time.RFC3339)}
 			for i, chunk := range chunks {
 				terms := map[string]int{}
 				for _, tok := range tokenize(chunk) {
@@ -163,8 +165,12 @@ func registerKnowledge(reg *mcp.Registry, d Deps) {
 		"knowledge.search",
 		"Search previously indexed text (TF-IDF style) and return grounded chunks with sources.",
 		map[string]any{
-			"query": strProp("Search query"),
-			"limit": numProp("Maximum hits (default 5)"),
+			"query":       strProp("Search query"),
+			"limit":       numProp("Maximum hits (default 5)"),
+			"corpus":      strProp("Restrict the search to one corpus label"),
+			"index_id":    strProp("Restrict the search to a single index_id returned by knowledge.index"),
+			"index_ids":   arrProp("Restrict the search to several index_ids", map[string]any{"type": "string"}),
+			"text_chars":  numProp("Characters of chunk text to return per hit (default 300, max 4000)"),
 		},
 		[]string{"query"},
 		func(ctx context.Context, args map[string]any) (any, error) {
@@ -176,6 +182,18 @@ func registerKnowledge(reg *mcp.Registry, d Deps) {
 			if limit <= 0 || limit > 50 {
 				limit = 5
 			}
+			textChars := argInt(args, "text_chars", 300)
+			if textChars <= 0 || textChars > 4000 {
+				textChars = 300
+			}
+			corpus := argString(args, "corpus")
+			allowed := map[string]bool{}
+			for _, id := range argStringSlice(args, "index_ids") {
+				allowed[id] = true
+			}
+			if id := argString(args, "index_id"); id != "" {
+				allowed[id] = true
+			}
 			indexFiles, err := d.Store.ListIndexes()
 			if err != nil {
 				return mcp.Fail(trace(ctx), err.Error()), nil
@@ -184,21 +202,35 @@ func registerKnowledge(reg *mcp.Registry, d Deps) {
 				return mcp.Partial(trace(ctx), map[string]any{"hits": []any{}, "index_count": 0},
 					"knowledge index is empty; run knowledge.index first"), nil
 			}
-			docs := []indexDoc{}
+			type loadedDoc struct {
+				ID  string
+				Doc indexDoc
+			}
+			docs := []loadedDoc{}
 			for _, name := range indexFiles {
+				if len(allowed) > 0 && !allowed[name] {
+					continue
+				}
 				raw, err := d.Store.ReadIndex(name)
 				if err != nil {
 					continue
 				}
 				var doc indexDoc
 				if json.Unmarshal(raw, &doc) == nil {
-					docs = append(docs, doc)
+					if corpus != "" && doc.Corpus != corpus {
+						continue
+					}
+					docs = append(docs, loadedDoc{ID: name, Doc: doc})
 				}
+			}
+			if len(docs) == 0 {
+				return mcp.Partial(trace(ctx), map[string]any{"hits": []any{}, "index_count": 0},
+					"no index matched the requested scope; index the corpus first"), nil
 			}
 			totalChunks := 0
 			df := map[string]int{}
-			for _, doc := range docs {
-				for _, chunk := range doc.Chunks {
+			for _, ld := range docs {
+				for _, chunk := range ld.Doc.Chunks {
 					totalChunks++
 					for term := range chunk.Terms {
 						df[term]++
@@ -212,13 +244,15 @@ func registerKnowledge(reg *mcp.Registry, d Deps) {
 			type hit struct {
 				Source     string  `json:"source"`
 				ArtifactID string  `json:"artifact_id,omitempty"`
+				IndexID    string  `json:"index_id"`
 				ChunkID    int     `json:"chunk_id"`
 				Score      float64 `json:"score"`
 				Snippet    string  `json:"snippet"`
+				Text       string  `json:"text"`
 			}
 			hits := []hit{}
-			for _, doc := range docs {
-				for _, chunk := range doc.Chunks {
+			for _, ld := range docs {
+				for _, chunk := range ld.Doc.Chunks {
 					score := 0.0
 					for term := range queryTerms {
 						tf := chunk.Terms[term]
@@ -230,11 +264,13 @@ func registerKnowledge(reg *mcp.Registry, d Deps) {
 					}
 					if score > 0 {
 						hits = append(hits, hit{
-							Source:     doc.Source,
-							ArtifactID: doc.ArtifactID,
+							Source:     ld.Doc.Source,
+							ArtifactID: ld.Doc.ArtifactID,
+							IndexID:    ld.ID,
 							ChunkID:    chunk.ID,
 							Score:      float64(int(score*1000+0.5)) / 1000,
 							Snippet:    snippet(chunk.Text, 300),
+							Text:       snippet(chunk.Text, textChars),
 						})
 					}
 				}
@@ -250,8 +286,12 @@ func registerKnowledge(reg *mcp.Registry, d Deps) {
 				"matched":       len(hits),
 			})
 			for _, h := range hits {
+				artifactID := h.ArtifactID
+				if artifactID == "" {
+					artifactID = h.IndexID
+				}
 				env = env.WithSources(mcp.Source{
-					ArtifactID: h.ArtifactID,
+					ArtifactID: artifactID,
 					Block:      fmt.Sprintf("chunk:%d", h.ChunkID),
 				})
 			}

@@ -11,6 +11,9 @@ fi
 
 sh "$ROOT/scripts/sync-skills.sh"
 
+sed "s|{{REPO_ROOT}}|$ROOT|g" "$ROOT/plugins/hackathonkit/.mcp.json.template" > "$ROOT/plugins/hackathonkit/.mcp.json"
+echo "[setup] generated plugins/hackathonkit/.mcp.json with the absolute repository root"
+
 if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
   docker compose -f "$ROOT/docker-compose.yml" build hackathonkit-mcp
   docker compose -f "$ROOT/docker-compose.yml" up -d postgres redis minio
@@ -25,6 +28,7 @@ fi
 
 if command -v codex >/dev/null 2>&1; then
   echo "[setup] registering repo marketplace and installing the Hackathon Agent Kit plugin"
+  codex plugin remove hackathonkit >/dev/null 2>&1 || true
   codex plugin marketplace add "$ROOT" >/dev/null 2>&1 || true
   if codex plugin add hackathonkit@hackathonkit-local >/dev/null 2>&1; then
     echo "[setup] plugin installed; start a NEW Codex session to load it"

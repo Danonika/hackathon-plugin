@@ -7,7 +7,7 @@ Goal: every claim in the final answer can be traced to a tool response and its s
 | Source | Addressable as | Cite as |
 |---|---|---|
 | Extracted document text | `artifact_id` | `artifact_id` + chunk or page when available |
-| Knowledge chunk | `artifact_id` + `chunk:<id>` | "found in <artifact_id>, chunk N" |
+| Knowledge chunk | `artifact_id` (or `index_id` for path-indexed text) + `chunk:<id>` | "found in <artifact_id>, chunk N (index <index_id>)" |
 | Table cell / row | `path` + `row`, `column` | "row 17, column value" |
 | Time series point | timestamp + column | "anomaly at 2026-01-01 15:00, sensor value 47.5" |
 | Audio segment | start/end time | "01:23-01:31 of <artifact_id>" |

@@ -54,6 +54,28 @@ func (s *Store) report(err error) {
 	}
 }
 
+func (s *Store) ensureWithin(full string) error {
+	rootReal, err := filepath.EvalSymlinks(s.root)
+	if err != nil {
+		return nil
+	}
+	p := full
+	for {
+		real, err := filepath.EvalSymlinks(p)
+		if err == nil {
+			if real == rootReal || strings.HasPrefix(real, rootReal+string(filepath.Separator)) {
+				return nil
+			}
+			return fmt.Errorf("resolved path escapes repository root: %s", full)
+		}
+		parent := filepath.Dir(p)
+		if parent == p {
+			return nil
+		}
+		p = parent
+	}
+}
+
 func (s *Store) Root() string {
 	return s.root
 }
@@ -84,6 +106,9 @@ func (s *Store) InputPath(name string) (string, error) {
 		return "", err
 	}
 	full := filepath.Join(s.root, s.inputDir, clean)
+	if err := s.ensureWithin(full); err != nil {
+		return "", err
+	}
 	if st, err := os.Stat(full); err != nil || st.IsDir() {
 		return "", fmt.Errorf("input file not found: %s", name)
 	}
@@ -96,6 +121,9 @@ func (s *Store) ArtifactPath(name string, createParent bool) (string, error) {
 		return "", err
 	}
 	full := filepath.Join(s.root, s.artifactDir, clean)
+	if err := s.ensureWithin(full); err != nil {
+		return "", err
+	}
 	if createParent {
 		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
 			return "", err
@@ -110,6 +138,9 @@ func (s *Store) WriteArtifact(rel string, data []byte) (string, error) {
 		return "", err
 	}
 	full := filepath.Join(s.root, s.artifactDir, clean)
+	if err := s.ensureWithin(full); err != nil {
+		return "", err
+	}
 	if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
 		return "", err
 	}
@@ -138,6 +169,9 @@ func (s *Store) ReadArtifact(rel string) ([]byte, error) {
 		return nil, err
 	}
 	full := filepath.Join(s.root, s.artifactDir, clean)
+	if err := s.ensureWithin(full); err != nil {
+		return nil, err
+	}
 	data, err := os.ReadFile(full)
 	if err == nil {
 		return data, nil

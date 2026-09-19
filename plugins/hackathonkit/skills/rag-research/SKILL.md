@@ -15,10 +15,10 @@ description: "Use for questions over a document corpus that must be answered wit
 
 1. Inventory: `files.describe` for each candidate file in `data/input`.
 2. Ingest: `documents.ingest` per file -> keep the returned `artifact_id`.
-3. Index: `knowledge.index` per artifact (or per path). Default chunks: 800 chars, 100 overlap.
-4. Search: `knowledge.search` with focused queries. Split broad questions into 2-4 concrete queries.
-5. Read: if a snippet is insufficient, `documents.get` the artifact and read around the match.
-6. Answer: only from retrieved text; cite `artifact_id` and chunk or page.
+3. Index: `knowledge.index` per artifact (or per path) with a `corpus` label, for example the task or case id. Default chunks: 800 chars, 100 overlap.
+4. Search: `knowledge.search` with focused queries, scoped to the current task via `corpus` or `index_id`/`index_ids`. Split broad questions into 2-4 concrete queries; raise `text_chars` when 300 characters are not enough.
+5. Read: for deeper context use `documents.get` with `offset` and `max_chars`, anchored on the hit; the hit carries `artifact_id` (or `index_id` when indexed by path) and `chunk_id` for citation.
+6. Answer: only from retrieved text; cite `artifact_id`/`index_id` and chunk or page.
 
 ## Query Formulation
 

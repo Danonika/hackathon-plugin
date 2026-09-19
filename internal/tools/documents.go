@@ -220,6 +220,9 @@ func registerDocuments(reg *mcp.Registry, d Deps) {
 				return mcp.Fail(trace(ctx), err.Error()), nil
 			}
 			maxChars := argInt(args, "max_chars", d.Cfg.Config().Tools.MaxTextChars)
+			if maxChars <= 0 || maxChars > 10_000_000 {
+				maxChars = d.Cfg.Config().Tools.MaxTextChars
+			}
 			truncated := false
 			r := []rune(text)
 			if len(r) > maxChars {
@@ -245,6 +248,7 @@ func registerDocuments(reg *mcp.Registry, d Deps) {
 		map[string]any{
 			"artifact_id": strProp("Artifact id returned by documents.ingest"),
 			"max_chars":   numProp("Maximum characters to return"),
+			"offset":      numProp("Character offset to start from (default 0)"),
 		},
 		[]string{"artifact_id"},
 		func(ctx context.Context, args map[string]any) (any, error) {
@@ -258,16 +262,29 @@ func registerDocuments(reg *mcp.Registry, d Deps) {
 			}
 			text := string(raw)
 			maxChars := argInt(args, "max_chars", d.Cfg.Config().Tools.MaxTextChars)
+			if maxChars <= 0 || maxChars > 10_000_000 {
+				maxChars = d.Cfg.Config().Tools.MaxTextChars
+			}
+			offset := argInt(args, "offset", 0)
+			if offset < 0 {
+				offset = 0
+			}
 			truncated := false
 			r := []rune(text)
-			if len(r) > maxChars {
-				text = string(r[:maxChars])
+			if offset > len(r) {
+				offset = len(r)
+			}
+			remaining := r[offset:]
+			if len(remaining) > maxChars {
+				remaining = remaining[:maxChars]
 				truncated = true
 			}
 			env := mcp.OK(trace(ctx), map[string]any{
 				"artifact_id": id,
-				"text":        text,
-				"chars":       len(r),
+				"text":        string(remaining),
+				"offset":      offset,
+				"chars":       len(remaining),
+				"total_chars": len(r),
 				"truncated":   truncated,
 			}).WithSources(mcp.Source{ArtifactID: id, Block: "full-text"})
 			return env, nil

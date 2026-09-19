@@ -2,6 +2,7 @@ package fly
 
 import (
 	"context"
+	"math"
 	"sort"
 	"strings"
 	"sync"
@@ -249,7 +250,7 @@ func stringSlice(v any) []string {
 }
 
 func round2(v float64) float64 {
-	return float64(int(v*100+0.5)) / 100
+	return math.Round(v*100) / 100
 }
 
 func roundScores(in map[string]float64) map[string]float64 {

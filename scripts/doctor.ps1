@@ -62,6 +62,9 @@ if ($codex) {
     } catch { }
   }
   Check "hackathonkit plugin" ($pluginInstalled -and $pluginEnabled) "install: scripts/setup.ps1 or codex plugin add hackathonkit@hackathonkit-local"
+
+  & (Join-Path $root "scripts\plugin-check.ps1") | Out-Null
+  Check "plugin runtime" ($LASTEXITCODE -eq 0) "installed plugin starts MCP from a foreign cwd (scripts/plugin-check.ps1)"
 }
 
 if ($engine) {

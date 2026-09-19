@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/csv"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"sort"
@@ -311,15 +312,12 @@ func registerData(reg *mcp.Registry, d Deps) {
 						continue
 					}
 					r := pearson(xs, ys)
-					if r < 0 {
-						r = -r
-					}
-					if r >= 0.3 {
+					if absFloat(r) >= 0.3 {
 						corrs = append(corrs, corr{numeric[i], numeric[j], round2(r), len(xs)})
 					}
 				}
 			}
-			sort.Slice(corrs, func(i, j int) bool { return corrs[i].R > corrs[j].R })
+			sort.Slice(corrs, func(i, j int) bool { return absFloat(corrs[i].R) > absFloat(corrs[j].R) })
 			if len(corrs) > 5 {
 				corrs = corrs[:5]
 			}
@@ -408,5 +406,12 @@ func applyWhere(t *table, where string) ([][]string, error) {
 }
 
 func round2(v float64) float64 {
-	return float64(int(v*100+0.5)) / 100
+	return math.Round(v*100) / 100
+}
+
+func absFloat(v float64) float64 {
+	if v < 0 {
+		return -v
+	}
+	return v
 }

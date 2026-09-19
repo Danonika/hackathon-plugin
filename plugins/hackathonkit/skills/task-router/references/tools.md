@@ -19,7 +19,7 @@ Read `warnings` before trusting `data`; keep `sources` for citations.
 | `files.describe` | `path` | extension, size, rows, columns, headers, `has_timestamp`, `sheets` for XLSX |
 | `documents.ingest` | `path` | `artifact_id`, chars, preview |
 | `documents.extract` | `path`, `max_chars` | `text`, chars, truncated |
-| `documents.get` | `artifact_id`, `max_chars` | stored text |
+| `documents.get` | `artifact_id`, `max_chars`, `offset` | stored text slice |
 
 Supported input formats: txt, md, csv, tsv, json, log, yaml, xml, html, docx, xlsx (all worksheets), pdf (text layer only).
 
@@ -27,8 +27,8 @@ Supported input formats: txt, md, csv, tsv, json, log, yaml, xml, html, docx, xl
 
 | Tool | Arguments | Returns |
 |---|---|---|
-| `knowledge.index` | `path` or `artifact_id`, `chunk_chars` (800), `overlap` (100) | `index_id`, `chunk_count` |
-| `knowledge.search` | `query`, `limit` (5) | ranked hits with `source`, `chunk_id`, `score`, `snippet` |
+| `knowledge.index` | `path` or `artifact_id`, `corpus`, `chunk_chars` (800), `overlap` (100) | `index_id`, `chunk_count` |
+| `knowledge.search` | `query`, `limit` (5), `corpus`, `index_id`, `index_ids`, `text_chars` (300) | ranked hits with `source`, `index_id`, `chunk_id`, `score`, `snippet`, `text` |
 
 ## Data
 

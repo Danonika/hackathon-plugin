@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strconv"
+	"strings"
 	"time"
 
 	"hackathonkit.local/agentkit/internal/config"
@@ -44,6 +45,7 @@ func main() {
 	if host == "" {
 		host = "127.0.0.1"
 	}
+	token := os.Getenv("HACKATHONKIT_DEMO_TOKEN")
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
@@ -71,6 +73,14 @@ func main() {
 		case http.MethodGet:
 			writeJSON(w, http.StatusOK, mgr.Routing())
 		case http.MethodPost:
+			if !originAllowed(r) {
+				writeJSON(w, http.StatusForbidden, map[string]any{"error": "forbidden origin"})
+				return
+			}
+			if token != "" && r.Header.Get("X-HackathonKit-Token") != token {
+				writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "missing or invalid X-HackathonKit-Token"})
+				return
+			}
 			var body struct {
 				Mode string `json:"mode"`
 			}
@@ -176,6 +186,14 @@ func listFiles(mgr *config.Manager, relDir string) []fileInfo {
 	})
 	sort.Slice(out, func(i, j int) bool { return out[i].Path < out[j].Path })
 	return out
+}
+
+func originAllowed(r *http.Request) bool {
+	origin := r.Header.Get("Origin")
+	if origin == "" {
+		return true
+	}
+	return strings.HasPrefix(origin, "http://127.0.0.1") || strings.HasPrefix(origin, "http://localhost")
 }
 
 func withCORS(next http.Handler) http.Handler {

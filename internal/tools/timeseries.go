@@ -127,7 +127,11 @@ func registerTimeSeries(reg *mcp.Registry, d Deps) {
 			for _, p := range points {
 				values = append(values, p.V)
 			}
-			sample := downsample(points, argInt(args, "max_points", 120))
+			maxPoints := argInt(args, "max_points", 120)
+			if maxPoints <= 0 || maxPoints > 5000 {
+				maxPoints = 120
+			}
+			sample := downsample(points, maxPoints)
 			series := make([]map[string]any, 0, len(sample))
 			for _, p := range sample {
 				series = append(series, map[string]any{
@@ -262,8 +266,12 @@ func registerTimeSeries(reg *mcp.Registry, d Deps) {
 				}
 			}
 			sort.Slice(anomalies, func(i, j int) bool { return anomalies[i].Timestamp < anomalies[j].Timestamp })
-			if len(anomalies) > argInt(args, "limit", 100) {
-				anomalies = anomalies[:argInt(args, "limit", 100)]
+			limit := argInt(args, "limit", 100)
+			if limit <= 0 || limit > 10000 {
+				limit = 100
+			}
+			if len(anomalies) > limit {
+				anomalies = anomalies[:limit]
 			}
 			env := mcp.OK(trace(ctx), map[string]any{
 				"time_column":  timeCol,

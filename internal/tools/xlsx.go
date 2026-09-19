@@ -5,9 +5,11 @@ import (
 	"encoding/xml"
 	"fmt"
 	"io"
+	"math"
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 )
 
 type xlsxSheet struct {
@@ -60,6 +62,7 @@ func readXLSXSheets(path string) ([]xlsxSheet, []string, error) {
 	}
 
 	refs := workbookSheets(zr)
+	styles := readXLSXStyles(zr)
 	if len(refs) == 0 {
 		files := sheetFiles(zr)
 		for i, f := range files {
@@ -77,7 +80,7 @@ func readXLSXSheets(path string) ([]xlsxSheet, []string, error) {
 			warnings = append(warnings, fmt.Sprintf("xlsx: sheet %s file %s is missing", ref.Name, ref.Path))
 			continue
 		}
-		rows, err := readSheetRows(f, shared)
+		rows, err := readSheetRows(f, shared, styles)
 		if err != nil {
 			warnings = append(warnings, fmt.Sprintf("xlsx: sheet %s failed: %v", ref.Name, err))
 			continue
@@ -243,7 +246,7 @@ func readSharedStrings(f *zip.File) ([]string, error) {
 	return out, nil
 }
 
-func readSheetRows(f *zip.File, shared []string) ([][]string, error) {
+func readSheetRows(f *zip.File, shared []string, styles xlsxStyles) ([][]string, error) {
 	rc, err := f.Open()
 	if err != nil {
 		return nil, err
@@ -254,6 +257,7 @@ func readSheetRows(f *zip.File, shared []string) ([][]string, error) {
 	var curRow []string
 	var curVal strings.Builder
 	var curType, curRef string
+	curStyle := -1
 	inRow, inV, inT := false, false, false
 	for {
 		tok, err := dec.Token()
@@ -271,12 +275,17 @@ func readSheetRows(f *zip.File, shared []string) ([][]string, error) {
 				curRow = []string{}
 			case "c":
 				curRef, curType = "", ""
+				curStyle = -1
 				for _, a := range t.Attr {
 					switch a.Name.Local {
 					case "r":
 						curRef = a.Value
 					case "t":
 						curType = a.Value
+					case "s":
+						if idx, convErr := strconv.Atoi(a.Value); convErr == nil {
+							curStyle = idx
+						}
 					}
 				}
 				curVal.Reset()
@@ -304,6 +313,11 @@ func readSheetRows(f *zip.File, shared []string) ([][]string, error) {
 				if curType == "s" {
 					if idx, convErr := strconv.Atoi(strings.TrimSpace(value)); convErr == nil && idx >= 0 && idx < len(shared) {
 						value = shared[idx]
+					}
+				}
+				if (curType == "" || curType == "n") && curStyle >= 0 && styles.dateStyles[curStyle] {
+					if serial, ok := parseNumber(value); ok {
+						value = formatExcelDateTime(excelSerialToTime(serial, styles.date1904))
 					}
 				}
 				col := colFromRef(curRef)
@@ -336,6 +350,149 @@ func colFromRef(ref string) int {
 		return -1
 	}
 	return col - 1
+}
+
+type xlsxStyles struct {
+	dateStyles map[int]bool
+	date1904   bool
+}
+
+func readXLSXStyles(zr *zip.ReadCloser) xlsxStyles {
+	out := xlsxStyles{dateStyles: map[int]bool{}}
+	if f := zipFind(zr, "xl/workbook.xml"); f != nil {
+		if rc, err := f.Open(); err == nil {
+			dec := xml.NewDecoder(rc)
+			for {
+				tok, err := dec.Token()
+				if err == io.EOF || err != nil {
+					break
+				}
+				se, ok := tok.(xml.StartElement)
+				if !ok || se.Name.Local != "workbookPr" {
+					continue
+				}
+				for _, a := range se.Attr {
+					if a.Name.Local == "date1904" && (a.Value == "1" || a.Value == "true") {
+						out.date1904 = true
+					}
+				}
+			}
+			rc.Close()
+		}
+	}
+	f := zipFind(zr, "xl/styles.xml")
+	if f == nil {
+		return out
+	}
+	rc, err := f.Open()
+	if err != nil {
+		return out
+	}
+	defer rc.Close()
+	dec := xml.NewDecoder(rc)
+	customDateFmt := map[int]bool{}
+	styleFormats := []int{}
+	inCellXfs := false
+	for {
+		tok, err := dec.Token()
+		if err == io.EOF || err != nil {
+			break
+		}
+		switch t := tok.(type) {
+		case xml.StartElement:
+			switch t.Name.Local {
+			case "numFmt":
+				id, code := 0, ""
+				for _, a := range t.Attr {
+					switch a.Name.Local {
+					case "numFmtId":
+						id, _ = strconv.Atoi(a.Value)
+					case "formatCode":
+						code = a.Value
+					}
+				}
+				if isDateFormatCode(code) {
+					customDateFmt[id] = true
+				}
+			case "cellXfs":
+				inCellXfs = true
+			case "xf":
+				if inCellXfs {
+					numFmtID := 0
+					for _, a := range t.Attr {
+						if a.Name.Local == "numFmtId" {
+							numFmtID, _ = strconv.Atoi(a.Value)
+						}
+					}
+					styleFormats = append(styleFormats, numFmtID)
+				}
+			}
+		case xml.EndElement:
+			if t.Name.Local == "cellXfs" {
+				inCellXfs = false
+			}
+		}
+	}
+	for idx, numFmtID := range styleFormats {
+		if builtinDateFmt(numFmtID) || customDateFmt[numFmtID] {
+			out.dateStyles[idx] = true
+		}
+	}
+	return out
+}
+
+func builtinDateFmt(id int) bool {
+	switch {
+	case id >= 14 && id <= 22:
+		return true
+	case id >= 27 && id <= 36:
+		return true
+	case id >= 45 && id <= 47:
+		return true
+	case id >= 50 && id <= 58:
+		return true
+	}
+	return false
+}
+
+func isDateFormatCode(code string) bool {
+	inQuote := false
+	hasDate, hasTime := false, false
+	for _, r := range strings.ToLower(code) {
+		if r == '"' {
+			inQuote = !inQuote
+			continue
+		}
+		if inQuote {
+			continue
+		}
+		switch r {
+		case 'y', 'd', 'm':
+			hasDate = true
+		case 'h', 's':
+			hasTime = true
+		}
+	}
+	return hasDate || hasTime
+}
+
+func excelSerialToTime(serial float64, date1904 bool) time.Time {
+	base := time.Date(1899, 12, 30, 0, 0, 0, 0, time.UTC)
+	if date1904 {
+		base = time.Date(1904, 1, 1, 0, 0, 0, 0, time.UTC)
+	} else if serial < 60 {
+		base = time.Date(1899, 12, 31, 0, 0, 0, 0, time.UTC)
+	}
+	days := math.Floor(serial)
+	frac := serial - days
+	return base.AddDate(0, 0, int(days)).Add(time.Duration(frac * 24 * float64(time.Hour)))
+}
+
+func formatExcelDateTime(t time.Time) string {
+	if t.Hour() == 0 && t.Minute() == 0 && t.Second() == 0 {
+		return t.Format("2006-01-02")
+	}
+	return t.Format("2006-01-02 15:04:05")
 }
 
 func rowsToTable(rows [][]string) *table {

@@ -2,6 +2,7 @@ bin/
 *.exe
 .env
 logs/
+plugins/hackathonkit/.mcp.json
 data/artifacts/
 data/index/
 data/judge-bundles/

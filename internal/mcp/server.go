@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log"
 	"time"
@@ -164,12 +165,14 @@ func (s *Server) handleToolCall(ctx context.Context, req *Request, resp *Respons
 	callCtx = observability.WithTrace(callCtx, observability.NewTraceID())
 
 	start := time.Now()
-	result, err := tool.Handler(callCtx, p.Arguments)
+	result, err := s.invokeTool(callCtx, tool, p.Arguments)
 	duration := time.Since(start)
 	status := "ok"
-	if err != nil {
+	if err != nil || resultStatus(result) == "error" {
 		status = "error"
 		s.inc("mcp_tool_errors_total")
+	}
+	if err != nil {
 		result = Envelope{
 			Status:  "error",
 			Data:    map[string]any{"error": err.Error()},
@@ -196,15 +199,38 @@ func (s *Server) handleToolCall(ctx context.Context, req *Request, resp *Respons
 	}
 
 	text, merr := json.MarshalIndent(result, "", "  ")
+	isError := status == "error"
 	if merr != nil {
 		text = []byte(`{"status":"error","data":{"error":"result marshal failed"}}`)
+		isError = true
 	}
 	resp.Result = map[string]any{
 		"content": []map[string]any{
 			{"type": "text", "text": string(text)},
 		},
-		"isError": false,
+		"isError": isError,
 	}
+}
+
+func (s *Server) invokeTool(ctx context.Context, tool *Tool, args map[string]any) (result any, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("tool %s panicked: %v", tool.Name, r)
+		}
+	}()
+	return tool.Handler(ctx, args)
+}
+
+func resultStatus(result any) string {
+	switch v := result.(type) {
+	case Envelope:
+		return v.Status
+	case *Envelope:
+		if v != nil {
+			return v.Status
+		}
+	}
+	return ""
 }
 
 func (s *Server) inc(name string) {

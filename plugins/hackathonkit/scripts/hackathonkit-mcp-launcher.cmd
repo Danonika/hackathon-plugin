@@ -1,7 +1,8 @@
 @echo off
 setlocal EnableExtensions
 set "SCRIPT_DIR=%~dp0"
-for %%I in ("%SCRIPT_DIR%..\..\..") do set "REPO_ROOT=%%~fI"
+if defined HACKATHONKIT_REPO_ROOT set "REPO_ROOT=%HACKATHONKIT_REPO_ROOT%"
+if not defined REPO_ROOT for %%I in ("%SCRIPT_DIR%..\..\..") do set "REPO_ROOT=%%~fI"
 if not exist "%REPO_ROOT%\docker-compose.yml" (
   echo Hackathon Agent Kit launcher: docker-compose.yml not found at "%REPO_ROOT%" 1>&2
   exit /b 1

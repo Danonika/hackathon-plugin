@@ -18,7 +18,8 @@ description: "Use for telemetry, sensor readings, metrics over time, anomaly det
 3. `timeseries.detect_anomalies` - choose the method deliberately:
    - `zscore` (default): rolling window 24, threshold 3.0. Good for smooth series with local context.
    - `iqr`: global quartiles, 1.5*IQR fences. Good for heavy-tailed series or when no local baseline exists.
-4. `charts.create` - feed the `series` from step 2 directly (points accept `t`/`v` keys).
+4. `charts.create` with an explicit wrapper around the analysis output:
+   `series: [{"label": "value", "points": <timeseries.analyze.data.series>}]` (points accept `t`/`v` keys).
 5. `reports.create` - summarize anomalies with timestamps, values and scores, plus method parameters.
 
 ## Parameter Guidance
