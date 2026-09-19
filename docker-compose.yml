@@ -1,3 +1,5 @@
+name: hackathon-agent-kit
+
 services:
   hackathonkit-mcp:
     build:
@@ -5,14 +7,15 @@ services:
       dockerfile: Dockerfile
       target: hackathonkit-mcp
     stdin_open: true
+    user: "${HACKATHONKIT_UID:-1000}:${HACKATHONKIT_GID:-1000}"
     environment:
       HACKATHONKIT_REPO_ROOT: /workspace
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       OPENAI_BASE_URL: ${OPENAI_BASE_URL:-}
-      POSTGRES_DSN: postgres://hackathonkit:${POSTGRES_PASSWORD:-hackathonkit}@postgres:5432/hackathonkit?sslmode=disable
+      POSTGRES_DSN: postgres://hackathonkit:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@postgres:5432/hackathonkit?sslmode=disable
       MINIO_ENDPOINT: minio:9000
       MINIO_ACCESS_KEY: hackathonkit
-      MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-hackathonkit123}
+      MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD:?set MINIO_ROOT_PASSWORD in .env}
       MINIO_BUCKET: hackathonkit
     volumes:
       - ./configs:/workspace/configs
@@ -24,12 +27,13 @@ services:
       context: .
       dockerfile: Dockerfile
       target: demo-api
+    user: "${HACKATHONKIT_UID:-1000}:${HACKATHONKIT_GID:-1000}"
     environment:
       HACKATHONKIT_REPO_ROOT: /workspace
       HACKATHONKIT_DEMO_PORT: "8787"
       HACKATHONKIT_DEMO_HOST: 0.0.0.0
       HACKATHONKIT_DEMO_TOKEN: ${HACKATHONKIT_DEMO_TOKEN:-}
-      POSTGRES_DSN: postgres://hackathonkit:${POSTGRES_PASSWORD:-hackathonkit}@postgres:5432/hackathonkit?sslmode=disable
+      POSTGRES_DSN: postgres://hackathonkit:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@postgres:5432/hackathonkit?sslmode=disable
     ports:
       - "127.0.0.1:8787:8787"
     volumes:
@@ -38,10 +42,10 @@ services:
       - ./logs:/workspace/logs
 
   postgres:
-    image: postgres:16-alpine
+    image: postgres:16.15-alpine3.24
     environment:
       POSTGRES_USER: hackathonkit
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-hackathonkit}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
       POSTGRES_DB: hackathonkit
     ports:
       - "127.0.0.1:5432:5432"
@@ -49,16 +53,16 @@ services:
       - pgdata:/var/lib/postgresql/data
 
   redis:
-    image: redis:7-alpine
+    image: redis:7.4.7-alpine
     ports:
       - "127.0.0.1:6379:6379"
 
   minio:
-    image: quay.io/minio/minio:latest
+    image: quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z
     command: server /data --console-address ":9001"
     environment:
       MINIO_ROOT_USER: hackathonkit
-      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-hackathonkit123}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?set MINIO_ROOT_PASSWORD in .env}
     ports:
       - "127.0.0.1:9000:9000"
       - "127.0.0.1:9001:9001"

@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 func TestInvalidArgumentsDoNotPanic(t *testing.T) {
@@ -151,5 +152,63 @@ func TestXLSXExcelDates(t *testing.T) {
 	}
 	if _, ok := parseTimeValue(tbl.Rows[0][0]); !ok {
 		t.Fatalf("converted date must be parseable by the time-series loader: %q", tbl.Rows[0][0])
+	}
+}
+
+func TestXLSXFormatClassification(t *testing.T) {
+	none := fmtKind{}
+	cases := []struct {
+		code string
+		want fmtKind
+	}{
+		{"#,##0.00;[Red]-#,##0.00", none},
+		{"[Yellow]0.0", none},
+		{`\d0`, none},
+		{"yyyy-mm-dd", fmtKind{date: true}},
+		{"m/d/yy h:mm", fmtKind{date: true}},
+		{"hh:mm", fmtKind{time: true}},
+		{"mm:ss", fmtKind{time: true}},
+		{"mm", fmtKind{date: true}},
+		{"mmm", fmtKind{date: true}},
+		{"h:mm AM/PM", fmtKind{time: true}},
+		{"[h]:mm:ss", fmtKind{elapsed: true}},
+		{"[$-409]dd.mm.yyyy", fmtKind{date: true}},
+	}
+	for _, c := range cases {
+		if got := classifyFormatCode(c.code); got != c.want {
+			t.Fatalf("classifyFormatCode(%q) = %+v, want %+v", c.code, got, c.want)
+		}
+	}
+
+	if got := builtinFormatKind(18); got != (fmtKind{time: true}) {
+		t.Fatalf("builtin 18 (h:mm) must be time-only, got %+v", got)
+	}
+	if got := builtinFormatKind(45); got != (fmtKind{elapsed: true}) {
+		t.Fatalf("builtin 45 (mm:ss) must be elapsed, got %+v", got)
+	}
+	if got := builtinFormatKind(14); got != (fmtKind{date: true}) {
+		t.Fatalf("builtin 14 must be a date, got %+v", got)
+	}
+}
+
+func TestExcelTimeAndElapsedFormatting(t *testing.T) {
+	if got := formatExcelTime(0.5); got != "12:00:00" {
+		t.Fatalf("formatExcelTime(0.5) = %q, want 12:00:00", got)
+	}
+	if got := formatExcelElapsed(1.5); got != "36:00:00" {
+		t.Fatalf("formatExcelElapsed(1.5) = %q, want 36:00:00", got)
+	}
+	if got := formatExcelElapsed(0.25); got != "6:00:00" {
+		t.Fatalf("formatExcelElapsed(0.25) = %q, want 6:00:00", got)
+	}
+}
+
+func TestSlugifyTruncatesRunes(t *testing.T) {
+	got := slugify(strings.Repeat("я", 70))
+	if utf8.RuneCountInString(got) != 60 {
+		t.Fatalf("expected 60 runes, got %d (%q)", utf8.RuneCountInString(got), got)
+	}
+	if !utf8.ValidString(got) {
+		t.Fatalf("slug is not valid UTF-8: %q", got)
 	}
 }

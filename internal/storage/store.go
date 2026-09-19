@@ -8,10 +8,17 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"hackathonkit.local/agentkit/internal/config"
 	"hackathonkit.local/agentkit/internal/metadata"
 )
+
+const backendTimeout = 30 * time.Second
+
+func backendContext() (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.Background(), backendTimeout)
+}
 
 type MetaRecorder interface {
 	RecordArtifact(ctx context.Context, rec metadata.ArtifactRecord) error
@@ -150,15 +157,19 @@ func (s *Store) WriteArtifact(rel string, data []byte) (string, error) {
 	id := filepath.ToSlash(clean)
 	if s.meta != nil {
 		sum := sha256.Sum256(data)
-		s.report(s.meta.RecordArtifact(context.Background(), metadata.ArtifactRecord{
+		ctx, cancel := backendContext()
+		s.report(s.meta.RecordArtifact(ctx, metadata.ArtifactRecord{
 			ArtifactID: id,
 			Kind:       "artifact",
 			Bytes:      len(data),
 			SHA256:     hex.EncodeToString(sum[:]),
 		}))
+		cancel()
 	}
 	if s.objects != nil {
-		s.report(s.objects.Put(context.Background(), id, data))
+		ctx, cancel := backendContext()
+		s.report(s.objects.Put(ctx, id, data))
+		cancel()
 	}
 	return id, nil
 }
@@ -177,13 +188,16 @@ func (s *Store) ReadArtifact(rel string) ([]byte, error) {
 		return data, nil
 	}
 	if s.objects != nil && os.IsNotExist(err) {
-		remote, oerr := s.objects.Get(context.Background(), filepath.ToSlash(clean))
-		if oerr == nil {
-			if mkErr := os.MkdirAll(filepath.Dir(full), 0o755); mkErr == nil {
-				_ = os.WriteFile(full, remote, 0o644)
-			}
-			return remote, nil
+		ctx, cancel := backendContext()
+		remote, oerr := s.objects.Get(ctx, filepath.ToSlash(clean))
+		cancel()
+		if oerr != nil {
+			return nil, fmt.Errorf("artifact %s: local read failed (%v); remote fetch failed: %w", clean, err, oerr)
 		}
+		if mkErr := os.MkdirAll(filepath.Dir(full), 0o755); mkErr == nil {
+			_ = os.WriteFile(full, remote, 0o644)
+		}
+		return remote, nil
 	}
 	return nil, err
 }
@@ -216,6 +230,9 @@ func (s *Store) ListIndexes() ([]string, error) {
 	var out []string
 	err := filepath.WalkDir(base, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
+			if path == base {
+				return err
+			}
 			return nil
 		}
 		if d.IsDir() || !strings.HasSuffix(d.Name(), ".json") {
@@ -223,7 +240,7 @@ func (s *Store) ListIndexes() ([]string, error) {
 		}
 		rel, relErr := filepath.Rel(base, path)
 		if relErr != nil {
-			return nil
+			return relErr
 		}
 		out = append(out, filepath.ToSlash(rel))
 		return nil
@@ -239,6 +256,9 @@ func (s *Store) ListInputs() ([]string, error) {
 	var out []string
 	err := filepath.WalkDir(base, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
+			if path == base {
+				return err
+			}
 			return nil
 		}
 		if d.IsDir() {
@@ -246,7 +266,7 @@ func (s *Store) ListInputs() ([]string, error) {
 		}
 		rel, relErr := filepath.Rel(base, path)
 		if relErr != nil {
-			return nil
+			return relErr
 		}
 		out = append(out, filepath.ToSlash(rel))
 		return nil

@@ -25,10 +25,28 @@ if (Test-Path -LiteralPath $binary) {
 $lines = @($output | Where-Object { $_ -and $_.Trim() -ne "" })
 $ok = $true
 $ids = @()
+$parsedCount = 0
 foreach ($line in $lines) {
   try {
     $obj = $line | ConvertFrom-Json
+    $parsedCount++
     $ids += [string]$obj.id
+    if ($obj.error) {
+      $ok = $false
+      if (-not $Quiet) { Write-Host "[smoke] JSON-RPC error for id=$($obj.id): $($obj.error.message)" }
+    }
+    if (-not $obj.result -and -not $obj.error) {
+      $ok = $false
+      if (-not $Quiet) { Write-Host "[smoke] response id=$($obj.id) has no result payload" }
+    }
+    if ($obj.result -and $obj.result.isError) {
+      $ok = $false
+      if (-not $Quiet) { Write-Host "[smoke] tool call id=$($obj.id) reported isError" }
+    }
+    if ([string]$obj.id -ne [string]$parsedCount) {
+      $ok = $false
+      if (-not $Quiet) { Write-Host "[smoke] unexpected response order: expected id=$parsedCount, got id=$($obj.id)" }
+    }
   } catch {
     $ok = $false
     if (-not $Quiet) { Write-Host "[smoke] non-JSON stdout line detected: $line" }

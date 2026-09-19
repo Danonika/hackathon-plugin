@@ -23,26 +23,58 @@ type xlsxSheetRef struct {
 }
 
 func readXLSXTable(path string, sheetName string) (*table, []string, error) {
-	sheets, warnings, err := readXLSXSheets(path)
+	zr, err := zip.OpenReader(path)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer zr.Close()
+
+	warnings := []string{}
+	refs := workbookSheets(zr)
+	if len(refs) == 0 {
+		files := sheetFiles(zr)
+		for i, f := range files {
+			refs = append(refs, xlsxSheetRef{Name: fmt.Sprintf("Sheet%d", i+1), Path: f.Name})
+		}
+	}
+	if len(refs) == 0 {
+		return nil, warnings, fmt.Errorf("xlsx: no worksheets found")
+	}
+	target := refs[0]
+	if sheetName != "" {
+		found := false
+		for _, ref := range refs {
+			if strings.EqualFold(ref.Name, sheetName) {
+				target = ref
+				found = true
+				break
+			}
+		}
+		if !found {
+			names := make([]string, 0, len(refs))
+			for _, ref := range refs {
+				names = append(names, ref.Name)
+			}
+			return nil, warnings, fmt.Errorf("xlsx: sheet %q not found, available: %s", sheetName, strings.Join(names, ", "))
+		}
+	}
+	f := zipFind(zr, target.Path)
+	if f == nil {
+		return nil, warnings, fmt.Errorf("xlsx: sheet %s file %s is missing", target.Name, target.Path)
+	}
+	var shared []string
+	if sf := zipFind(zr, "xl/sharedStrings.xml"); sf != nil {
+		shared, err = readSharedStrings(sf)
+		if err != nil {
+			warnings = append(warnings, "xlsx: failed to read sharedStrings.xml: "+err.Error())
+		}
+	}
+	styles := readXLSXStyles(zr)
+	rows, err := readSheetRows(f, shared, styles)
 	if err != nil {
 		return nil, warnings, err
 	}
-	if len(sheets) == 0 {
-		return nil, warnings, fmt.Errorf("xlsx: no worksheets found")
-	}
-	if sheetName == "" {
-		return sheets[0].Table, warnings, nil
-	}
-	for _, s := range sheets {
-		if strings.EqualFold(s.Name, sheetName) {
-			return s.Table, warnings, nil
-		}
-	}
-	names := make([]string, 0, len(sheets))
-	for _, s := range sheets {
-		names = append(names, s.Name)
-	}
-	return nil, warnings, fmt.Errorf("xlsx: sheet %q not found, available: %s", sheetName, strings.Join(names, ", "))
+	return rowsToTable(rows), warnings, nil
 }
 
 func readXLSXSheets(path string) ([]xlsxSheet, []string, error) {
@@ -315,14 +347,24 @@ func readSheetRows(f *zip.File, shared []string, styles xlsxStyles) ([][]string,
 						value = shared[idx]
 					}
 				}
-				if (curType == "" || curType == "n") && curStyle >= 0 && styles.dateStyles[curStyle] {
+				if (curType == "" || curType == "n") && curStyle >= 0 {
 					if serial, ok := parseNumber(value); ok {
-						value = formatExcelDateTime(excelSerialToTime(serial, styles.date1904))
+						switch {
+						case styles.dateStyles[curStyle]:
+							value = formatExcelDateTime(excelSerialToTime(serial, styles.date1904))
+						case styles.elapsedStyles[curStyle]:
+							value = formatExcelElapsed(serial)
+						case styles.timeStyles[curStyle]:
+							value = formatExcelTime(serial)
+						}
 					}
 				}
 				col := colFromRef(curRef)
 				if col < 0 {
 					col = len(curRow)
+				}
+				if col >= maxXLSXCols {
+					continue
 				}
 				for len(curRow) <= col {
 					curRow = append(curRow, "")
@@ -352,13 +394,27 @@ func colFromRef(ref string) int {
 	return col - 1
 }
 
+const maxXLSXCols = 16384
+
 type xlsxStyles struct {
-	dateStyles map[int]bool
-	date1904   bool
+	dateStyles    map[int]bool
+	timeStyles    map[int]bool
+	elapsedStyles map[int]bool
+	date1904      bool
+}
+
+type fmtKind struct {
+	date    bool
+	time    bool
+	elapsed bool
 }
 
 func readXLSXStyles(zr *zip.ReadCloser) xlsxStyles {
-	out := xlsxStyles{dateStyles: map[int]bool{}}
+	out := xlsxStyles{
+		dateStyles:    map[int]bool{},
+		timeStyles:    map[int]bool{},
+		elapsedStyles: map[int]bool{},
+	}
 	if f := zipFind(zr, "xl/workbook.xml"); f != nil {
 		if rc, err := f.Open(); err == nil {
 			dec := xml.NewDecoder(rc)
@@ -390,7 +446,7 @@ func readXLSXStyles(zr *zip.ReadCloser) xlsxStyles {
 	}
 	defer rc.Close()
 	dec := xml.NewDecoder(rc)
-	customDateFmt := map[int]bool{}
+	customFmt := map[int]fmtKind{}
 	styleFormats := []int{}
 	inCellXfs := false
 	for {
@@ -411,9 +467,7 @@ func readXLSXStyles(zr *zip.ReadCloser) xlsxStyles {
 						code = a.Value
 					}
 				}
-				if isDateFormatCode(code) {
-					customDateFmt[id] = true
-				}
+				customFmt[id] = classifyFormatCode(code)
 			case "cellXfs":
 				inCellXfs = true
 			case "xf":
@@ -434,46 +488,87 @@ func readXLSXStyles(zr *zip.ReadCloser) xlsxStyles {
 		}
 	}
 	for idx, numFmtID := range styleFormats {
-		if builtinDateFmt(numFmtID) || customDateFmt[numFmtID] {
+		kind, ok := customFmt[numFmtID]
+		if !ok {
+			kind = builtinFormatKind(numFmtID)
+		}
+		switch {
+		case kind.date:
 			out.dateStyles[idx] = true
+		case kind.elapsed:
+			out.elapsedStyles[idx] = true
+		case kind.time:
+			out.timeStyles[idx] = true
 		}
 	}
 	return out
 }
 
-func builtinDateFmt(id int) bool {
+func builtinFormatKind(id int) fmtKind {
 	switch {
-	case id >= 14 && id <= 22:
-		return true
-	case id >= 27 && id <= 36:
-		return true
+	case id >= 14 && id <= 17, id == 22, id >= 27 && id <= 36, id >= 50 && id <= 58:
+		return fmtKind{date: true}
+	case id >= 18 && id <= 21:
+		return fmtKind{time: true}
 	case id >= 45 && id <= 47:
-		return true
-	case id >= 50 && id <= 58:
-		return true
+		return fmtKind{elapsed: true}
 	}
-	return false
+	return fmtKind{}
 }
 
-func isDateFormatCode(code string) bool {
+// classifyFormatCode inspects a custom number format, skipping quoted literals,
+// bracketed sections ([Red], [$-409]) and escaped characters (\d) so they are
+// not mistaken for date/time tokens. Elapsed-time tokens such as [h] mark a
+// duration format.
+func classifyFormatCode(code string) fmtKind {
+	runes := []rune(strings.ToLower(code))
 	inQuote := false
-	hasDate, hasTime := false, false
-	for _, r := range strings.ToLower(code) {
-		if r == '"' {
+	hasDate, hasTime, hasMonth := false, false, false
+	for i := 0; i < len(runes); i++ {
+		r := runes[i]
+		switch {
+		case r == '"':
 			inQuote = !inQuote
-			continue
-		}
-		if inQuote {
-			continue
-		}
-		switch r {
-		case 'y', 'd', 'm':
+		case inQuote:
+		case r == '\\':
+			i++
+		case r == '[':
+			j := i + 1
+			for j < len(runes) && runes[j] != ']' {
+				j++
+			}
+			if isElapsedToken(string(runes[i+1 : j])) {
+				return fmtKind{elapsed: true}
+			}
+			i = j
+		case r == 'y' || r == 'd':
 			hasDate = true
-		case 'h', 's':
+		case r == 'h' || r == 's':
 			hasTime = true
+		case r == 'm':
+			hasMonth = true
 		}
 	}
-	return hasDate || hasTime
+	if hasDate || (hasMonth && !hasTime) {
+		return fmtKind{date: true}
+	}
+	if hasTime || hasMonth {
+		return fmtKind{time: true}
+	}
+	return fmtKind{}
+}
+
+func isElapsedToken(section string) bool {
+	section = strings.TrimSpace(section)
+	if section == "" {
+		return false
+	}
+	for _, r := range section {
+		if r != 'h' && r != 'm' && r != 's' {
+			return false
+		}
+	}
+	return true
 }
 
 func excelSerialToTime(serial float64, date1904 bool) time.Time {
@@ -493,6 +588,30 @@ func formatExcelDateTime(t time.Time) string {
 		return t.Format("2006-01-02")
 	}
 	return t.Format("2006-01-02 15:04:05")
+}
+
+// formatExcelTime renders a time-only serial (fraction of a day) as a clock
+// time instead of inventing an 1899/1904 date.
+func formatExcelTime(serial float64) string {
+	frac := serial - math.Floor(serial)
+	total := int(math.Round(frac * 86400))
+	total = ((total % 86400) + 86400) % 86400
+	return fmt.Sprintf("%02d:%02d:%02d", total/3600, (total%3600)/60, total%60)
+}
+
+// formatExcelElapsed renders an elapsed-time serial as total hours:minutes:seconds,
+// so durations such as [h]:mm:ss keep values >= 24h.
+func formatExcelElapsed(serial float64) string {
+	total := int(math.Round(serial * 86400))
+	neg := total < 0
+	if neg {
+		total = -total
+	}
+	out := fmt.Sprintf("%d:%02d:%02d", total/3600, (total%3600)/60, total%60)
+	if neg {
+		return "-" + out
+	}
+	return out
 }
 
 func rowsToTable(rows [][]string) *table {

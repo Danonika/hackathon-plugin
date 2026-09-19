@@ -11,10 +11,24 @@ if (-not (Test-Path -LiteralPath ".env")) {
 & (Join-Path $root "scripts\sync-skills.ps1")
 if ($LASTEXITCODE -ne 0) { Write-Error "[setup] sync-skills failed"; exit 1 }
 
-$template = Get-Content -LiteralPath (Join-Path $root "plugins\hackathonkit\.mcp.json.template") -Raw
-$template.Replace("{{REPO_ROOT}}", $root.Replace("\", "/")) |
-  Set-Content -LiteralPath (Join-Path $root "plugins\hackathonkit\.mcp.json") -NoNewline -Encoding UTF8
+$templatePath = Join-Path $root "plugins\hackathonkit\.mcp.json.template"
+if (-not (Test-Path -LiteralPath $templatePath)) {
+  Write-Error "[setup] template not found: $templatePath"
+  exit 1
+}
+$template = Get-Content -LiteralPath $templatePath -Raw
+$manifest = $template.Replace("{{REPO_ROOT}}", $root.Replace("\", "/"))
+$manifestPath = Join-Path $root "plugins\hackathonkit\.mcp.json"
+$manifestTmp = "$manifestPath.tmp"
+try {
+  [System.IO.File]::WriteAllText($manifestTmp, $manifest, (New-Object System.Text.UTF8Encoding($false)))
+  Move-Item -LiteralPath $manifestTmp -Destination $manifestPath -Force
+} finally {
+  if (Test-Path -LiteralPath $manifestTmp) { Remove-Item -LiteralPath $manifestTmp -Force -ErrorAction SilentlyContinue }
+}
 Write-Host "[setup] generated plugins/hackathonkit/.mcp.json with the absolute repository root"
+
+New-Item -ItemType Directory -Force -Path (Join-Path $root "logs"), (Join-Path $root "data\artifacts"), (Join-Path $root "data\index") | Out-Null
 
 $dockerOk = $false
 if (Get-Command docker -ErrorAction SilentlyContinue) {
@@ -31,6 +45,10 @@ if ($dockerOk) {
   if ($LASTEXITCODE -ne 0) { Write-Error "[setup] docker compose up failed"; exit 1 }
 } else {
   Write-Warning "[setup] docker engine is not available; building local binaries instead"
+  if (-not (Get-Command go -ErrorAction SilentlyContinue)) {
+    Write-Error "[setup] go toolchain not found; install Go or start Docker, then re-run setup"
+    exit 1
+  }
   New-Item -ItemType Directory -Force -Path (Join-Path $root "bin") | Out-Null
   go build -o bin/hackathonkit-mcp.exe ./cmd/hackathonkit-mcp
   if ($LASTEXITCODE -ne 0) { Write-Error "[setup] go build hackathonkit-mcp failed"; exit 1 }
@@ -44,6 +62,9 @@ if ($codex) {
   Write-Host "[setup] registering repo marketplace and installing the Hackathon Agent Kit plugin"
   cmd /c "codex plugin remove hackathonkit >nul 2>nul"
   cmd /c "codex plugin marketplace add `"$root`" >nul 2>nul"
+  if ($LASTEXITCODE -ne 0) {
+    Write-Warning "[setup] codex plugin marketplace add failed (exit $LASTEXITCODE)"
+  }
   cmd /c "codex plugin add hackathonkit@hackathonkit-local >nul 2>nul"
   if ($LASTEXITCODE -eq 0) {
     Write-Host "[setup] plugin installed; start a NEW Codex session to load it"

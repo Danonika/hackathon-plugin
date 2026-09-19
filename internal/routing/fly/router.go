@@ -38,6 +38,7 @@ type Router struct {
 	centroids map[string][]float64
 	brain     *MBrain
 	llm       LLMClassifier
+	building  chan struct{}
 }
 
 func NewRouter(settings config.RoutingSettings) *Router {
@@ -123,6 +124,7 @@ func (r *Router) Recommend(ctx context.Context, task string, meta map[string]any
 			scores[category] = s
 		}
 	}
+	keywordSignal := len(scores) > 0
 	encoderParts := []string{"keyword"}
 	if embeddingScores, ok := r.embeddingCategoryScores(ctx, task); ok {
 		encoderParts = append(encoderParts, "embedding")
@@ -179,7 +181,9 @@ func (r *Router) Recommend(ctx context.Context, task string, meta map[string]any
 	}
 	encoder := strings.Join(encoderParts, "+")
 	applyMetadata(scores, meta)
-	boost(scores, "reports", 0.15)
+	if keywordSignal || len(scores) > 0 {
+		boost(scores, "reports", 0.15)
+	}
 
 	avail := map[string]bool{}
 	for _, c := range available {
@@ -188,7 +192,13 @@ func (r *Router) Recommend(ctx context.Context, task string, meta map[string]any
 	best := map[string]float64{}
 	route := ""
 	routeScore := 0.0
-	for category, s := range scores {
+	categories := make([]string, 0, len(scores))
+	for category := range scores {
+		categories = append(categories, category)
+	}
+	sort.Strings(categories)
+	for _, category := range categories {
+		s := scores[category]
 		if s > routeScore {
 			route = category
 			routeScore = s

@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -13,15 +14,15 @@ import (
 	"hackathonkit.local/agentkit/internal/config"
 	"hackathonkit.local/agentkit/internal/mcp"
 	"hackathonkit.local/agentkit/internal/metadata"
-	"hackathonkit.local/agentkit/internal/observability"
 	"hackathonkit.local/agentkit/internal/objectstore"
+	"hackathonkit.local/agentkit/internal/observability"
 	"hackathonkit.local/agentkit/internal/openai"
 	"hackathonkit.local/agentkit/internal/routing/fly"
 	"hackathonkit.local/agentkit/internal/storage"
 	"hackathonkit.local/agentkit/internal/tools"
 )
 
-const version = "0.1.0"
+const version = "0.4.1"
 
 func main() {
 	selftest := flag.Bool("selftest", false, "run an in-process MCP handshake and exit")
@@ -103,21 +104,9 @@ func main() {
 	})
 
 	if *listTools {
-		out := []map[string]any{}
-		for _, t := range reg.List() {
-			schema := t.InputSchema
-			if schema == nil {
-				schema = map[string]any{"type": "object", "properties": map[string]any{}}
-			}
-			out = append(out, map[string]any{
-				"name":        t.Name,
-				"description": t.Description,
-				"inputSchema": schema,
-			})
-		}
 		enc := json.NewEncoder(os.Stdout)
 		enc.SetIndent("", "  ")
-		if err := enc.Encode(out); err != nil {
+		if err := enc.Encode(srv.ToolDescriptors()); err != nil {
 			fmt.Fprintln(os.Stderr, "error:", err)
 			os.Exit(1)
 		}
@@ -141,6 +130,10 @@ func main() {
 		"version": version,
 	})
 	if err := srv.Serve(ctx); err != nil {
+		if errors.Is(err, context.Canceled) {
+			observability.Log(logger, "info", "server_stop", map[string]any{"reason": "signal"})
+			return
+		}
 		observability.Log(logger, "error", "server_stop", map[string]any{"error": err.Error()})
 		os.Exit(1)
 	}

@@ -17,7 +17,7 @@ $routingFile = Join-Path $root "configs\routing.yaml"
 Check "routing config" (Test-Path -LiteralPath $routingFile) $routingFile
 
 $go = Get-Command go -ErrorAction SilentlyContinue
-Check "go toolchain (dev)" ($null -ne $go) $(if ($go) { (go version) } else { "not found (not required for docker path)" })
+Check "go toolchain (dev)" $true $(if ($go) { (go version) } else { "not found (not required for docker path)" })
 
 $codex = Get-Command codex -ErrorAction SilentlyContinue
 Check "codex CLI" ($null -ne $codex) $(if ($codex) { (codex --version) } else { "not found" })
@@ -33,7 +33,7 @@ Check "docker engine" $engine $(if ($engine) { "running" } else { "not running" 
 $binary = Test-Path -LiteralPath (Join-Path $root "bin\hackathonkit-mcp.exe")
 $image = $false
 if ($engine) {
-  $img = cmd /c "docker images -q hackathon-agent-kit-hackathonkit-mcp 2>nul"
+  $img = docker images --filter "reference=*hackathonkit-mcp*" -q 2>$null
   $image = -not [string]::IsNullOrWhiteSpace($img)
 }
 Check "mcp runtime" ($binary -or $image) $(if ($binary) { "local binary" } elseif ($image) { "docker image" } else { "run scripts/setup.ps1" })
@@ -50,28 +50,47 @@ if ($codex) {
   $json = (cmd /c "codex plugin list --json 2>nul") -join "`n"
   $pluginInstalled = $false
   $pluginEnabled = $false
+  $pluginDetail = "install: scripts/setup.ps1 or codex plugin add hackathonkit@hackathonkit-local"
   if ($json) {
     try {
       $parsed = $json | ConvertFrom-Json
       foreach ($p in $parsed.installed) {
         if ($p.name -eq "hackathonkit") {
-          $pluginInstalled = [bool]$p.installed
+          $pluginInstalled = $true
           $pluginEnabled = [bool]$p.enabled
         }
       }
-    } catch { }
+    } catch {
+      $pluginDetail = "cannot parse codex plugin list output: $($_.Exception.Message)"
+    }
+  } else {
+    $pluginDetail = "codex plugin list returned no output"
   }
-  Check "hackathonkit plugin" ($pluginInstalled -and $pluginEnabled) "install: scripts/setup.ps1 or codex plugin add hackathonkit@hackathonkit-local"
+  if ($pluginInstalled -and -not $pluginEnabled) {
+    $pluginDetail = "installed but disabled; enable it in Codex"
+  } elseif ($pluginInstalled) {
+    $pluginDetail = "installed and enabled"
+  }
+  Check "hackathonkit plugin" ($pluginInstalled -and $pluginEnabled) $pluginDetail
 
-  & (Join-Path $root "scripts\plugin-check.ps1") | Out-Null
-  Check "plugin runtime" ($LASTEXITCODE -eq 0) "installed plugin starts MCP from a foreign cwd (scripts/plugin-check.ps1)"
+  if ($pluginInstalled -and $pluginEnabled) {
+    $checkOutput = & (Join-Path $root "scripts\plugin-check.ps1") *>&1
+    if ($LASTEXITCODE -eq 0) {
+      Check "plugin runtime" $true "installed plugin starts MCP from a foreign cwd"
+    } else {
+      $reason = ($checkOutput | Where-Object { $_ } | Select-Object -Last 1)
+      Check "plugin runtime" $false "$reason"
+    }
+  } else {
+    Write-Host ("[info] {0,-22} skipped (plugin not installed or disabled)" -f "plugin runtime")
+  }
 }
 
 if ($engine) {
   $pg = Test-NetConnection 127.0.0.1 -Port 5432 -InformationLevel Quiet -WarningAction SilentlyContinue
-  Check "postgres" $pg "localhost:5432 (optional metadata backend)"
+  Write-Host ("[info] {0,-22} {1}" -f "postgres", $(if ($pg) { "localhost:5432 (optional metadata backend)" } else { "not running (optional metadata backend)" }))
   $minio = Test-NetConnection 127.0.0.1 -Port 9000 -InformationLevel Quiet -WarningAction SilentlyContinue
-  Check "minio" $minio "localhost:9000 (optional artifact backend)"
+  Write-Host ("[info] {0,-22} {1}" -f "minio", $(if ($minio) { "localhost:9000 (optional artifact backend)" } else { "not running (optional artifact backend)" }))
 }
 
 & (Join-Path $root "scripts\smoke.ps1") -Quiet

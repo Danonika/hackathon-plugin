@@ -64,3 +64,26 @@ func TestRecommendFiltersUnavailable(t *testing.T) {
 		}
 	}
 }
+
+func TestRecommendZeroSignalIsUnknown(t *testing.T) {
+	r := NewRouter(config.RoutingSettings{FlyThreshold: 0.55, TopK: 5})
+	res := r.Recommend(context.Background(), "qqq zzz", nil, nil)
+	if res.Route != "unknown" {
+		t.Fatalf("zero-signal task must route to unknown, got %q (scores=%v)", res.Route, res.CategoryScores)
+	}
+	if len(res.Recommendations) != 0 {
+		t.Fatalf("zero-signal task must not recommend capabilities, got %+v", res.Recommendations)
+	}
+}
+
+func TestRecommendKeywordTieBreakIsDeterministic(t *testing.T) {
+	r := NewRouter(config.RoutingSettings{FlyThreshold: 0.55, TopK: 5})
+	// "csv" (data) and "policy" (knowledge) both score 0.3; the tie must resolve
+	// the same way on every run regardless of map iteration order.
+	first := r.Recommend(context.Background(), "csv policy", nil, nil).Route
+	for i := 0; i < 50; i++ {
+		if got := r.Recommend(context.Background(), "csv policy", nil, nil).Route; got != first {
+			t.Fatalf("tie-break is not deterministic: %q vs %q", got, first)
+		}
+	}
+}

@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"log"
 	"math"
 	"os"
 	"path/filepath"
@@ -108,6 +109,11 @@ func (r *Router) embeddingCategoryScores(ctx context.Context, task string) (map[
 	if len(sims) == 0 {
 		return nil, false
 	}
+	// Keep the relative ranking of the categories, but cap each score by how
+	// similar the category is in absolute terms, so a field of mediocre
+	// cosine matches does not get normalized into a confident recommendation.
+	const embFloor = 0.2
+	const embCeil = 0.8
 	minSim, maxSim := math.Inf(1), math.Inf(-1)
 	for _, s := range sims {
 		if s < minSim {
@@ -119,11 +125,21 @@ func (r *Router) embeddingCategoryScores(ctx context.Context, task string) (map[
 	}
 	out := map[string]float64{}
 	for cat, s := range sims {
-		if maxSim-minSim < 1e-9 {
-			out[cat] = 0.5
-			continue
+		rank := 0.0
+		if maxSim-minSim >= 1e-9 {
+			rank = (s - minSim) / (maxSim - minSim)
 		}
-		out[cat] = (s - minSim) / (maxSim - minSim)
+		absolute := (s - embFloor) / (embCeil - embFloor)
+		if absolute < 0 {
+			absolute = 0
+		}
+		if absolute > 1 {
+			absolute = 1
+		}
+		if rank > absolute {
+			rank = absolute
+		}
+		out[cat] = rank
 	}
 	return out, true
 }
@@ -138,8 +154,51 @@ func (r *Router) ensureCentroids(ctx context.Context) (map[string][]float64, boo
 		r.mu.Unlock()
 		return cached, true
 	}
+	if r.building != nil {
+		wait := r.building
+		r.mu.Unlock()
+		select {
+		case <-wait:
+		case <-ctx.Done():
+			return nil, false
+		}
+		r.mu.Lock()
+		cached := r.centroids
+		r.mu.Unlock()
+		return cached, cached != nil
+	}
+	r.building = make(chan struct{})
 	r.mu.Unlock()
 
+	var centroids map[string][]float64
+	var ok bool
+	func() {
+		defer func() {
+			if rec := recover(); rec != nil {
+				log.Printf("fly: embedding centroid build panicked: %v", rec)
+				centroids, ok = nil, false
+			}
+		}()
+		centroids, ok = r.buildCentroids(ctx)
+	}()
+
+	r.mu.Lock()
+	if ok {
+		r.centroids = centroids
+	}
+	close(r.building)
+	r.building = nil
+	r.mu.Unlock()
+	if !ok {
+		return nil, false
+	}
+	return centroids, true
+}
+
+// buildCentroids performs the cache read, embedding round-trip and atomic
+// cache write without holding the router lock, so concurrent callers can wait
+// on the single in-flight build and observe their own context deadline.
+func (r *Router) buildCentroids(ctx context.Context) (map[string][]float64, bool) {
 	hash := exemplarHash()
 	if r.cachePath != "" {
 		if data, err := os.ReadFile(r.cachePath); err == nil {
@@ -148,9 +207,6 @@ func (r *Router) ensureCentroids(ctx context.Context) (map[string][]float64, boo
 				cache.Hash == hash &&
 				cache.Model == r.modelTag &&
 				len(cache.Centroids) > 0 {
-				r.mu.Lock()
-				r.centroids = cache.Centroids
-				r.mu.Unlock()
 				return cache.Centroids, true
 			}
 		}
@@ -173,12 +229,25 @@ func (r *Router) ensureCentroids(ctx context.Context) (map[string][]float64, boo
 	if err != nil || len(vectors) != len(texts) {
 		return nil, false
 	}
+	dims := -1
+	for _, vec := range vectors {
+		if dims < 0 {
+			dims = len(vec)
+			if dims == 0 {
+				return nil, false
+			}
+			continue
+		}
+		if len(vec) != dims {
+			return nil, false
+		}
+	}
 	sums := make([][]float64, len(cats))
 	counts := make([]int, len(cats))
 	for i, vec := range vectors {
 		ci := index[i]
 		if sums[ci] == nil {
-			sums[ci] = make([]float64, len(vec))
+			sums[ci] = make([]float64, dims)
 		}
 		for d := range vec {
 			sums[ci][d] += vec[d]
@@ -202,15 +271,41 @@ func (r *Router) ensureCentroids(ctx context.Context) (map[string][]float64, boo
 	if r.cachePath != "" {
 		cache := embeddingCache{Model: r.modelTag, Hash: hash, Centroids: centroids}
 		if data, err := json.Marshal(cache); err == nil {
-			if err := os.MkdirAll(filepath.Dir(r.cachePath), 0o755); err == nil {
-				_ = os.WriteFile(r.cachePath, data, 0o644)
-			}
+			writeFileAtomic(r.cachePath, data)
 		}
 	}
-	r.mu.Lock()
-	r.centroids = centroids
-	r.mu.Unlock()
 	return centroids, true
+}
+
+// writeFileAtomic writes data via a unique temp file + rename so concurrent
+// writers cannot leave a truncated or interleaved cache behind.
+func writeFileAtomic(path string, data []byte) {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return
+	}
+	tmp, err := os.CreateTemp(dir, "fly-embeddings-*.tmp")
+	if err != nil {
+		return
+	}
+	tmpName := tmp.Name()
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		os.Remove(tmpName)
+		return
+	}
+	if err := tmp.Chmod(0o644); err != nil {
+		tmp.Close()
+		os.Remove(tmpName)
+		return
+	}
+	if err := tmp.Close(); err != nil {
+		os.Remove(tmpName)
+		return
+	}
+	if err := os.Rename(tmpName, path); err != nil {
+		os.Remove(tmpName)
+	}
 }
 
 func normalizeVector(v []float64) []float64 {
