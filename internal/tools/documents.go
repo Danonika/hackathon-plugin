@@ -12,7 +12,25 @@ import (
 	"time"
 
 	"hackathonkit.local/agentkit/internal/mcp"
+	"github.com/ledongthuc/pdf"
 )
+
+func pdfText(path string) (string, error) {
+	f, r, err := pdf.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	reader, err := r.GetPlainText()
+	if err != nil {
+		return "", err
+	}
+	raw, err := io.ReadAll(reader)
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(raw)), nil
+}
 
 func isTextExt(ext string) bool {
 	switch ext {
@@ -29,13 +47,28 @@ func extractText(path string) (string, []string, error) {
 		text, err := docxText(path)
 		return text, nil, err
 	case "xlsx", "xls":
-		t, warnings, err := readAnyTable(path)
+		sheets, warnings, err := readXLSXSheets(path)
 		if err != nil {
 			return "", warnings, err
 		}
-		return tableAsText(t), warnings, nil
+		var b strings.Builder
+		for i, s := range sheets {
+			if i > 0 {
+				b.WriteString("\n")
+			}
+			fmt.Fprintf(&b, "## Sheet: %s\n", s.Name)
+			b.WriteString(tableAsText(s.Table))
+		}
+		return strings.TrimSpace(b.String()), warnings, nil
 	case "pdf":
-		return "", []string{"pdf text extraction is not enabled in v0.1; convert to docx/txt or add a pdf processor"}, nil
+		text, err := pdfText(path)
+		if err != nil {
+			return "", []string{"pdf text extraction failed: " + err.Error()}, nil
+		}
+		if strings.TrimSpace(text) == "" {
+			return "", []string{"pdf contains no extractable text (possibly a scanned document); OCR is required"}, nil
+		}
+		return text, nil, nil
 	default:
 		b, err := os.ReadFile(path)
 		if err != nil {

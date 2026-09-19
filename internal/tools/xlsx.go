@@ -5,11 +5,45 @@ import (
 	"encoding/xml"
 	"fmt"
 	"io"
+	"sort"
 	"strconv"
 	"strings"
 )
 
-func readXLSXTable(path string) (*table, []string, error) {
+type xlsxSheet struct {
+	Name  string
+	Table *table
+}
+
+type xlsxSheetRef struct {
+	Name string
+	Path string
+}
+
+func readXLSXTable(path string, sheetName string) (*table, []string, error) {
+	sheets, warnings, err := readXLSXSheets(path)
+	if err != nil {
+		return nil, warnings, err
+	}
+	if len(sheets) == 0 {
+		return nil, warnings, fmt.Errorf("xlsx: no worksheets found")
+	}
+	if sheetName == "" {
+		return sheets[0].Table, warnings, nil
+	}
+	for _, s := range sheets {
+		if strings.EqualFold(s.Name, sheetName) {
+			return s.Table, warnings, nil
+		}
+	}
+	names := make([]string, 0, len(sheets))
+	for _, s := range sheets {
+		names = append(names, s.Name)
+	}
+	return nil, warnings, fmt.Errorf("xlsx: sheet %q not found, available: %s", sheetName, strings.Join(names, ", "))
+}
+
+func readXLSXSheets(path string) ([]xlsxSheet, []string, error) {
 	zr, err := zip.OpenReader(path)
 	if err != nil {
 		return nil, nil, err
@@ -24,15 +58,33 @@ func readXLSXTable(path string) (*table, []string, error) {
 			warnings = append(warnings, "xlsx: failed to read sharedStrings.xml: "+err.Error())
 		}
 	}
-	sheet := zipFindPrefix(zr, "xl/worksheets/sheet")
-	if sheet == nil {
-		return nil, warnings, fmt.Errorf("xlsx: no worksheet found")
+
+	refs := workbookSheets(zr)
+	if len(refs) == 0 {
+		files := sheetFiles(zr)
+		for i, f := range files {
+			refs = append(refs, xlsxSheetRef{Name: fmt.Sprintf("Sheet%d", i+1), Path: f.Name})
+		}
 	}
-	rows, err := readSheetRows(sheet, shared)
-	if err != nil {
-		return nil, warnings, err
+	if len(refs) == 0 {
+		return nil, warnings, fmt.Errorf("xlsx: no worksheets found")
 	}
-	return rowsToTable(rows), warnings, nil
+
+	out := make([]xlsxSheet, 0, len(refs))
+	for _, ref := range refs {
+		f := zipFind(zr, ref.Path)
+		if f == nil {
+			warnings = append(warnings, fmt.Sprintf("xlsx: sheet %s file %s is missing", ref.Name, ref.Path))
+			continue
+		}
+		rows, err := readSheetRows(f, shared)
+		if err != nil {
+			warnings = append(warnings, fmt.Sprintf("xlsx: sheet %s failed: %v", ref.Name, err))
+			continue
+		}
+		out = append(out, xlsxSheet{Name: ref.Name, Table: rowsToTable(rows)})
+	}
+	return out, warnings, nil
 }
 
 func zipFind(zr *zip.ReadCloser, name string) *zip.File {
@@ -44,13 +96,105 @@ func zipFind(zr *zip.ReadCloser, name string) *zip.File {
 	return nil
 }
 
-func zipFindPrefix(zr *zip.ReadCloser, prefix string) *zip.File {
+func sheetFiles(zr *zip.ReadCloser) []*zip.File {
+	files := []*zip.File{}
 	for _, f := range zr.File {
-		if strings.HasPrefix(f.Name, prefix) && strings.HasSuffix(f.Name, ".xml") {
-			return f
+		if strings.HasPrefix(f.Name, "xl/worksheets/sheet") && strings.HasSuffix(f.Name, ".xml") {
+			files = append(files, f)
 		}
 	}
-	return nil
+	sort.Slice(files, func(i, j int) bool {
+		return sheetNumber(files[i].Name) < sheetNumber(files[j].Name)
+	})
+	return files
+}
+
+func sheetNumber(name string) int {
+	base := strings.TrimSuffix(strings.TrimPrefix(name, "xl/worksheets/sheet"), ".xml")
+	n, err := strconv.Atoi(base)
+	if err != nil {
+		return 1 << 30
+	}
+	return n
+}
+
+func workbookSheets(zr *zip.ReadCloser) []xlsxSheetRef {
+	rels := map[string]string{}
+	if f := zipFind(zr, "xl/_rels/workbook.xml.rels"); f != nil {
+		if rc, err := f.Open(); err == nil {
+			dec := xml.NewDecoder(rc)
+			for {
+				tok, err := dec.Token()
+				if err == io.EOF || err != nil {
+					break
+				}
+				se, ok := tok.(xml.StartElement)
+				if !ok || se.Name.Local != "Relationship" {
+					continue
+				}
+				id, target := "", ""
+				for _, a := range se.Attr {
+					switch a.Name.Local {
+					case "Id":
+						id = a.Value
+					case "Target":
+						target = a.Value
+					}
+				}
+				if id != "" && target != "" {
+					rels[id] = normalizeTarget(target)
+				}
+			}
+			rc.Close()
+		}
+	}
+
+	refs := []xlsxSheetRef{}
+	if f := zipFind(zr, "xl/workbook.xml"); f != nil {
+		if rc, err := f.Open(); err == nil {
+			dec := xml.NewDecoder(rc)
+			for {
+				tok, err := dec.Token()
+				if err == io.EOF || err != nil {
+					break
+				}
+				se, ok := tok.(xml.StartElement)
+				if !ok || se.Name.Local != "sheet" {
+					continue
+				}
+				name, rid := "", ""
+				for _, a := range se.Attr {
+					switch {
+					case a.Name.Local == "name":
+						name = a.Value
+					case a.Name.Local == "id" || a.Name.Space != "" && strings.HasSuffix(a.Name.Local, "id"):
+						rid = a.Value
+					}
+				}
+				if rid == "" {
+					continue
+				}
+				path, ok := rels[rid]
+				if !ok {
+					continue
+				}
+				if name == "" {
+					name = fmt.Sprintf("Sheet%d", len(refs)+1)
+				}
+				refs = append(refs, xlsxSheetRef{Name: name, Path: path})
+			}
+			rc.Close()
+		}
+	}
+	return refs
+}
+
+func normalizeTarget(target string) string {
+	target = strings.TrimPrefix(target, "/")
+	if !strings.HasPrefix(target, "xl/") {
+		target = "xl/" + target
+	}
+	return target
 }
 
 func readSharedStrings(f *zip.File) ([]string, error) {

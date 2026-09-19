@@ -19,7 +19,16 @@ if [ -f "$ROOT/docker-compose.yml" ]; then check "repository root" 1 "$ROOT"; el
 if [ -f "$ROOT/configs/routing.yaml" ]; then check "routing config" 1 "$ROOT/configs/routing.yaml"; else check "routing config" 0 "missing"; fi
 
 if command -v go >/dev/null 2>&1; then check "go toolchain (dev)" 1 "$(go version)"; else check "go toolchain (dev)" 1 "not found (not required for docker path)"; fi
-if command -v codex >/dev/null 2>&1; then check "codex CLI" 1 "$(codex --version 2>/dev/null || echo present)"; else check "codex CLI" 0 "not found"; fi
+if command -v codex >/dev/null 2>&1; then
+  check "codex CLI" 1 "$(codex --version 2>/dev/null || echo present)"
+  if codex plugin list --json 2>/dev/null | grep -q '"name": *"hackathonkit"'; then
+    check "hackathonkit plugin" 1 "installed (check enabled in Codex)"
+  else
+    check "hackathonkit plugin" 0 "run scripts/setup.sh"
+  fi
+else
+  check "codex CLI" 0 "not found"
+fi
 
 if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
   check "docker engine" 1 "running"

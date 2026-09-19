@@ -1,6 +1,7 @@
 package fly
 
 import (
+	"context"
 	"testing"
 
 	"hackathonkit.local/agentkit/internal/config"
@@ -14,6 +15,7 @@ func TestRecommendTelemetry(t *testing.T) {
 		"vision.analyze", "charts.create", "reports.create", "classification.classify",
 	}
 	res := r.Recommend(
+		context.Background(),
 		"Find anomalies in equipment telemetry",
 		map[string]any{
 			"types":         []any{"csv"},
@@ -42,7 +44,7 @@ func TestRecommendTelemetry(t *testing.T) {
 func TestRecommendAudio(t *testing.T) {
 	r := NewRouter(config.RoutingSettings{FlyThreshold: 0.55, TopK: 5})
 	available := []string{"audio.transcribe", "vision.analyze", "documents.extract", "reports.create"}
-	res := r.Recommend("Generate subtitles for this interview audio", map[string]any{
+	res := r.Recommend(context.Background(), "Generate subtitles for this interview audio", map[string]any{
 		"types": []any{"audio"},
 	}, available)
 	if res.Route != "speech" {
@@ -55,7 +57,7 @@ func TestRecommendAudio(t *testing.T) {
 
 func TestRecommendFiltersUnavailable(t *testing.T) {
 	r := NewRouter(config.RoutingSettings{FlyThreshold: 0.55, TopK: 5})
-	res := r.Recommend("find anomalies in telemetry csv", nil, []string{"documents.extract"})
+	res := r.Recommend(context.Background(), "find anomalies in telemetry csv", nil, []string{"documents.extract"})
 	for _, rec := range res.Recommendations {
 		if rec.Capability != "documents.extract" {
 			t.Fatalf("unexpected capability outside available list: %s", rec.Capability)

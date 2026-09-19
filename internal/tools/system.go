@@ -2,9 +2,13 @@ package tools
 
 import (
 	"context"
+	"path/filepath"
 	"strings"
+	"time"
 
 	"hackathonkit.local/agentkit/internal/mcp"
+	"hackathonkit.local/agentkit/internal/metadata"
+	"hackathonkit.local/agentkit/internal/observability"
 )
 
 func registerSystem(reg *mcp.Registry, d Deps) {
@@ -80,7 +84,7 @@ func registerSystem(reg *mcp.Registry, d Deps) {
 			if d.Metrics != nil {
 				d.Metrics.Inc("fly_route_requests_total")
 			}
-			res := d.Router.Recommend(task, argMap(args, "input_metadata"), available)
+			res := d.Router.Recommend(ctx, task, argMap(args, "input_metadata"), available)
 			if len(res.Recommendations) == 0 {
 				return mcp.Partial(trace(ctx), map[string]any{
 					"route":           "unknown",
@@ -94,10 +98,35 @@ func registerSystem(reg *mcp.Registry, d Deps) {
 			env = env.WithMetrics(map[string]any{
 				"max_score":       res.MaxScore,
 				"threshold":       res.Threshold,
+				"encoder":         res.Encoder,
 				"category_scores": res.CategoryScores,
 			})
 			if res.MaxScore < res.Threshold {
 				env = env.WithWarnings("fly max score below threshold; ignore recommendation and continue in normal mode")
+			}
+			if d.Store != nil {
+				_ = observability.AppendJSONL(filepath.Join(d.Store.Root(), "logs", "fly-events.jsonl"), map[string]any{
+					"ts":              time.Now().UTC().Format(time.RFC3339Nano),
+					"trace_id":        trace(ctx),
+					"route":           res.Route,
+					"encoder":         res.Encoder,
+					"max_score":       res.MaxScore,
+					"threshold":       res.Threshold,
+					"category_scores": res.CategoryScores,
+					"recommendations": res.Recommendations,
+					"task":            snippet(task, 200),
+				})
+			}
+			if d.Meta != nil && d.Meta.Enabled() {
+				_ = d.Meta.RecordFlyPrediction(ctx, metadata.FlyPrediction{
+					TraceID:         trace(ctx),
+					Route:           res.Route,
+					Encoder:         res.Encoder,
+					MaxScore:        res.MaxScore,
+					Threshold:       res.Threshold,
+					CategoryScores:  res.CategoryScores,
+					Recommendations: res.Recommendations,
+				})
 			}
 			return env, nil
 		},

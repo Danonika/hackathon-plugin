@@ -2,7 +2,7 @@
 
 Local Codex plugin backed by a typed MCP capability layer. Codex is the main reasoning engine, Skills define domain workflows, the local MCP server exposes deterministic and AI-powered capabilities, and an experimental Fly router recommends capability routes while Codex keeps the final decision.
 
-Status: v0.1 skeleton per System Design v7. MCP runtime, plugin package, skills, tooling and evaluation subsystem are in place; Postgres/MinIO metadata integration and the demo frontend are next.
+Status: v0.2 per System Design v7. MCP runtime (19 tools), plugin package with scripted install, skills, PDF/XLSX processing, Fly v2 (keyword + OpenAI embeddings), Postgres/MinIO backends, demo dashboard and the evaluation subsystem are in place.
 
 ## Requirements
 
@@ -22,11 +22,11 @@ Fallback without Docker: if `bin/hackathonkit-mcp.exe` (or `bin/hackathonkit-mcp
    - builds the MCP image (or local binaries when Docker is unavailable)
    - starts postgres, redis, minio
    - creates `.env` from `.env.example`
+   - registers the repo marketplace and installs the plugin: `codex plugin marketplace add <root>` + `codex plugin add hackathonkit@hackathonkit-local`
 3. Open Codex from the repository root.
-4. Install the Hackathon Agent Kit plugin from the repo marketplace (`.agents/plugins/marketplace.json`), e.g. via the Codex plugin browser.
-5. Start a **new** Codex session (plugins load at session start).
-6. `scripts/doctor.ps1` (or `scripts/doctor.sh`) — checks runtime, routing config, skills mirror and runs the MCP handshake.
-7. Run the demo task, then `scripts/smoke.ps1`.
+4. Start a **new** Codex session (plugins load at session start).
+5. `scripts/doctor.ps1` (or `scripts/doctor.sh`) — checks runtime, routing config, plugin, skills mirror and runs the MCP handshake.
+6. Run the demo task, then `scripts/smoke.ps1`.
 
 Fallback/debug path (no plugin needed): the repository ships `.codex/config.toml` with the same MCP server definition and `.agents/skills` for repo-native skills.
 
@@ -36,11 +36,11 @@ Fallback/debug path (no plugin needed): the repository ships `.codex/config.toml
 |---|---|
 | `system.context` | Live routing mode, config version, capability list |
 | `system.capabilities` | Capability groups, experimental features |
-| `routing.fly_recommend` | Experimental capability router (recommendation only) |
-| `files.describe` | Type, size, shape, timestamp presence |
-| `documents.ingest` / `documents.extract` / `documents.get` | Text extraction and stored artifacts (txt, md, csv, tsv, json, log, docx, xlsx) |
+| `routing.fly_recommend` | Experimental capability router, keyword + embedding encoder (recommendation only) |
+| `files.describe` | Type, size, shape, sheets, timestamp presence |
+| `documents.ingest` / `documents.extract` / `documents.get` | Text extraction and stored artifacts (txt, md, csv, tsv, json, log, docx, xlsx with all worksheets, pdf) |
 | `knowledge.index` / `knowledge.search` | Chunking, TF-IDF search over indexed documents |
-| `data.inspect` / `data.query` / `data.analyze` | Table profiling, filters, statistics, correlations |
+| `data.inspect` / `data.query` / `data.analyze` | Table profiling, filters, statistics, correlations (XLSX sheet selection) |
 | `timeseries.analyze` / `timeseries.detect_anomalies` | Trend, stats, rolling z-score / IQR anomalies |
 | `classification.classify` | Deterministic keyword classification |
 | `charts.create` | Line/bar SVG artifacts |
@@ -57,6 +57,24 @@ Every tool returns the shared envelope: `status`, `data`, `sources`, `warnings`,
 - `scripts`/demo API can change it: `POST /routing {"mode": "fly"}` on the demo API (`http://127.0.0.1:8787`), or `hackathonkit-mcp --set-routing-mode fly`.
 - Fly instructions live in the `task-router` skill: in fly mode Codex calls `routing.fly_recommend` first, then validates, accepts, rejects or extends the recommendations. On failure or `max_score < threshold` it silently continues in normal mode.
 
+## Demo UI
+
+`go run ./cmd/demo-api` (or `docker compose up -d demo-api`) serves http://127.0.0.1:8787:
+
+- Normal/Fly toggle that writes `configs/routing.yaml` atomically (MCP re-reads it live)
+- Fly ranking bars, encoder, max_score and threshold from `logs/fly-events.jsonl`
+- MCP tool call feed from `logs/mcp-calls.jsonl`
+- Input files and generated artifacts
+
+## Storage backends
+
+Artifacts always land in `data/artifacts` (offline-safe). With the environment configured they are also mirrored:
+
+- `POSTGRES_DSN` — artifact registry, routing runs and fly predictions (`artifacts`, `routing_runs`, `fly_predictions`; schema is created on connect)
+- `MINIO_ENDPOINT`, `MINIO_ACCESS_KEY`, `MINIO_SECRET_KEY`, `MINIO_BUCKET`, `MINIO_USE_SSL` — artifact blob mirror; reads fall back to MinIO when a local file is missing
+
+`docker compose` passes both to the MCP and demo-api services. Without them everything degrades to the filesystem with a warning in the logs.
+
 ## Development
 
 ```sh
@@ -66,7 +84,7 @@ go test ./...
 go run ./cmd/hackathonkit-mcp --selftest        # in-process MCP handshake
 go run ./cmd/hackathonkit-mcp --list-tools      # tool descriptors JSON
 go run ./cmd/hackathonkit-mcp --set-routing-mode fly
-go run ./cmd/demo-api                       # routing toggle + file listing API
+go run ./cmd/demo-api                       # demo dashboard + routing toggle API (http://127.0.0.1:8787)
 ```
 
 Sample dataset: `data/input/sample-telemetry.csv` (72 hourly readings with two planted anomalies). Try:
@@ -89,12 +107,15 @@ plugins/hackathonkit/          Codex plugin (single source of truth for skills)
 .agents/skills/            generated fallback mirror (scripts/sync-skills)
 .codex/config.toml         fallback MCP registration
 cmd/hackathonkit-mcp/          MCP stdio server
-cmd/demo-api/              local demo API (routing toggle, file listing)
+cmd/demo-api/              demo dashboard + API (routing toggle, logs, files)
+cmd/demo-api/static/       embedded dashboard page
 internal/mcp/              JSON-RPC, registry, contracts, server
 internal/config/           config + live routing state (atomic writes)
-internal/routing/fly/      Fly router v1 (deterministic keyword + metadata scoring)
+internal/routing/fly/      Fly router (keyword + embedding encoder, centroid cache)
 internal/tools/            capability implementations
-internal/storage/          filesystem storage with path sanitization
+internal/storage/          filesystem storage with path sanitization + backend attach
+internal/metadata/         Postgres recorder (artifacts, routing runs, fly predictions)
+internal/objectstore/      MinIO client (artifact mirror, read fallback)
 internal/openai/           thin OpenAI adapters (chat, vision, embeddings, audio)
 configs/                   config.yaml, routing.yaml, evaluation.yaml
 data/input, data/artifacts, data/index, logs/
@@ -102,14 +123,14 @@ scripts/                   setup, doctor, smoke, sync-skills (ps1 + sh)
 evals/                     calibration, roast, project-cost, judges, aggregate, snapshots
 ```
 
-## Known limitations (v0.1)
+## Known limitations (v0.2)
 
-- PDF text extraction is not enabled; convert to docx/txt or add a processor.
-- XLSX support covers the first worksheet and shared strings.
-- Postgres/Redis/MinIO are started by setup but metadata is still stored on the filesystem; database integration is the next milestone.
-- Frontend is not implemented yet; `cmd/demo-api` provides the endpoints a UI will use.
-- Fly router v1 is deterministic (keywords + input metadata). The embedding/encoder version is planned.
-- Codex plugin installation is manual (repo marketplace) and requires a new session; the `.codex/config.toml` fallback works without it.
+- Scanned PDFs without a text layer need OCR; extraction returns an explicit warning instead of guessing.
+- XLSX handles multiple worksheets, shared and inline strings; formulas appear as their last cached value.
+- Postgres/MinIO backends are covered by unit tests through interfaces with fakes; run `docker compose up` for a live check (Docker Desktop needs the WSL2 backend on Windows).
+- The demo UI is a lightweight embedded dashboard, not the full Next.js frontend from the design.
+- Fly v2 blends keyword scoring with OpenAI embedding centroids (cached in `data/index/fly-embeddings.json`); without `OPENAI_API_KEY` it silently falls back to the keyword encoder.
+- Codex plugin install writes to `~/.codex`; after editing plugin files bump the plugin version and re-run setup. The `.codex/config.toml` fallback works without the plugin.
 
 ## Hackathon day
 

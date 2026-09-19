@@ -108,6 +108,7 @@ func registerTimeSeries(reg *mcp.Registry, d Deps) {
 		"Analyze a time series from a CSV/XLSX table: range, statistics, trend slope and a downsampled series for charts.",
 		map[string]any{
 			"path":         strProp("Relative path under data/input"),
+			"sheet":        strProp("XLSX sheet name (default first sheet)"),
 			"time_column":  strProp("Timestamp column (auto-detected when omitted)"),
 			"value_column": strProp("Numeric column (auto-detected when omitted)"),
 			"max_points":   numProp("Maximum points in the returned series (default 120)"),
@@ -160,6 +161,7 @@ func registerTimeSeries(reg *mcp.Registry, d Deps) {
 		"Detect anomalies in a time series using rolling z-score or IQR. Returns anomalies with timestamps and scores.",
 		map[string]any{
 			"path":         strProp("Relative path under data/input"),
+			"sheet":        strProp("XLSX sheet name (default first sheet)"),
 			"time_column":  strProp("Timestamp column (auto-detected when omitted)"),
 			"value_column": strProp("Numeric column (auto-detected when omitted)"),
 			"method":       strProp("zscore (default) or iqr"),

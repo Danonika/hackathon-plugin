@@ -1,19 +1,36 @@
 package storage
 
 import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 
 	"hackathonkit.local/agentkit/internal/config"
+	"hackathonkit.local/agentkit/internal/metadata"
 )
+
+type MetaRecorder interface {
+	RecordArtifact(ctx context.Context, rec metadata.ArtifactRecord) error
+}
+
+type ObjectStore interface {
+	Put(ctx context.Context, name string, data []byte) error
+	Get(ctx context.Context, name string) ([]byte, error)
+}
 
 type Store struct {
 	root        string
 	inputDir    string
 	artifactDir string
 	indexDir    string
+
+	meta    MetaRecorder
+	objects ObjectStore
+	onError func(error)
 }
 
 func New(root string, s config.StorageSettings) *Store {
@@ -22,6 +39,18 @@ func New(root string, s config.StorageSettings) *Store {
 		inputDir:    filepath.FromSlash(s.InputDir),
 		artifactDir: filepath.FromSlash(s.ArtifactDir),
 		indexDir:    filepath.FromSlash(s.IndexDir),
+	}
+}
+
+func (s *Store) Attach(meta MetaRecorder, objects ObjectStore, onError func(error)) {
+	s.meta = meta
+	s.objects = objects
+	s.onError = onError
+}
+
+func (s *Store) report(err error) {
+	if err != nil && s.onError != nil {
+		s.onError(err)
 	}
 }
 
@@ -87,7 +116,20 @@ func (s *Store) WriteArtifact(rel string, data []byte) (string, error) {
 	if err := os.WriteFile(full, data, 0o644); err != nil {
 		return "", err
 	}
-	return filepath.ToSlash(clean), nil
+	id := filepath.ToSlash(clean)
+	if s.meta != nil {
+		sum := sha256.Sum256(data)
+		s.report(s.meta.RecordArtifact(context.Background(), metadata.ArtifactRecord{
+			ArtifactID: id,
+			Kind:       "artifact",
+			Bytes:      len(data),
+			SHA256:     hex.EncodeToString(sum[:]),
+		}))
+	}
+	if s.objects != nil {
+		s.report(s.objects.Put(context.Background(), id, data))
+	}
+	return id, nil
 }
 
 func (s *Store) ReadArtifact(rel string) ([]byte, error) {
@@ -95,7 +137,21 @@ func (s *Store) ReadArtifact(rel string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	return os.ReadFile(filepath.Join(s.root, s.artifactDir, clean))
+	full := filepath.Join(s.root, s.artifactDir, clean)
+	data, err := os.ReadFile(full)
+	if err == nil {
+		return data, nil
+	}
+	if s.objects != nil && os.IsNotExist(err) {
+		remote, oerr := s.objects.Get(context.Background(), filepath.ToSlash(clean))
+		if oerr == nil {
+			if mkErr := os.MkdirAll(filepath.Dir(full), 0o755); mkErr == nil {
+				_ = os.WriteFile(full, remote, 0o644)
+			}
+			return remote, nil
+		}
+	}
+	return nil, err
 }
 
 func (s *Store) WriteIndex(rel string, data []byte) (string, error) {

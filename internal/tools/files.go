@@ -38,8 +38,8 @@ func registerFiles(reg *mcp.Registry, d Deps) {
 			}
 			warnings := []string{}
 			switch ext {
-			case "csv", "tsv", "xlsx", "xls":
-				t, warns, terr := readAnyTable(full)
+			case "csv", "tsv":
+				t, warns, terr := readAnyTable(full, "")
 				warnings = append(warnings, warns...)
 				if terr != nil {
 					warnings = append(warnings, terr.Error())
@@ -54,6 +54,32 @@ func registerFiles(reg *mcp.Registry, d Deps) {
 					data["columns"] = len(t.Headers)
 					data["headers"] = t.Headers
 					data["has_timestamp"] = hasTS
+				}
+			case "xlsx", "xls":
+				sheets, warns, terr := readXLSXSheets(full)
+				warnings = append(warnings, warns...)
+				if terr != nil {
+					warnings = append(warnings, terr.Error())
+				} else {
+					names := make([]string, 0, len(sheets))
+					for _, s := range sheets {
+						names = append(names, s.Name)
+					}
+					data["sheets"] = names
+					if len(sheets) > 0 {
+						t := sheets[0].Table
+						hasTS := false
+						for _, h := range t.Headers {
+							if timestampHeader(h) {
+								hasTS = true
+							}
+						}
+						data["rows"] = len(t.Rows)
+						data["columns"] = len(t.Headers)
+						data["headers"] = t.Headers
+						data["has_timestamp"] = hasTS
+						data["first_sheet"] = sheets[0].Name
+					}
 				}
 			default:
 				if isTextExt(ext) {

@@ -34,5 +34,19 @@ if ($dockerOk) {
   Write-Host "[setup] local binaries built in bin/"
 }
 
+$codex = Get-Command codex -ErrorAction SilentlyContinue
+if ($codex) {
+  Write-Host "[setup] registering repo marketplace and installing the Hackathon Agent Kit plugin"
+  cmd /c "codex plugin marketplace add `"$root`" >nul 2>nul"
+  cmd /c "codex plugin add hackathonkit@hackathonkit-local >nul 2>nul"
+  if ($LASTEXITCODE -eq 0) {
+    Write-Host "[setup] plugin installed; start a NEW Codex session to load it"
+  } else {
+    Write-Warning "[setup] could not install the plugin automatically. Run manually: codex plugin marketplace add `"$root`"; codex plugin add hackathonkit@hackathonkit-local"
+  }
+} else {
+  Write-Warning "[setup] codex CLI not found; install it (npm install -g @openai/codex) and re-run setup"
+}
+
 Write-Host "[setup] done."
-Write-Host "Next: open Codex from the repository root, install the Hackathon Agent Kit plugin from the repo marketplace (or use the .codex/config.toml fallback), start a NEW Codex session."
+Write-Host "Next: open Codex from the repository root and start a NEW Codex session."

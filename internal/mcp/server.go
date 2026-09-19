@@ -20,6 +20,7 @@ type ServerOptions struct {
 	Logger         *log.Logger
 	Metrics        *observability.Metrics
 	CallTimeoutSec int
+	CallLogPath    string
 }
 
 type Server struct {
@@ -184,6 +185,15 @@ func (s *Server) handleToolCall(ctx context.Context, req *Request, resp *Respons
 		"status":      status,
 		"trace_id":    observability.TraceFrom(callCtx),
 	})
+	if s.opts.CallLogPath != "" {
+		_ = observability.AppendJSONL(s.opts.CallLogPath, map[string]any{
+			"ts":          time.Now().UTC().Format(time.RFC3339Nano),
+			"tool":        tool.Name,
+			"duration_ms": duration.Milliseconds(),
+			"status":      status,
+			"trace_id":    observability.TraceFrom(callCtx),
+		})
+	}
 
 	text, merr := json.MarshalIndent(result, "", "  ")
 	if merr != nil {

@@ -7,11 +7,14 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 
 	"hackathonkit.local/agentkit/internal/config"
 	"hackathonkit.local/agentkit/internal/mcp"
+	"hackathonkit.local/agentkit/internal/metadata"
 	"hackathonkit.local/agentkit/internal/observability"
+	"hackathonkit.local/agentkit/internal/objectstore"
 	"hackathonkit.local/agentkit/internal/openai"
 	"hackathonkit.local/agentkit/internal/routing/fly"
 	"hackathonkit.local/agentkit/internal/storage"
@@ -49,6 +52,32 @@ func main() {
 	store := storage.New(root, cfg.Storage)
 	oa := openai.New(cfg.OpenAI)
 	router := fly.NewRouter(cfg.Routing)
+	if oa.Available() {
+		router.WithEmbeddings(oa, filepath.Join(root, "data", "index", "fly-embeddings.json"), cfg.OpenAI.EmbeddingModel)
+	}
+
+	var meta metadata.Recorder = metadata.Disabled{}
+	if dsn := os.Getenv("POSTGRES_DSN"); dsn != "" {
+		if pg, err := metadata.OpenPostgres(context.Background(), dsn); err != nil {
+			observability.Log(logger, "warn", "metadata_disabled", map[string]any{"error": err.Error()})
+		} else {
+			meta = pg
+			observability.Log(logger, "info", "metadata_postgres_enabled", nil)
+		}
+	}
+	var objects storage.ObjectStore
+	if settings := objectstore.SettingsFromEnv(); settings.Endpoint != "" {
+		if cli, err := objectstore.Open(context.Background(), settings); err != nil {
+			observability.Log(logger, "warn", "objectstore_disabled", map[string]any{"error": err.Error()})
+		} else {
+			objects = cli
+			observability.Log(logger, "info", "objectstore_minio_enabled", map[string]any{"bucket": settings.Bucket})
+		}
+	}
+	store.Attach(meta, objects, func(err error) {
+		observability.Log(logger, "warn", "storage_backend_error", map[string]any{"error": err.Error()})
+	})
+	defer meta.Close()
 
 	reg := mcp.NewRegistry()
 	tools.RegisterAll(reg, tools.Deps{
@@ -57,6 +86,7 @@ func main() {
 		OpenAI:  oa,
 		Metrics: metrics,
 		Router:  router,
+		Meta:    meta,
 		Version: version,
 	})
 
@@ -66,6 +96,7 @@ func main() {
 		Logger:         logger,
 		Metrics:        metrics,
 		CallTimeoutSec: cfg.Tools.DefaultTimeoutSec,
+		CallLogPath:    filepath.Join(root, "logs", "mcp-calls.jsonl"),
 	})
 
 	if *listTools {

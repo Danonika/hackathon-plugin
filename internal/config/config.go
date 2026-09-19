@@ -42,8 +42,8 @@ type File struct {
 }
 
 type RoutingState struct {
-	Mode    string `yaml:"mode"`
-	Version int    `yaml:"version"`
+	Mode    string `yaml:"mode" json:"mode"`
+	Version int    `yaml:"version" json:"version"`
 }
 
 type routingDoc struct {

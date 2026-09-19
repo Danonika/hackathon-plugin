@@ -17,11 +17,11 @@ type table struct {
 	Rows    [][]string
 }
 
-func readAnyTable(path string) (*table, []string, error) {
+func readAnyTable(path string, sheet string) (*table, []string, error) {
 	ext := strings.ToLower(strings.TrimPrefix(filepath.Ext(path), "."))
 	switch ext {
 	case "xlsx", "xls":
-		return readXLSXTable(path)
+		return readXLSXTable(path, sheet)
 	case "tsv":
 		t, err := readCSVTable(path, "\t")
 		return t, nil, err
@@ -155,7 +155,7 @@ func (d Deps) loadTable(ctx context.Context, args map[string]any) (string, *tabl
 		env := mcp.Fail(trace(ctx), err.Error())
 		return "", nil, nil, &env
 	}
-	t, warnings, err := readAnyTable(full)
+	t, warnings, err := readAnyTable(full, argString(args, "sheet"))
 	if err != nil {
 		env := mcp.Fail(trace(ctx), err.Error())
 		return "", nil, nil, &env
@@ -169,6 +169,7 @@ func registerData(reg *mcp.Registry, d Deps) {
 		"Inspect a CSV/TSV/XLSX table: rows, columns, column kinds, missing values and summary statistics.",
 		map[string]any{
 			"path":    strProp("Relative path under data/input"),
+			"sheet":   strProp("XLSX sheet name (default first sheet)"),
 			"columns": arrProp("Optional subset of columns", map[string]any{"type": "string"}),
 		},
 		[]string{"path"},
@@ -199,6 +200,7 @@ func registerData(reg *mcp.Registry, d Deps) {
 		"Query a CSV/TSV/XLSX table: select columns, filter with a simple condition and limit rows.",
 		map[string]any{
 			"path":    strProp("Relative path under data/input"),
+			"sheet":   strProp("XLSX sheet name (default first sheet)"),
 			"columns": arrProp("Columns to return (default all)", map[string]any{"type": "string"}),
 			"where":   strProp(`Simple filter: "column op value", op in = == != > >= < <= contains`),
 			"limit":   numProp("Maximum rows to return (default 20, max 200)"),
@@ -268,6 +270,7 @@ func registerData(reg *mcp.Registry, d Deps) {
 		"Analyze numeric columns of a table: statistics and strongest pairwise correlations.",
 		map[string]any{
 			"path":    strProp("Relative path under data/input"),
+			"sheet":   strProp("XLSX sheet name (default first sheet)"),
 			"columns": arrProp("Optional subset of columns", map[string]any{"type": "string"}),
 		},
 		[]string{"path"},

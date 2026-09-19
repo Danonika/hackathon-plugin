@@ -23,4 +23,16 @@ else
   echo "[setup] local binaries built in bin/"
 fi
 
-echo "[setup] done. Open Codex from the repository root, install the Hackathon Agent Kit plugin, start a NEW session."
+if command -v codex >/dev/null 2>&1; then
+  echo "[setup] registering repo marketplace and installing the Hackathon Agent Kit plugin"
+  codex plugin marketplace add "$ROOT" >/dev/null 2>&1 || true
+  if codex plugin add hackathonkit@hackathonkit-local >/dev/null 2>&1; then
+    echo "[setup] plugin installed; start a NEW Codex session to load it"
+  else
+    echo "[setup] could not install the plugin automatically. Run manually: codex plugin marketplace add \"$ROOT\" && codex plugin add hackathonkit@hackathonkit-local" >&2
+  fi
+else
+  echo "[setup] codex CLI not found; install it (npm install -g @openai/codex) and re-run setup" >&2
+fi
+
+echo "[setup] done. Open Codex from the repository root and start a NEW Codex session."

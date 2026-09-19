@@ -7,6 +7,7 @@ import (
 
 	"hackathonkit.local/agentkit/internal/config"
 	"hackathonkit.local/agentkit/internal/mcp"
+	"hackathonkit.local/agentkit/internal/metadata"
 	"hackathonkit.local/agentkit/internal/observability"
 	"hackathonkit.local/agentkit/internal/openai"
 	"hackathonkit.local/agentkit/internal/routing/fly"
@@ -19,6 +20,7 @@ type Deps struct {
 	OpenAI  *openai.Client
 	Metrics *observability.Metrics
 	Router  *fly.Router
+	Meta    metadata.Recorder
 	Version string
 }
 

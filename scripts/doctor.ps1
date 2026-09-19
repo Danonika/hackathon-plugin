@@ -48,15 +48,27 @@ Check "skills mirror" ($srcSkills -gt 0 -and $srcSkills -eq $dstSkills) "plugin=
 
 if ($codex) {
   $json = (cmd /c "codex plugin list --json 2>nul") -join "`n"
-  if ($json -match '"name"\s*:\s*"hackathonkit"') {
-    if ($json -match '"enabled"\s*:\s*true') {
-      Write-Host "[info] plugin hackathonkit            installed and enabled"
-    } else {
-      Write-Host "[info] plugin hackathonkit            installed, enable it in Codex config"
-    }
-  } else {
-    Write-Host "[info] plugin hackathonkit            not installed: open Codex, install from repo marketplace, start a NEW session"
+  $pluginInstalled = $false
+  $pluginEnabled = $false
+  if ($json) {
+    try {
+      $parsed = $json | ConvertFrom-Json
+      foreach ($p in $parsed.installed) {
+        if ($p.name -eq "hackathonkit") {
+          $pluginInstalled = [bool]$p.installed
+          $pluginEnabled = [bool]$p.enabled
+        }
+      }
+    } catch { }
   }
+  Check "hackathonkit plugin" ($pluginInstalled -and $pluginEnabled) "install: scripts/setup.ps1 or codex plugin add hackathonkit@hackathonkit-local"
+}
+
+if ($engine) {
+  $pg = Test-NetConnection 127.0.0.1 -Port 5432 -InformationLevel Quiet -WarningAction SilentlyContinue
+  Check "postgres" $pg "localhost:5432 (optional metadata backend)"
+  $minio = Test-NetConnection 127.0.0.1 -Port 9000 -InformationLevel Quiet -WarningAction SilentlyContinue
+  Check "minio" $minio "localhost:9000 (optional artifact backend)"
 }
 
 & (Join-Path $root "scripts\smoke.ps1") -Quiet

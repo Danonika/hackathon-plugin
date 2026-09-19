@@ -1,8 +1,10 @@
 package fly
 
 import (
+	"context"
 	"sort"
 	"strings"
+	"sync"
 
 	"hackathonkit.local/agentkit/internal/config"
 )
@@ -17,12 +19,20 @@ type Result struct {
 	Recommendations []Recommendation   `json:"recommendations"`
 	MaxScore        float64            `json:"max_score"`
 	Threshold       float64            `json:"threshold"`
+	Encoder         string             `json:"encoder"`
 	CategoryScores  map[string]float64 `json:"category_scores"`
 }
 
 type Router struct {
 	threshold float64
 	topK      int
+
+	embedder  Embedder
+	cachePath string
+	modelTag  string
+
+	mu        sync.Mutex
+	centroids map[string][]float64
 }
 
 func NewRouter(settings config.RoutingSettings) *Router {
@@ -35,6 +45,13 @@ func NewRouter(settings config.RoutingSettings) *Router {
 		topK = 5
 	}
 	return &Router{threshold: threshold, topK: topK}
+}
+
+func (r *Router) WithEmbeddings(embedder Embedder, cachePath string, modelTag string) *Router {
+	r.embedder = embedder
+	r.cachePath = cachePath
+	r.modelTag = modelTag
+	return r
 }
 
 var categoryKeywords = map[string][]string{
@@ -83,7 +100,7 @@ var categoryCapabilities = map[string][]string{
 	"reports":        {"reports.create", "charts.create"},
 }
 
-func (r *Router) Recommend(task string, meta map[string]any, available []string) Result {
+func (r *Router) Recommend(ctx context.Context, task string, meta map[string]any, available []string) Result {
 	scores := map[string]float64{}
 	lower := strings.ToLower(task)
 	for category, keywords := range categoryKeywords {
@@ -99,6 +116,17 @@ func (r *Router) Recommend(task string, meta map[string]any, available []string)
 				s = 1.0
 			}
 			scores[category] = s
+		}
+	}
+	encoder := "keyword"
+	if embeddingScores, ok := r.embeddingCategoryScores(ctx, task); ok {
+		encoder = "keyword+embedding"
+		for category, emb := range embeddingScores {
+			combined := 0.45*scores[category] + 0.55*emb
+			if combined > 1.0 {
+				combined = 1.0
+			}
+			scores[category] = combined
 		}
 	}
 	applyMetadata(scores, meta)
@@ -150,6 +178,7 @@ func (r *Router) Recommend(task string, meta map[string]any, available []string)
 		Recommendations: recs,
 		MaxScore:        round2(maxScore),
 		Threshold:       r.threshold,
+		Encoder:         encoder,
 		CategoryScores:  roundScores(scores),
 	}
 }

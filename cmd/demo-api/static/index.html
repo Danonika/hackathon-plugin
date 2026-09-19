@@ -1,0 +1,167 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Hackathon Agent Kit — Demo</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: "Segoe UI", system-ui, sans-serif; background: #0f172a; color: #e2e8f0; }
+  header { display: flex; align-items: center; gap: 16px; padding: 14px 22px; background: #111c33; border-bottom: 1px solid #1e293b; position: sticky; top: 0; z-index: 5; }
+  header h1 { font-size: 17px; margin: 0; font-weight: 600; }
+  header .status { margin-left: auto; font-size: 12px; color: #94a3b8; }
+  .wrap { display: grid; grid-template-columns: 340px 1fr 340px; gap: 16px; padding: 16px 22px 40px; }
+  .card { background: #16213a; border: 1px solid #24304d; border-radius: 10px; padding: 14px 16px; }
+  .card h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .08em; color: #8ea3c7; margin: 0 0 12px; }
+  .toggle { display: flex; gap: 8px; }
+  .toggle button { flex: 1; padding: 10px 12px; border-radius: 8px; border: 1px solid #33415e; background: #0f172a; color: #cbd5e1; cursor: pointer; font-size: 13px; }
+  .toggle button.active { background: #2563eb; border-color: #2563eb; color: #fff; font-weight: 600; }
+  .toggle button.fly.active { background: #7c3aed; border-color: #7c3aed; }
+  .bar-row { display: grid; grid-template-columns: 110px 1fr 44px; align-items: center; gap: 8px; margin: 6px 0; font-size: 12px; }
+  .bar { height: 10px; background: #0f172a; border-radius: 6px; overflow: hidden; }
+  .bar > span { display: block; height: 100%; background: linear-gradient(90deg, #2563eb, #7c3aed); }
+  .bar-row.top .bar > span { background: linear-gradient(90deg, #7c3aed, #c026d3); }
+  .rec { font-family: ui-monospace, Consolas, monospace; font-size: 12px; padding: 4px 0; color: #d8b4fe; }
+  .rec::before { content: "✓ "; color: #22c55e; }
+  .meta-note { font-size: 11px; color: #94a3b8; margin-top: 8px; }
+  .feed { list-style: none; margin: 0; padding: 0; max-height: 320px; overflow: auto; }
+  .feed li { display: flex; gap: 8px; align-items: baseline; padding: 5px 0; border-bottom: 1px dashed #1e293b; font-size: 12.5px; }
+  .feed .tool { font-family: ui-monospace, Consolas, monospace; color: #93c5fd; }
+  .feed .dur { color: #64748b; margin-left: auto; }
+  .feed .err { color: #f87171; }
+  .files { list-style: none; margin: 0; padding: 0; max-height: 220px; overflow: auto; font-size: 12px; }
+  .files li { padding: 4px 0; border-bottom: 1px dashed #1e293b; display: flex; justify-content: space-between; gap: 8px; }
+  .files .size { color: #64748b; }
+  .muted { color: #64748b; font-size: 12px; }
+  @media (max-width: 1100px) { .wrap { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>Hackathon Agent Kit</h1>
+  <span class="muted" id="mode-badge">mode: …</span>
+  <span class="status" id="status">connecting…</span>
+</header>
+<div class="wrap">
+  <div>
+    <div class="card">
+      <h2>Routing mode</h2>
+      <div class="toggle">
+        <button id="btn-normal" onclick="setMode('normal')">Normal</button>
+        <button id="btn-fly" class="fly" onclick="setMode('fly')">Fly Brain 🪰</button>
+      </div>
+      <div class="meta-note" id="routing-note"></div>
+    </div>
+    <div class="card" style="margin-top:16px">
+      <h2>Fly ranking</h2>
+      <div id="fly-bars"><span class="muted">нет событий — вызови routing.fly_recommend в режиме fly</span></div>
+      <div id="fly-recs"></div>
+      <div class="meta-note" id="fly-meta"></div>
+    </div>
+  </div>
+  <div>
+    <div class="card">
+      <h2>MCP tool calls</h2>
+      <ul class="feed" id="calls"><li class="muted">ожидание вызовов…</li></ul>
+    </div>
+    <div class="card" style="margin-top:16px">
+      <h2>How it works</h2>
+      <div class="muted">
+        Fly рекомендует возможности, Codex принимает решение. В normal-режиме routing.fly_recommend не вызывается;
+        навык task-router проверяет routing_mode через system.context.
+      </div>
+    </div>
+  </div>
+  <div>
+    <div class="card">
+      <h2>Inputs</h2>
+      <ul class="files" id="inputs"></ul>
+    </div>
+    <div class="card" style="margin-top:16px">
+      <h2>Artifacts</h2>
+      <ul class="files" id="artifacts"></ul>
+    </div>
+  </div>
+</div>
+<script>
+async function j(url, opts) {
+  const r = await fetch(url, opts);
+  if (!r.ok) throw new Error(url + " -> " + r.status);
+  return r.json();
+}
+
+async function setMode(mode) {
+  await j('/routing', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ mode }) });
+  refresh();
+}
+
+function fmtSize(n) {
+  if (n > 1024 * 1024) return (n / 1024 / 1024).toFixed(1) + ' MB';
+  if (n > 1024) return (n / 1024).toFixed(1) + ' KB';
+  return n + ' B';
+}
+
+function renderRouting(state) {
+  document.getElementById('btn-normal').classList.toggle('active', state.mode === 'normal');
+  document.getElementById('btn-fly').classList.toggle('active', state.mode === 'fly');
+  document.getElementById('mode-badge').textContent = 'mode: ' + state.mode;
+  document.getElementById('routing-note').textContent = 'config version ' + state.version + ' (live read)';
+}
+
+function renderFly(events) {
+  const bars = document.getElementById('fly-bars');
+  const recs = document.getElementById('fly-recs');
+  const meta = document.getElementById('fly-meta');
+  if (!events.length) return;
+  const ev = events[events.length - 1];
+  const scores = ev.category_scores || {};
+  const sorted = Object.entries(scores).sort((a, b) => b[1] - a[1]);
+  bars.innerHTML = sorted.map(([cat, val], i) =>
+    '<div class="bar-row' + (i === 0 ? ' top' : '') + '">' +
+    '<span>' + cat.toUpperCase() + '</span>' +
+    '<div class="bar"><span style="width:' + Math.round(val * 100) + '%"></span></div>' +
+    '<span>' + Math.round(val * 100) + '%</span></div>').join('');
+  recs.innerHTML = (ev.recommendations || []).map(r =>
+    '<div class="rec">' + r.capability + ' — ' + Math.round(r.score * 100) + '%</div>').join('');
+  meta.textContent = 'route: ' + ev.route + ' · encoder: ' + ev.encoder +
+    ' · max_score: ' + ev.max_score + ' · threshold: ' + ev.threshold + ' · ' + (ev.task || '');
+}
+
+function renderCalls(calls) {
+  const el = document.getElementById('calls');
+  if (!calls.length) { el.innerHTML = '<li class="muted">ожидание вызовов…</li>'; return; }
+  el.innerHTML = calls.slice().reverse().map(c =>
+    '<li><span class="tool">' + c.tool + '</span>' +
+    (c.status === 'error' ? '<span class="err">error</span>' : '') +
+    '<span class="dur">' + c.duration_ms + ' ms</span></li>').join('');
+}
+
+function renderFiles(id, files) {
+  const el = document.getElementById(id);
+  if (!files.length) { el.innerHTML = '<li class="muted">пусто</li>'; return; }
+  el.innerHTML = files.map(f =>
+    '<li><span>' + f.path + '</span><span class="size">' + fmtSize(f.size_bytes) + '</span></li>').join('');
+}
+
+async function refresh() {
+  try {
+    const [routing, calls, fly, inputs, artifacts] = await Promise.all([
+      j('/routing'), j('/calls?limit=40'), j('/fly-events?limit=10'),
+      j('/inputs'), j('/artifacts')
+    ]);
+    renderRouting(routing);
+    renderCalls(calls.calls);
+    renderFly(fly.events);
+    renderFiles('inputs', inputs.files);
+    renderFiles('artifacts', artifacts.files);
+    document.getElementById('status').textContent = 'updated ' + new Date().toLocaleTimeString();
+  } catch (e) {
+    document.getElementById('status').textContent = 'offline: ' + e.message;
+  }
+}
+refresh();
+setInterval(refresh, 2000);
+</script>
+</body>
+</html>

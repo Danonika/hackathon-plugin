@@ -7,6 +7,8 @@ import (
 	"encoding/json"
 	"io"
 	"log"
+	"os"
+	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -82,4 +84,71 @@ func Log(l *log.Logger, level, msg string, fields map[string]any) {
 		return
 	}
 	l.Println(string(b))
+}
+
+func AppendJSONL(path string, entry any) error {
+	if path == "" {
+		return nil
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	enc := json.NewEncoder(f)
+	return enc.Encode(entry)
+}
+
+func TailJSONL(path string, limit int) ([]json.RawMessage, error) {
+	if limit <= 0 || limit > 1000 {
+		limit = 50
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return []json.RawMessage{}, nil
+		}
+		return nil, err
+	}
+	lines := []json.RawMessage{}
+	for _, line := range splitLines(data) {
+		trimmed := trimSpace(line)
+		if len(trimmed) == 0 {
+			continue
+		}
+		lines = append(lines, json.RawMessage(trimmed))
+	}
+	if len(lines) > limit {
+		lines = lines[len(lines)-limit:]
+	}
+	return lines, nil
+}
+
+func splitLines(data []byte) [][]byte {
+	out := [][]byte{}
+	start := 0
+	for i, b := range data {
+		if b == '\n' {
+			out = append(out, data[start:i])
+			start = i + 1
+		}
+	}
+	if start < len(data) {
+		out = append(out, data[start:])
+	}
+	return out
+}
+
+func trimSpace(b []byte) []byte {
+	start, end := 0, len(b)
+	for start < end && (b[start] == ' ' || b[start] == '\t' || b[start] == '\r') {
+		start++
+	}
+	for end > start && (b[end-1] == ' ' || b[end-1] == '\t' || b[end-1] == '\r') {
+		end--
+	}
+	return b[start:end]
 }

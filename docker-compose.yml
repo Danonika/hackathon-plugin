@@ -9,6 +9,11 @@ services:
       HACKATHONKIT_REPO_ROOT: /workspace
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       OPENAI_BASE_URL: ${OPENAI_BASE_URL:-}
+      POSTGRES_DSN: postgres://hackathonkit:hackathonkit@postgres:5432/hackathonkit?sslmode=disable
+      MINIO_ENDPOINT: minio:9000
+      MINIO_ACCESS_KEY: hackathonkit
+      MINIO_SECRET_KEY: hackathonkit123
+      MINIO_BUCKET: hackathonkit
     volumes:
       - ./configs:/workspace/configs
       - ./data:/workspace/data
@@ -22,6 +27,7 @@ services:
     environment:
       HACKATHONKIT_REPO_ROOT: /workspace
       HACKATHONKIT_DEMO_PORT: "8787"
+      POSTGRES_DSN: postgres://hackathonkit:hackathonkit@postgres:5432/hackathonkit?sslmode=disable
     ports:
       - "8787:8787"
     volumes:
