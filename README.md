@@ -75,6 +75,8 @@ Artifacts always land in `data/artifacts` (offline-safe). With the environment c
 
 `docker compose` passes both to the MCP and demo-api services. Without them everything degrades to the filesystem with a warning in the logs.
 
+MinIO is pulled from `quay.io/minio/minio`: the `minio/minio` Docker Hub namespace may be unavailable (pull access denied) in some regions. The demo-api binds `HACKATHONKIT_DEMO_HOST` (default `127.0.0.1`, `0.0.0.0` inside compose).
+
 ## Development
 
 ```sh

@@ -39,6 +39,10 @@ func main() {
 	if port == "" {
 		port = "8787"
 	}
+	host := os.Getenv("HACKATHONKIT_DEMO_HOST")
+	if host == "" {
+		host = "127.0.0.1"
+	}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
@@ -108,7 +112,7 @@ func main() {
 		fmt.Fprintf(w, "hackathonkit_routing_mode{mode=%q} 1\n", mgr.Routing().Mode)
 	})
 
-	addr := "127.0.0.1:" + port
+	addr := host + ":" + port
 	server := &http.Server{
 		Addr:              addr,
 		Handler:           withCORS(mux),

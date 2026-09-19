@@ -1,0 +1,1 @@
+﻿Hackathon Agent Kit integration check: artifact mirroring to MinIO and metadata to Postgres.

@@ -27,6 +27,7 @@ services:
     environment:
       HACKATHONKIT_REPO_ROOT: /workspace
       HACKATHONKIT_DEMO_PORT: "8787"
+      HACKATHONKIT_DEMO_HOST: 0.0.0.0
       POSTGRES_DSN: postgres://hackathonkit:hackathonkit@postgres:5432/hackathonkit?sslmode=disable
     ports:
       - "8787:8787"
@@ -52,7 +53,7 @@ services:
       - "6379:6379"
 
   minio:
-    image: minio/minio:latest
+    image: quay.io/minio/minio:latest
     command: server /data --console-address ":9001"
     environment:
       MINIO_ROOT_USER: hackathonkit
