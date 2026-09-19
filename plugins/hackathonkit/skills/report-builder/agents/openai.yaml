@@ -1,0 +1,4 @@
+interface:
+  display_name: "Report Builder"
+  short_description: "Assemble evidence-backed reports and summaries."
+  default_prompt: "Use $report-builder to turn these results into a report."

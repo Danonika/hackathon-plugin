@@ -1,37 +1,50 @@
 ---
 name: judge
-description: Evaluate a frozen project snapshot with the Demo Day rubric using 10 procedurally isolated judge runs. Explicit-only: never invoke implicitly.
+description: "Simulate Demo Day scoring of a frozen project snapshot with 10 procedurally isolated judge runs using the official rubric. Explicit-only: never invoke implicitly."
 ---
 
 # Judge
 
-Evaluate the current frozen snapshot. Judges never edit code.
+Evaluate a **frozen snapshot**, never a live working tree. Judges do not edit code.
 
-## Input
+## When To Use
 
-A curated immutable bundle: `TASK.md`, `README.md`, `architecture.md`, `selected-source/`, `test-results.json`, `smoke-results.json`, `docker-build.json`, `demo-artifacts/`, `known-limitations.md`, `git-sha.txt`, `rubric-version.txt`. Do not read `evals/judges/*`, previous scores, target scores or other judge reports.
+- A candidate snapshot is frozen and improvement decisions need a score.
+- Before final submission, to collect likely jury questions and common deductions.
 
-## Rubric (weights are fixed)
+## Input Bundle
 
-| Criterion | Max |
-|---|---:|
-| Value of the solution | 25 |
-| Result and quality of the solution | 20 |
-| Innovation | 15 |
-| Development and scaling potential | 20 |
-| Presentation, demo and Q&A | 20 |
-| **Total** | **100** |
+The controller prepares `judge-bundle/` and each judge receives a read-only copy:
+
+`TASK.md`, `README.md`, `architecture.md`, `selected-source/`, `test-results.json`, `smoke-results.json`, `docker-build.json`, `demo-artifacts/`, `known-limitations.md`, `git-sha.txt`, `rubric-version.txt`.
+
+Judges must not read `evals/judges/*`, previous scores, the target score, other judge reports or the mutable repository.
 
 ## Procedure
 
-1. Run 10 isolated judge sessions in parallel, each in its own temp directory with a read-only copy of the bundle.
-2. Each judge uses the same rubric but a different perspective: product value, result quality, innovation skeptic, scaling, demo/presentation, partner/business, technical specialist, critical buyer, adversarial Q&A, strict generalist.
-3. Perspective changes questions asked, never the rubric weights.
-4. Each judge scores every criterion, cites evidence for deductions, separates observed facts from assumptions, generates likely jury questions and declares conflict of interest.
-5. Aggregate deterministically: schema validation, exclude invalid/conflicted reports, require at least 3 valid reports, compute mean, criterion means and sample variance.
+1. Launch 10 isolated judge sessions in parallel, each in its own temp directory with the read-only bundle.
+2. Same rubric and weights for everyone; a different perspective only changes the questions asked:
+   01 product value, 02 result quality, 03 innovation skeptic, 04 scaling, 05 demo and presentation,
+   06 partner/business, 07 technical specialist, 08 critical buyer, 09 adversarial Q&A, 10 strict generalist.
+3. Each judge: scores all five criteria, cites evidence for every deduction, separates observed facts from assumptions, produces likely jury questions, declares `conflict_of_interest`.
+4. Aggregate deterministically: schema validation -> drop invalid and conflicted reports -> require >= 3 valid -> mean, criterion means, sample variance, common deductions, question frequency.
+
+## Evidence Rules
+
+- No evidence, no points. Evidence is a file path, test result, artifact id or clean-room report.
+- Presentation and demo criteria require the demo evidence bundle; without it the judge must mark the score explicitly incomplete rather than guess.
+- High variance means disagreement; report it, do not adjust scores.
+
+## Output Contract
+
+Per judge: `judge_id`, `snapshot_sha`, `conflict_of_interest`, `scores{value, result_quality, innovation, scalability, presentation_demo_qa}`, `total`, `evidence[]`, `deductions[]`, `questions[]`, `top_improvements[]`.
+
+Aggregate: `valid_judges`, `mean_total`, `criterion_means`, `score_variance`, `high_disagreement[]`, `common_deductions[]`, `likely_questions[]`.
+
+Full rubric, aggregation rules and calibration procedure: `references/rubric.md`.
 
 ## Rules
 
-- No evidence -> no points. Presentation scores require the demo evidence bundle.
-- High variance is a disagreement signal, not a score change.
-- Never compare a candidate with judge scores that do not exist yet.
+- A candidate is never compared to judge scores that do not exist yet.
+- Judges never see the target score; the controller compares and decides.
+- Reproducibility: record model id, runtime version, bundle hash and rubric version with every run.

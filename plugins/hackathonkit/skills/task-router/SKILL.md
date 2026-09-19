@@ -1,31 +1,52 @@
 ---
 name: task-router
-description: Use at the start of any Hackathon Agent Kit task to read the live routing mode and choose the Normal or Fly workflow. Triggers when a user asks to analyze files, documents, data, telemetry, audio, images or to build reports with Hackathon Agent Kit capabilities.
+description: "Entry point for every Hackathon Agent Kit task: reads the live routing mode (normal or fly), selects capabilities and verifies results. Use when a request needs files, documents, tables, telemetry, audio, images or reports. Do not use for pure conversation without tool work."
 ---
 
-# Task router
+# Task Router
 
-Always call `system.context` first and read `routing_mode`.
+## When To Use
 
-## Normal mode
+- Any task that needs Hackathon Agent Kit MCP capabilities: files, documents, knowledge search, tables, time series, classification, charts, reports, audio, images.
+- Before calling any domain tool.
+- Whenever a previous plan failed and the approach must be re-planned.
 
-`routing_mode == "normal"`: choose domain capabilities yourself, execute, verify, answer with sources.
+## Step 0 - Always
 
-## Fly mode
+1. Call `system.context`. It returns `routing_mode`, `routing_config_version` and the live `capabilities` list.
+2. `routing_mode == "fly"` -> follow the Fly Protocol below.
+3. `routing_mode == "normal"` -> select capabilities yourself from `references/tools.md`.
 
-`routing_mode == "fly"`:
+## Fly Protocol
 
-1. Call `routing.fly_recommend` with `task` and `input_metadata` (`types`, `rows`, `columns`, `has_timestamp`).
-2. Treat the response as a recommendation only.
-3. Validate it against the task and the real input metadata.
-4. Accept, reject, add, remove or reorder capabilities yourself.
-5. Execute the final plan with domain tools.
+1. Call `routing.fly_recommend` with:
+   - `task`: one sentence in the user's language.
+   - `input_metadata`: `types`, `rows`, `columns`, `has_timestamp` (use `files.describe` first when unsure).
+2. Read `recommendations`, `route`, and `metrics.max_score` / `metrics.threshold`.
+3. Validate every recommendation against the real task and input: available tool, sensible order, correct arguments expected.
+4. Accept, reject, add, remove or reorder freely. Fly is a hint; Codex decides.
+5. On error, timeout, empty list or `max_score < threshold`: continue in normal mode silently. Never tell the user the task is blocked by Fly.
 
-If `routing.fly_recommend` fails, times out, returns an empty list or `max_score` below the threshold, continue in normal mode without telling the user the task is blocked.
+## Planning Rules
 
-## Rules
+- Discover before analysing: `files.describe` or `data.inspect` before deeper tools.
+- Deterministic tools compute; you interpret. Never invent numbers, timestamps or quotes.
+- Keep `trace_id` and `sources` from every envelope; cite them in the final answer.
+- One retry on transient errors is fine; on persistent failure, report exactly which tool failed and why.
+- Prefer few decisive calls over exploratory spam.
 
-- Fly never decides. Codex decides.
-- Run `files.describe` or `data.inspect` before deeper analysis.
-- Keep sources from tool responses and include them in the final answer.
-- Deterministic tools compute and validate; explain their output, do not invent numbers.
+## Output Contract
+
+Final answer contains: result, evidence (sources), parameters used (method, window, threshold, sheet), warnings, and limitations. If the task produced artifacts, list their `artifact_id`s.
+
+## Quality Checks
+
+- Did you follow the mode from `system.context`, not from memory?
+- Are all numbers traceable to a tool response?
+- Are warnings from tool envelopes included in the answer?
+
+## References
+
+- `references/tools.md` - complete tool catalogue with arguments
+- `references/fly-protocol.md` - detailed Fly mode protocol and fallbacks
+- `references/evidence-model.md` - how to cite each source type

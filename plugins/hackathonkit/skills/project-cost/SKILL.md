@@ -1,26 +1,43 @@
 ---
 name: project-cost
-description: Internal technical readiness score 0-100 for the current snapshot. Evidence-only. Explicit-only: never invoke implicitly.
+description: "Internal technical readiness score 0-100 for the current snapshot, evidence-only. Explicit-only: never invoke implicitly."
 ---
 
-# Project cost
+# Project Cost
 
-Technical readiness score, not a price. Evidence-only.
+Technical readiness score, not a price. Every point needs an artifact behind it.
 
-| Criterion | Max |
-|---|---:|
-| Case fit and functionality | 20 |
-| Technical implementation | 25 |
-| README and technical documentation | 20 |
-| Reproducibility and deployment readiness | 20 |
-| Reliability and security basics | 15 |
-| **Total** | **100** |
+## When To Use
+
+- After each improvement pass, to decide whether the candidate is accepted or rolled back.
+- Before a judge round, as a cheap technical gate.
 
 ## Procedure
 
-1. Score only what is confirmed by code, tests, smoke artifacts, README sections, build results or demo artifacts.
-2. Reproducibility cannot receive full score unless the clean-room gate passed.
-3. Output JSON: `technical_score`, per-criterion `scores`, `blocking_issues`, `deductions`, `must_fix_next`.
-4. Compare with the previous snapshot; a regression means rollback, not negotiation.
+1. Collect evidence: tests, smoke results, README sections, build output, demo artifacts, clean-room report.
+2. Score the five criteria; a criterion with no evidence scores zero for the unproven part.
+3. List `blocking_issues` (things that prevent a demo) separately from `deductions` (lost points).
+4. Compare with the previous accepted snapshot:
+   - Mandatory scenario broken -> rollback, stop.
+   - Regression -> rollback.
+   - Improvement below the configured noise floor -> do not iterate further on this axis.
 
-Never award points for claimed functionality without an artifact.
+## Output Contract
+
+```json
+{
+  "technical_score": 91,
+  "scores": {"case_and_functionality": 19, "technical_implementation": 23, "readme_and_docs": 17, "reproducibility": 18, "reliability_and_security": 14},
+  "blocking_issues": [],
+  "deductions": ["README has no expected-output example"],
+  "must_fix_next": ["Add a clean-room README scenario", "Add a negative input test"]
+}
+```
+
+Rubric details and evidence rules: `references/rubric.md`.
+
+## Rules
+
+- Never award points for claimed functionality without an artifact.
+- Reproducibility cannot receive full score unless the clean-room gate passed.
+- This score is never shown to judges as input; it gates the builder loop only.

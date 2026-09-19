@@ -1,0 +1,4 @@
+interface:
+  display_name: "Time Series Analysis"
+  short_description: "Trends and anomaly detection for telemetry and metrics."
+  default_prompt: "Use $time-series-analysis to analyse this telemetry."

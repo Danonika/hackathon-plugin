@@ -1,0 +1,4 @@
+interface:
+  display_name: "Hackathon Agent Kit Task Router"
+  short_description: "Reads routing mode, selects capabilities, verifies results."
+  default_prompt: "Use $task-router to plan and run this Hackathon Agent Kit task."
