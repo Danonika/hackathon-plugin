@@ -34,6 +34,7 @@ func main() {
 	if root == "" {
 		root = config.DiscoverRoot()
 	}
+	config.LoadDotEnv(root)
 	mgr := config.NewManager(root)
 
 	if *setMode != "" {

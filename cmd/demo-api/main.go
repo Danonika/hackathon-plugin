@@ -22,6 +22,7 @@ var staticFS embed.FS
 
 func main() {
 	root := config.DiscoverRoot()
+	config.LoadDotEnv(root)
 	mgr := config.NewManager(root)
 	logger := observability.NewLogger(os.Stderr)
 

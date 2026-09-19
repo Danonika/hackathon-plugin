@@ -102,9 +102,9 @@ Explicit-only skills (never triggered implicitly): `$judge`, `$project-cost`, `$
 ```
 plugins/hackathonkit/          Codex plugin (single source of truth for skills)
   .codex-plugin/plugin.json
-  .mcp.json
+  .mcp.json               portable MCP command: docker compose run (Windows/Linux/macOS)
   skills/
-  scripts/                 launcher (prefers bin/, falls back to docker compose)
+  scripts/                optional dev launchers (prefer bin/, fall back to docker compose)
 .agents/plugins/           repo marketplace
 .agents/skills/            generated fallback mirror (scripts/sync-skills)
 .codex/config.toml         fallback MCP registration
