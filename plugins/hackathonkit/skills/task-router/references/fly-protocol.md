@@ -62,6 +62,19 @@ Fly is an experimental capability router. It recommends; Codex decides. Fly is n
 
 In every fallback case the user must still get a complete result. Never surface internal routing failures as task failures.
 
+## Feedback Loop
+
+After a fly-mode task completes, call `routing.fly_feedback` exactly once:
+
+- `task`: the same task text used for routing.
+- `chosen`: capabilities that were actually executed.
+- `recommended`: capabilities the router suggested (optional, improves agreement metrics).
+- `source`: `accepted` (plan matched), `codex-correction` (Codex overrode), `normal-teacher` (normal-mode plan used as ground truth), `fallback` (fly failed or below threshold).
+
+The router embeds the task and stores the example in `data/index/fly-memory.json` (kNN memory, capped at 500, deduplicated by task). Subsequent recommendations blend keyword, embedding and kNN signals; the `encoder` field shows which fired. Batch rebuild from `logs/fly-feedback.jsonl`: `go run ./cmd/fly-train`.
+
+Lesson rule: only report confirmed outcomes. Never feed Fly its own unverified recommendations as ground truth.
+
 ## Logging
 
 Every fly call appends an event to `logs/fly-events.jsonl` (route, encoder, scores, recommendations, task) and, when Postgres is configured, a row in `fly_predictions`. The demo dashboard reads the JSONL file for the ranking panel.

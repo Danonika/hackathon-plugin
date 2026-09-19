@@ -18,7 +18,7 @@ import (
 	"hackathonkit.local/agentkit/internal/observability"
 )
 
-//go:embed static/index.html
+//go:embed static/*.html
 var staticFS embed.FS
 
 func main() {
@@ -54,6 +54,49 @@ func main() {
 			return
 		}
 		page, err := staticFS.ReadFile("static/index.html")
+		if err != nil {
+			http.Error(w, "static page missing", http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, _ = w.Write(page)
+	})
+	mux.HandleFunc("/fly-model-list", func(w http.ResponseWriter, r *http.Request) {
+		base := filepath.Join(root, "data", "fly-viz", "neuromechfly")
+		files := []string{}
+		_ = filepath.WalkDir(base, func(path string, d os.DirEntry, err error) error {
+			if err != nil || d.IsDir() {
+				return nil
+			}
+			name := strings.ToLower(d.Name())
+			if strings.HasSuffix(name, ".obj") || strings.HasSuffix(name, ".stl") {
+				if rel, relErr := filepath.Rel(base, path); relErr == nil {
+					files = append(files, filepath.ToSlash(rel))
+				}
+			}
+			return nil
+		})
+		sort.Strings(files)
+		writeJSON(w, http.StatusOK, map[string]any{"files": files})
+	})
+	mux.HandleFunc("/fly-model/", func(w http.ResponseWriter, r *http.Request) {
+		base := filepath.Join(root, "data", "fly-viz", "neuromechfly")
+		if _, err := os.Stat(base); err != nil {
+			http.Error(w, "NeuromechFly meshes are not vendored; run: git clone --depth 1 https://github.com/NeLy-EPFL/NeuromechFly data/fly-viz/neuromechfly", http.StatusNotFound)
+			return
+		}
+		http.StripPrefix("/fly-model/", http.FileServer(http.Dir(base))).ServeHTTP(w, r)
+	})
+	mux.HandleFunc("/fly-brain/", func(w http.ResponseWriter, r *http.Request) {
+		base := filepath.Join(root, "data", "fly-viz", "flybrain")
+		if _, err := os.Stat(base); err != nil {
+			http.Error(w, "flybrain assets are not vendored; run: git clone --depth 1 https://github.com/snedea/flybrain.git data/fly-viz/flybrain", http.StatusNotFound)
+			return
+		}
+		http.StripPrefix("/fly-brain/", http.FileServer(http.Dir(base))).ServeHTTP(w, r)
+	})
+	mux.HandleFunc("/fly-viz", func(w http.ResponseWriter, r *http.Request) {
+		page, err := staticFS.ReadFile("static/fly-viz.html")
 		if err != nil {
 			http.Error(w, "static page missing", http.StatusInternalServerError)
 			return
@@ -115,6 +158,16 @@ func main() {
 	mux.HandleFunc("/fly-events", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{
 			"events": tail(root, "logs/fly-events.jsonl", queryLimit(r, 10)),
+		})
+	})
+	mux.HandleFunc("/fly-feedback", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"events": tail(root, "logs/fly-feedback.jsonl", queryLimit(r, 20)),
+		})
+	})
+	mux.HandleFunc("/fly-neuron-events", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"events": tail(root, "logs/fly-neuron-events.jsonl", queryLimit(r, 30)),
 		})
 	})
 	mux.HandleFunc("/metrics", func(w http.ResponseWriter, r *http.Request) {

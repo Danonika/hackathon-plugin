@@ -1,4 +1,4 @@
-package fly
+﻿package fly
 
 import (
 	"context"
@@ -28,12 +28,16 @@ type Router struct {
 	threshold float64
 	topK      int
 
-	embedder  Embedder
-	cachePath string
-	modelTag  string
+	embedder   Embedder
+	cachePath  string
+	modelTag   string
+	memoryPath string
+	brainPath  string
 
 	mu        sync.Mutex
 	centroids map[string][]float64
+	brain     *MBrain
+	llm       LLMClassifier
 }
 
 func NewRouter(settings config.RoutingSettings) *Router {
@@ -57,34 +61,34 @@ func (r *Router) WithEmbeddings(embedder Embedder, cachePath string, modelTag st
 
 var categoryKeywords = map[string][]string{
 	"documents": {
-		"pdf", "docx", "документ", "договор", "акт", "скан", "scan", "извлеч", "текст", "смет", "инструкц",
+		"pdf", "docx", "РґРѕРєСѓРјРµРЅС‚", "РґРѕРіРѕРІРѕСЂ", "Р°РєС‚", "СЃРєР°РЅ", "scan", "РёР·РІР»РµС‡", "С‚РµРєСЃС‚", "СЃРјРµС‚", "РёРЅСЃС‚СЂСѓРєС†",
 	},
 	"knowledge": {
-		"найди", "найти", "поиск", "search", "регламент", "правил", "policy", "справк", "источник", "ответь", "вопрос",
+		"РЅР°Р№РґРё", "РЅР°Р№С‚Рё", "РїРѕРёСЃРє", "search", "СЂРµРіР»Р°РјРµРЅС‚", "РїСЂР°РІРёР»", "policy", "СЃРїСЂР°РІРє", "РёСЃС‚РѕС‡РЅРёРє", "РѕС‚РІРµС‚СЊ", "РІРѕРїСЂРѕСЃ",
 	},
 	"speech": {
-		"аудио", "audio", "запис", "интервью", "interview", "транскриб", "субтитр", "subtitle", "голос", "voice", "речь",
+		"Р°СѓРґРёРѕ", "audio", "Р·Р°РїРёСЃ", "РёРЅС‚РµСЂРІСЊСЋ", "interview", "С‚СЂР°РЅСЃРєСЂРёР±", "СЃСѓР±С‚РёС‚СЂ", "subtitle", "РіРѕР»РѕСЃ", "voice", "СЂРµС‡СЊ",
 	},
 	"vision": {
-		"изображен", "фото", "картинк", "скриншот", "screenshot", "image", "vision", "схем", "чертеж",
+		"РёР·РѕР±СЂР°Р¶РµРЅ", "С„РѕС‚Рѕ", "РєР°СЂС‚РёРЅРє", "СЃРєСЂРёРЅС€РѕС‚", "screenshot", "image", "vision", "СЃС…РµРј", "С‡РµСЂС‚РµР¶",
 	},
 	"media": {
-		"видео", "video", "монтаж", "нарезк", "ffmpeg", "клип", "фрагмент видео",
+		"РІРёРґРµРѕ", "video", "РјРѕРЅС‚Р°Р¶", "РЅР°СЂРµР·Рє", "ffmpeg", "РєР»РёРї", "С„СЂР°РіРјРµРЅС‚ РІРёРґРµРѕ",
 	},
 	"data": {
-		"csv", "xlsx", "excel", "таблиц", "датасет", "dataset", "строк", "колон", "статистик", "данн", "показател", "метрик",
+		"csv", "xlsx", "excel", "С‚Р°Р±Р»РёС†", "РґР°С‚Р°СЃРµС‚", "dataset", "СЃС‚СЂРѕРє", "РєРѕР»РѕРЅ", "СЃС‚Р°С‚РёСЃС‚РёРє", "РґР°РЅРЅ", "РїРѕРєР°Р·Р°С‚РµР»", "РјРµС‚СЂРёРє",
 	},
 	"timeseries": {
-		"телеметри", "telemetry", "датчик", "sensor", "аномал", "anomal", "врем", "time series", "тренд", "динамик", "период",
+		"С‚РµР»РµРјРµС‚СЂРё", "telemetry", "РґР°С‚С‡РёРє", "sensor", "Р°РЅРѕРјР°Р»", "anomal", "РІСЂРµРј", "time series", "С‚СЂРµРЅРґ", "РґРёРЅР°РјРёРє", "РїРµСЂРёРѕРґ",
 	},
 	"classification": {
-		"классифиц", "classify", "категор", "spam", "спам", "фрод", "fraud", "логи", "logs", "типизац", "риск",
+		"РєР»Р°СЃСЃРёС„РёС†", "classify", "РєР°С‚РµРіРѕСЂ", "spam", "СЃРїР°Рј", "С„СЂРѕРґ", "fraud", "Р»РѕРіРё", "logs", "С‚РёРїРёР·Р°С†", "СЂРёСЃРє",
 	},
 	"geo": {
-		"карт", "гео", "geo", "координат", "местност", "поля", "участк",
+		"РєР°СЂС‚", "РіРµРѕ", "geo", "РєРѕРѕСЂРґРёРЅР°С‚", "РјРµСЃС‚РЅРѕСЃС‚", "РїРѕР»СЏ", "СѓС‡Р°СЃС‚Рє",
 	},
 	"reports": {
-		"отчёт", "отчет", "report", "презентац", "резюме", "итог", "вывод",
+		"РѕС‚С‡С‘С‚", "РѕС‚С‡РµС‚", "report", "РїСЂРµР·РµРЅС‚Р°С†", "СЂРµР·СЋРјРµ", "РёС‚РѕРі", "РІС‹РІРѕРґ",
 	},
 }
 
@@ -119,17 +123,61 @@ func (r *Router) Recommend(ctx context.Context, task string, meta map[string]any
 			scores[category] = s
 		}
 	}
-	encoder := "keyword"
+	encoderParts := []string{"keyword"}
 	if embeddingScores, ok := r.embeddingCategoryScores(ctx, task); ok {
-		encoder = "keyword+embedding"
+		encoderParts = append(encoderParts, "embedding")
 		for category, emb := range embeddingScores {
-			combined := 0.45*scores[category] + 0.55*emb
+			combined := 0.5*scores[category] + 0.5*emb
 			if combined > 1.0 {
 				combined = 1.0
 			}
 			scores[category] = combined
 		}
 	}
+	if r.memoryPath != "" {
+		if taskVector, ok := r.embedTask(ctx, task); ok {
+			if knn, ok2 := r.memoryCategoryScores(taskVector, 5); ok2 {
+				encoderParts = append(encoderParts, "knn")
+				for category := range scores {
+					scores[category] *= 0.6
+				}
+				for category, vote := range knn {
+					scores[category] = scores[category] + 0.4*vote
+					if scores[category] > 1.0 {
+						scores[category] = 1.0
+					}
+				}
+			}
+		}
+	}
+	if mbScores, ok := r.mbCategoryScores(ctx, task); ok {
+		encoderParts = append(encoderParts, "mb")
+		if stats := r.Dopamine(); stats.Total > 0 {
+			encoderParts = append(encoderParts, "dopamine")
+		}
+		for category := range scores {
+			scores[category] *= 0.4
+		}
+		for category, mb := range mbScores {
+			scores[category] = scores[category] + 0.6*mb
+			if scores[category] > 1.0 {
+				scores[category] = 1.0
+			}
+		}
+	}
+	if llmScores, ok := r.llmCategoryScores(ctx, task); ok {
+		encoderParts = append(encoderParts, "llm")
+		for category := range scores {
+			scores[category] *= 0.4
+		}
+		for category, v := range llmScores {
+			scores[category] = scores[category] + 0.6*v
+			if scores[category] > 1.0 {
+				scores[category] = 1.0
+			}
+		}
+	}
+	encoder := strings.Join(encoderParts, "+")
 	applyMetadata(scores, meta)
 	boost(scores, "reports", 0.15)
 

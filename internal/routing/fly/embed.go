@@ -81,16 +81,26 @@ func exemplarHash() string {
 	return hex.EncodeToString(h.Sum(nil))
 }
 
-func (r *Router) embeddingCategoryScores(ctx context.Context, task string) (map[string]float64, bool) {
-	centroids, ok := r.ensureCentroids(ctx)
-	if !ok {
+func (r *Router) embedTask(ctx context.Context, task string) ([]float64, bool) {
+	if r.embedder == nil {
 		return nil, false
 	}
 	vectors, err := r.embedder.Embed(ctx, []string{task})
 	if err != nil || len(vectors) != 1 {
 		return nil, false
 	}
-	taskVec := normalizeVector(vectors[0])
+	return normalizeVector(vectors[0]), true
+}
+
+func (r *Router) embeddingCategoryScores(ctx context.Context, task string) (map[string]float64, bool) {
+	centroids, ok := r.ensureCentroids(ctx)
+	if !ok {
+		return nil, false
+	}
+	taskVec, ok := r.embedTask(ctx, task)
+	if !ok {
+		return nil, false
+	}
 	sims := map[string]float64{}
 	for cat, centroid := range centroids {
 		sims[cat] = cosine(taskVec, centroid)

@@ -53,9 +53,11 @@ func main() {
 	store := storage.New(root, cfg.Storage)
 	oa := openai.New(cfg.OpenAI)
 	router := fly.NewRouter(cfg.Routing)
-	if oa.Available() {
-		router.WithEmbeddings(oa, filepath.Join(root, "data", "index", "fly-embeddings.json"), cfg.OpenAI.EmbeddingModel)
-	}
+	router.WithMemory(filepath.Join(root, "data", "index", "fly-memory.json"))
+	router.WithBrain(filepath.Join(root, "data", "index", "fly-brain.json"))
+	router.WithLLM(oa)
+	embedder := fly.NewChainEmbedder(oa, fly.NewHashEncoder(512))
+	router.WithEmbeddings(embedder, filepath.Join(root, "data", "index", "fly-embeddings.json"), cfg.OpenAI.EmbeddingModel+"+hash512")
 
 	var meta metadata.Recorder = metadata.Disabled{}
 	if dsn := os.Getenv("POSTGRES_DSN"); dsn != "" {

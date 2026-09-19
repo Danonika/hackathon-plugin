@@ -9,6 +9,7 @@ import (
 	"hackathonkit.local/agentkit/internal/mcp"
 	"hackathonkit.local/agentkit/internal/metadata"
 	"hackathonkit.local/agentkit/internal/observability"
+	"hackathonkit.local/agentkit/internal/routing/fly"
 )
 
 func registerSystem(reg *mcp.Registry, d Deps) {
@@ -117,6 +118,21 @@ func registerSystem(reg *mcp.Registry, d Deps) {
 					"task":            snippet(task, 200),
 				})
 			}
+			if d.Store != nil {
+				snapshot := d.Router.ActivationSnapshot(ctx, task, 64)
+				_ = observability.AppendJSONL(filepath.Join(d.Store.Root(), "logs", "fly-neuron-events.jsonl"), map[string]any{
+					"ts":         time.Now().UTC().Format(time.RFC3339Nano),
+					"type":       "recommend",
+					"trace_id":   trace(ctx),
+					"task":       snippet(task, 200),
+					"route":      res.Route,
+					"encoder":    res.Encoder,
+					"max_score":  res.MaxScore,
+					"active_kc":  snapshot["active_kc"],
+					"mbon":       snapshot["mbon"],
+					"kc_total":   snapshot["kc_total"],
+				})
+			}
 			if d.Meta != nil && d.Meta.Enabled() {
 				_ = d.Meta.RecordFlyPrediction(ctx, metadata.FlyPrediction{
 					TraceID:         trace(ctx),
@@ -129,6 +145,73 @@ func registerSystem(reg *mcp.Registry, d Deps) {
 				})
 			}
 			return env, nil
+		},
+	))
+	reg.Register(tool(
+		"routing.fly_feedback",
+		"Report the final decision for a fly-mode task so the router can learn: what it recommended, what Codex actually executed and the outcome. Call once per completed task.",
+		map[string]any{
+			"task":           strProp("Task description used for routing"),
+			"chosen":         arrProp("Capabilities that Codex actually executed", map[string]any{"type": "string"}),
+			"recommended":    arrProp("Capabilities the router recommended", map[string]any{"type": "string"}),
+			"source":         strProp("accepted | codex-correction | normal-teacher | fallback"),
+			"input_metadata": objProp("Input metadata used for routing"),
+		},
+		[]string{"task", "chosen"},
+		func(ctx context.Context, args map[string]any) (any, error) {
+			task := argString(args, "task")
+			chosen := argStringSlice(args, "chosen")
+			if task == "" || len(chosen) == 0 {
+				return mcp.Fail(trace(ctx), "task and chosen are required"), nil
+			}
+			source := argString(args, "source")
+			if source == "" {
+				source = "accepted"
+			}
+			recommended := []fly.Recommendation{}
+			for _, name := range argStringSlice(args, "recommended") {
+				recommended = append(recommended, fly.Recommendation{Capability: name})
+			}
+			size, err := d.Router.AddFeedback(ctx, fly.FeedbackEvent{
+				Task:          task,
+				Recommended:   recommended,
+				Chosen:        chosen,
+				Source:        source,
+				InputMetadata: argMap(args, "input_metadata"),
+			})
+			if err != nil {
+				return mcp.Fail(trace(ctx), err.Error()), nil
+			}
+			if d.Metrics != nil {
+				d.Metrics.Inc("fly_feedback_total")
+			}
+			if d.Store != nil {
+				_ = observability.AppendJSONL(filepath.Join(d.Store.Root(), "logs", "fly-feedback.jsonl"), map[string]any{
+					"ts":           time.Now().UTC().Format(time.RFC3339Nano),
+					"trace_id":     trace(ctx),
+					"task":         snippet(task, 200),
+					"chosen":       chosen,
+					"recommended":  recommended,
+					"source":       source,
+					"memory_size":  size,
+				})
+				stats := d.Router.Dopamine()
+				_ = observability.AppendJSONL(filepath.Join(d.Store.Root(), "logs", "fly-neuron-events.jsonl"), map[string]any{
+					"ts":       time.Now().UTC().Format(time.RFC3339Nano),
+					"type":     "feedback",
+					"trace_id": trace(ctx),
+					"source":   source,
+					"reward":   source == "accepted" || source == "normal-teacher",
+					"pam":      stats.PAM,
+					"ppl1":     stats.PPL1,
+					"chosen":   chosen,
+				})
+			}
+			return mcp.OK(trace(ctx), map[string]any{
+				"stored":  size,
+				"source":  source,
+				"learned": true,
+			}).WithMetrics(map[string]any{"memory_size": size}), nil
 		},
 	))
 }

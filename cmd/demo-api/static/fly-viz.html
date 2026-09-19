@@ -1,0 +1,261 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Fly Brain — 3D</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: #060913; color: #e2e8f0; font-family: "Segoe UI", system-ui, sans-serif; overflow: hidden; }
+  #scene { position: fixed; inset: 0; }
+  .panel { position: fixed; background: rgba(13,20,38,.82); border: 1px solid #24304d; border-radius: 10px; padding: 10px 14px; font-size: 12.5px; backdrop-filter: blur(6px); }
+  #top { top: 14px; left: 14px; }
+  #top h1 { margin: 0 0 4px; font-size: 15px; }
+  #top .muted { color: #8ea3c7; font-size: 11.5px; }
+  #legend { top: 14px; right: 14px; max-width: 260px; line-height: 1.5; }
+  #legend .dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 6px; }
+  #bottom { bottom: 14px; left: 14px; min-width: 320px; }
+  .row { display: flex; align-items: center; gap: 8px; margin: 4px 0; }
+  .bar { flex: 1; height: 9px; background: #0f172a; border-radius: 6px; overflow: hidden; }
+  .bar > span { display: block; height: 100%; transition: width .4s ease; }
+  .good { color: #22c55e; } .bad { color: #f87171; } .muted { color: #64748b; }
+  #verdict { margin-top: 6px; }
+</style>
+</head>
+<body>
+<div id="scene"></div>
+<div class="panel" id="top">
+  <h1>🪰 Fly Brain 3D</h1>
+  <div class="muted" id="status">подключение…</div>
+  <div class="muted">тело — стилизация · MB — схема (случайная проекция) · числа KC/MBON/PAM/PPL1 — FlyWire v783</div>
+  <div class="muted" id="model-note">меш: загрузка NeuromechFly…</div>
+</div>
+<div class="panel" id="legend">
+  <div><span class="dot" style="background:#22c55e"></span>KC активные (награда)</div>
+  <div><span class="dot" style="background:#f87171"></span>KC активные (ошибка)</div>
+  <div><span class="dot" style="background:#7c3aed"></span>MBON (выход категорий)</div>
+  <div><span class="dot" style="background:#facc15"></span>сахар · <span class="dot" style="background:#38bdf8"></span>PAM · <span class="dot" style="background:#ef4444"></span>PPL1</div>
+</div>
+<div class="panel" id="bottom">
+  <div class="row"><span style="width:64px">Голод</span><div class="bar"><span id="hunger" style="width:40%;background:linear-gradient(90deg,#f97316,#ef4444)"></span></div><span id="hunger-val" class="muted">40%</span></div>
+  <div class="row"><span style="width:64px">Дофамин</span><div class="bar"><span id="dopa" style="width:0%;background:linear-gradient(90deg,#22c55e,#86efac)"></span></div><span id="dopa-val" class="muted">0</span></div>
+  <div id="verdict" class="muted">ожидание события…</div>
+</div>
+<script type="importmap">
+{ "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js" } }
+</script>
+<script type="module">
+import * as THREE from 'three';
+import { OBJLoader } from 'https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/loaders/OBJLoader.js';
+import { STLLoader } from 'https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/loaders/STLLoader.js';
+import { GLTFLoader } from 'https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/loaders/GLTFLoader.js';
+
+const KC_TOTAL = 4133, TOP_N = 64;
+const scene = new THREE.Scene();
+scene.fog = new THREE.FogExp2(0x060913, 0.045);
+const camera = new THREE.PerspectiveCamera(50, innerWidth / innerHeight, 0.1, 200);
+camera.position.set(0, 4.5, 14);
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setSize(innerWidth, innerHeight);
+document.getElementById('scene').appendChild(renderer.domElement);
+scene.add(new THREE.AmbientLight(0x8899cc, 1.1));
+const key = new THREE.DirectionalLight(0xffffff, 1.4); key.position.set(6, 10, 8); scene.add(key);
+
+const fly = new THREE.Group();
+const bodyMat = new THREE.MeshStandardMaterial({ color: 0x2b3a55, roughness: .5, metalness: .25 });
+const body = new THREE.Mesh(new THREE.SphereGeometry(1, 32, 24), bodyMat); body.scale.set(1.5, .75, .85); fly.add(body);
+const head = new THREE.Mesh(new THREE.SphereGeometry(.45, 24, 18), bodyMat); head.position.set(1.55, .1, 0); fly.add(head);
+const eyeMat = new THREE.MeshStandardMaterial({ color: 0xdc2626, roughness: .2, metalness: .5 });
+for (const z of [-.22, .22]) { const eye = new THREE.Mesh(new THREE.SphereGeometry(.2, 16, 12), eyeMat); eye.position.set(1.85, .18, z); fly.add(eye); }
+const wingMat = new THREE.MeshStandardMaterial({ color: 0xa5b4fc, transparent: true, opacity: .35, side: THREE.DoubleSide });
+const wings = [];
+for (const z of [-.7, .7]) { const w = new THREE.Mesh(new THREE.CircleGeometry(1.1, 20), wingMat); w.position.set(-.2, .55, z); w.rotation.x = Math.PI / 2.2; w.scale.set(1, .55, 1); fly.add(w); wings.push(w); }
+fly.position.set(-4.5, 1.6, 0);
+scene.add(fly);
+
+const sugar = new THREE.Mesh(new THREE.BoxGeometry(.9, .9, .9), new THREE.MeshStandardMaterial({ color: 0xfacc15, emissive: 0x8a6d00, roughness: .4 }));
+sugar.position.set(4.6, .45, 0); scene.add(sugar);
+
+const brain = new THREE.Group(); brain.position.set(4.6, 4.4, 0); scene.add(brain);
+const kcPositions = new Float32Array(KC_TOTAL * 3);
+const kcColors = new Float32Array(KC_TOTAL * 3);
+for (let i = 0; i < KC_TOTAL; i++) {
+  const phi = Math.acos(1 - 2 * (i + .5) / KC_TOTAL), theta = Math.PI * (1 + Math.sqrt(5)) * i;
+  const r = 2.2;
+  kcPositions[i * 3] = r * Math.sin(phi) * Math.cos(theta);
+  kcPositions[i * 3 + 1] = r * Math.cos(phi);
+  kcPositions[i * 3 + 2] = r * Math.sin(phi) * Math.sin(theta);
+  kcColors[i * 3] = .18; kcColors[i * 3 + 1] = .22; kcColors[i * 3 + 2] = .38;
+}
+const kcGeo = new THREE.BufferGeometry();
+kcGeo.setAttribute('position', new THREE.BufferAttribute(kcPositions, 3));
+kcGeo.setAttribute('color', new THREE.BufferAttribute(kcColors, 3));
+const kcPoints = new THREE.Points(kcGeo, new THREE.PointsMaterial({ size: .075, vertexColors: true, transparent: true, opacity: .95 }));
+brain.add(kcPoints);
+
+const mbonGroup = new THREE.Group(); brain.add(mbonGroup);
+const mbonMeshes = [];
+const mbonMat = new THREE.MeshStandardMaterial({ color: 0x7c3aed, emissive: 0x3b1d8f, roughness: .3 });
+for (let i = 0; i < 10; i++) {
+  const angle = (i / 10) * Math.PI * 2;
+  const m = new THREE.Mesh(new THREE.SphereGeometry(.16, 12, 10), mbonMat.clone());
+  m.position.set(Math.cos(angle) * 2.9, Math.sin(angle) * 2.9, 0);
+  mbonGroup.add(m); mbonMeshes.push(m);
+}
+const pam = new THREE.Mesh(new THREE.SphereGeometry(.3, 16, 12), new THREE.MeshStandardMaterial({ color: 0x38bdf8, emissive: 0x0b4a6f }));
+pam.position.set(0, -2.7, 0); brain.add(pam);
+const ppl1 = new THREE.Mesh(new THREE.SphereGeometry(.22, 16, 12), new THREE.MeshStandardMaterial({ color: 0xef4444, emissive: 0x7f1d1d }));
+ppl1.position.set(0, 2.7, 0); brain.add(ppl1);
+
+const brainLight = new THREE.PointLight(0x22c55e, 0, 12); brain.add(brainLight);
+
+async function loadRealFly() {
+  try {
+    const gltf = await new GLTFLoader().loadAsync('/fly-model/neuromechfly.glb');
+    const model = gltf.scene;
+    const box = new THREE.Box3().setFromObject(model);
+    const size = box.getSize(new THREE.Vector3());
+    const center = box.getCenter(new THREE.Vector3());
+    const scale = 3.6 / Math.max(size.x, size.y, size.z, 0.001);
+    model.scale.setScalar(scale);
+    model.position.set(-center.x * scale, -center.y * scale, -center.z * scale);
+    fly.add(model);
+    if (gltf.animations && gltf.animations.length) {
+      const mixer = new THREE.AnimationMixer(model);
+      gltf.animations.forEach(clip => mixer.clipAction(clip).play());
+      window.__flyMixer = mixer;
+    }
+    body.visible = false; head.visible = false;
+    wings.forEach(w => { w.visible = false; });
+    document.getElementById('model-note').textContent = 'меш: NeuromechFly (EPFL), Apache-2.0 — glTF, анимаций: ' + ((gltf.animations || []).length);
+    return;
+  } catch (e) { /* fall back to STL assembly below */ }
+  const wanted = ['Thorax', 'Head', 'LEye', 'REye', 'LWing', 'RWing'];
+  try {
+    const list = await fetch('/fly-model-list').then(r => r.json());
+    const files = list.files || [];
+    const picks = wanted
+      .map(w => files.find(f => f.toLowerCase().endsWith('/' + w.toLowerCase() + '.stl')))
+      .filter(Boolean);
+    if (!picks.length) return;
+    const loader = new STLLoader();
+    const group = new THREE.Group();
+    const material = new THREE.MeshStandardMaterial({ color: 0x3a4a66, roughness: .45, metalness: .3 });
+    await Promise.all(picks.map(p => new Promise(resolve => {
+      loader.load('/fly-model/' + encodeURI(p),
+        geo => { group.add(new THREE.Mesh(geo, material)); resolve(); },
+        undefined,
+        () => resolve());
+    })));
+    const box = new THREE.Box3().setFromObject(group);
+    const size = box.getSize(new THREE.Vector3());
+    const center = box.getCenter(new THREE.Vector3());
+    const scale = 3.4 / Math.max(size.x, size.y, size.z, 0.001);
+    group.scale.setScalar(scale);
+    group.position.set(-center.x * scale, -center.y * scale, -center.z * scale);
+    fly.add(group);
+    body.visible = false; head.visible = false;
+    wings.forEach(w => { w.visible = false; });
+    document.getElementById('model-note').textContent = 'меш: NeuromechFly (EPFL), Apache-2.0 — Thorax / Head / Eyes / Wings';
+  } catch (e) { /* procedural fallback stays */ }
+}
+loadRealFly();
+
+const state = { hunger: 40, dopamine: 0, mode: 'idle', lastTrace: null, lastFeedback: null, target: new THREE.Vector3(-4.5, 1.6, 0) };
+const statusEl = document.getElementById('status'), verdictEl = document.getElementById('verdict');
+const hungerEl = document.getElementById('hunger'), hungerVal = document.getElementById('hunger-val');
+const dopaEl = document.getElementById('dopa'), dopaVal = document.getElementById('dopa-val');
+
+function resetKcColor() { for (let i = 0; i < KC_TOTAL; i++) { kcColors[i * 3] = .18; kcColors[i * 3 + 1] = .22; kcColors[i * 3 + 2] = .38; } kcGeo.attributes.color.needsUpdate = true; }
+
+function applyNeuronEvent(ev) {
+  resetKcColor();
+  if (ev.type === 'recommend') {
+    const mbon = ev.mbon || {};
+    const values = Object.values(mbon);
+    const max = Math.max(...values, 0.001);
+    mbonMeshes.forEach((m, i) => { const v = values[i] || 0; m.scale.setScalar(.5 + 1.8 * (v / max)); m.material.emissiveIntensity = .4 + 1.6 * (v / max); });
+    statusEl.textContent = 'encoder: ' + (ev.encoder || '?') + ' · route: ' + (ev.route || '?') + ' · max ' + (ev.max_score ?? '?');
+  }
+  if (ev.type === 'feedback') {
+    const reward = !!ev.reward;
+    for (const s of (ev.active_kc || [])) {
+      const i = s.index; if (i == null || i >= KC_TOTAL) continue;
+      kcColors[i * 3] = reward ? .13 : .95; kcColors[i * 3 + 1] = reward ? .8 : .25; kcColors[i * 3 + 2] = reward ? .3 : .25;
+    }
+    kcGeo.attributes.color.needsUpdate = true;
+    brainLight.color.set(reward ? 0x22c55e : 0xef4444);
+    brainLight.intensity = 3.5;
+    state.mode = reward ? 'reward' : 'punish';
+    state.lastFeedback = ev;
+    if (reward) {
+      state.dopamine = Math.min(100, state.dopamine + 22);
+      state.hunger = Math.max(0, state.hunger - 18);
+      state.target.set(4.6, 1.1, 0);
+      verdictEl.innerHTML = '<span class="good">🍬 награда (PAM ' + (ev.pam || 0) + ') — муха ест сахар</span>';
+    } else {
+      state.dopamine = Math.max(0, state.dopamine - 10);
+      state.hunger = Math.min(100, state.hunger + 25);
+      state.target.set(-6.5, 1.0, 2.5);
+      verdictEl.innerHTML = '<span class="bad">⚡ ошибка (PPL1 ' + (ev.ppl1 || 0) + ') — боль и голод</span>';
+    }
+  }
+  hungerEl.style.width = state.hunger + '%'; hungerVal.textContent = Math.round(state.hunger) + '%';
+  dopaEl.style.width = state.dopamine + '%'; dopaVal.textContent = Math.round(state.dopamine);
+}
+
+async function poll() {
+  try {
+    const [events, feedback, neurons] = await Promise.all([
+      fetch('/fly-events?limit=5').then(r => r.json()),
+      fetch('/fly-feedback?limit=10').then(r => r.json()),
+      fetch('/fly-neuron-events?limit=20').then(r => r.json())
+    ]);
+    const lastNeuron = (neurons.events || [])[(neurons.events || []).length - 1];
+    if (lastNeuron && lastNeuron.trace_id !== state.lastTrace) {
+      state.lastTrace = lastNeuron.trace_id;
+      applyNeuronEvent(lastNeuron);
+    }
+    if ((feedback.events || []).length) {
+      const fb = feedback.events[feedback.events.length - 1];
+      if (fb.ts !== state.lastFeedback?.ts) { applyNeuronEvent({ type: 'feedback', reward: fb.source === 'accepted' || fb.source === 'normal-teacher', pam: 0, ppl1: 0, source: fb.source, ts: fb.ts, active_kc: lastNeuron?.active_kc || [] }); }
+    }
+    if ((events.events || []).length) {
+      const ev = events.events[events.events.length - 1];
+      statusEl.textContent = 'encoder: ' + (ev.encoder || '?') + ' · route: ' + (ev.route || '?') + ' · max ' + (ev.max_score ?? '?');
+    }
+  } catch (e) {
+    statusEl.textContent = 'offline: ' + e.message;
+  }
+}
+poll(); setInterval(poll, 2500);
+
+const clock = new THREE.Clock();
+function animate() {
+  requestAnimationFrame(animate);
+  const t = clock.getElapsedTime();
+  if (window.__flyMixer) window.__flyMixer.update(0.016);
+  wings.forEach((w, i) => { w.rotation.z = Math.sin(t * 40) * .5 * (i ? 1 : -1); });
+  const hover = Math.sin(t * 2.2) * .18;
+  if (state.mode === 'reward' || state.mode === 'punish') {
+    fly.position.lerp(state.target, .03);
+    if (state.mode === 'punish') { fly.position.x += Math.sin(t * 60) * .02; fly.position.y += Math.cos(t * 70) * .015; }
+    if (fly.position.distanceTo(state.target) < .6) { state.mode = 'idle'; }
+  } else {
+    state.target.set(-4.5, 1.6 + hover, 0);
+    fly.position.lerp(state.target, .02);
+  }
+  bodyMat.color.lerp(new THREE.Color(state.mode === 'punish' ? 0x3f1d1d : state.mode === 'reward' ? 0x1f4d33 : 0x2b3a55), .05);
+  sugar.scale.setScalar(state.mode === 'reward' && fly.position.distanceTo(sugar.position) < 1.6 ? .55 : 1);
+  pam.scale.setScalar(1 + .25 * Math.sin(t * 3) + (state.mode === 'reward' ? .8 : 0));
+  ppl1.scale.setScalar(1 + .25 * Math.sin(t * 3.4) + (state.mode === 'punish' ? .9 : 0));
+  brainLight.intensity *= .96;
+  brain.rotation.y += .0016;
+  renderer.render(scene, camera);
+}
+animate();
+addEventListener('resize', () => { camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix(); renderer.setSize(innerWidth, innerHeight); });
+</script>
+</body>
+</html>

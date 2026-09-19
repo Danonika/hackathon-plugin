@@ -22,8 +22,25 @@
   .bar { height: 10px; background: #0f172a; border-radius: 6px; overflow: hidden; }
   .bar > span { display: block; height: 100%; background: linear-gradient(90deg, #2563eb, #7c3aed); }
   .bar-row.top .bar > span { background: linear-gradient(90deg, #7c3aed, #c026d3); }
-  .rec { font-family: ui-monospace, Consolas, monospace; font-size: 12px; padding: 4px 0; color: #d8b4fe; }
+  .rec { font-family: ui-monospace, Consolas, monospace; font-size: 12px; padding: 4px 0; color: #d8b4fe; opacity: 0; transform: translateX(-8px); transition: opacity .3s ease, transform .3s ease; }
+  .rec.show { opacity: 1; transform: none; }
   .rec::before { content: "✓ "; color: #22c55e; }
+  .rec.added { color: #86efac; }
+  .rec.dropped { color: #64748b; text-decoration: line-through; }
+  .signal { display: inline-block; padding: 2px 8px; margin: 0 6px 6px 0; border-radius: 999px; font-size: 11px; background: #0f172a; border: 1px solid #33415e; color: #94a3b8; }
+  .signal.on { color: #e9d5ff; border-color: #7c3aed; background: #2e1065; }
+  .fly-icon { display: inline-block; }
+  .fly-icon.flying { animation: fly 0.9s ease-in-out; }
+  .fly-icon.reward { animation: reward 1s ease-in-out; }
+  .fly-icon.pain { animation: pain .8s ease-in-out; }
+  @keyframes reward { 0% { transform: scale(1); } 30% { transform: scale(1.45) rotate(-10deg); } 60% { transform: scale(1.15); } 100% { transform: scale(1); } }
+  @keyframes pain { 0%, 100% { transform: translateX(0); } 20% { transform: translateX(-7px) rotate(-12deg); } 40% { transform: translateX(7px) rotate(12deg); } 60% { transform: translateX(-5px); } 80% { transform: translateX(5px); } }
+  .dopa { color: #22c55e; font-weight: 600; }
+  .ppl1 { color: #f87171; font-weight: 600; }
+  @keyframes fly { 0% { transform: translateX(-8px) rotate(-12deg); } 50% { transform: translateX(8px) rotate(12deg); } 100% { transform: none; } }
+  .verdict { margin-top: 8px; font-size: 12.5px; }
+  .verdict .good { color: #22c55e; }
+  .verdict .bad { color: #f87171; }
   .meta-note { font-size: 11px; color: #94a3b8; margin-top: 8px; }
   .feed { list-style: none; margin: 0; padding: 0; max-height: 320px; overflow: auto; }
   .feed li { display: flex; gap: 8px; align-items: baseline; padding: 5px 0; border-bottom: 1px dashed #1e293b; font-size: 12.5px; }
@@ -41,6 +58,8 @@
 <header>
   <h1>Hackathon Agent Kit</h1>
   <span class="muted" id="mode-badge">mode: …</span>
+  <a class="muted" href="/fly-viz" style="color:#93c5fd">Fly 3D</a>
+  <a class="muted" href="/fly-brain/" target="_blank" style="color:#93c5fd">реальный мозг 139k (flybrain, MIT)</a>
   <span class="status" id="status">connecting…</span>
 </header>
 <div class="wrap">
@@ -54,9 +73,11 @@
       <div class="meta-note" id="routing-note"></div>
     </div>
     <div class="card" style="margin-top:16px">
-      <h2>Fly ranking</h2>
+      <h2><span class="fly-icon" id="fly-icon">🪰</span> Fly ranking</h2>
+      <div id="fly-signals"></div>
       <div id="fly-bars"><span class="muted">нет событий — вызови routing.fly_recommend в режиме fly</span></div>
       <div id="fly-recs"></div>
+      <div class="verdict" id="fly-verdict"></div>
       <div class="meta-note" id="fly-meta"></div>
     </div>
   </div>
@@ -109,12 +130,22 @@ function renderRouting(state) {
   document.getElementById('routing-note').textContent = 'config version ' + state.version + ' (live read)';
 }
 
-function renderFly(events) {
+let lastFlyTrace = null;
+function renderFly(events, feedback) {
   const bars = document.getElementById('fly-bars');
   const recs = document.getElementById('fly-recs');
-  const meta = document.getElementById('fly-meta');
+  const verdict = document.getElementById('fly-verdict');
+  const signals = document.getElementById('fly-signals');
   if (!events.length) return;
   const ev = events[events.length - 1];
+  const isNew = ev.trace_id && ev.trace_id !== lastFlyTrace;
+  lastFlyTrace = ev.trace_id || lastFlyTrace;
+
+  const parts = (ev.encoder || '').split('+').filter(Boolean);
+  signals.innerHTML = ['keyword', 'embedding', 'knn', 'mb', 'dopamine'].map(s =>
+    '<span class="signal' + (parts.includes(s) ? ' on' : '') + '">' + s + '</span>').join('') +
+    '<span class="signal' + (ev.max_score >= ev.threshold ? ' on' : '') + '">score ' + ev.max_score + '</span>';
+
   const scores = ev.category_scores || {};
   const sorted = Object.entries(scores).sort((a, b) => b[1] - a[1]);
   bars.innerHTML = sorted.map(([cat, val], i) =>
@@ -122,10 +153,57 @@ function renderFly(events) {
     '<span>' + cat.toUpperCase() + '</span>' +
     '<div class="bar"><span style="width:' + Math.round(val * 100) + '%"></span></div>' +
     '<span>' + Math.round(val * 100) + '%</span></div>').join('');
+
   recs.innerHTML = (ev.recommendations || []).map(r =>
-    '<div class="rec">' + r.capability + ' — ' + Math.round(r.score * 100) + '%</div>').join('');
-  meta.textContent = 'route: ' + ev.route + ' · encoder: ' + ev.encoder +
+    '<div class="rec" data-cap="' + r.capability + '">' + r.capability + ' — ' + Math.round(r.score * 100) + '%</div>').join('');
+
+  const fb = (feedback || []).filter(f => f.task === ev.task).pop() || (feedback || [])[(feedback || []).length - 1];
+  if (fb) {
+    const chosen = fb.chosen || [];
+    const recNames = (ev.recommendations || []).map(r => r.capability);
+    const accepted = chosen.filter(c => recNames.includes(c));
+    const added = chosen.filter(c => !recNames.includes(c));
+    const dropped = recNames.filter(c => !chosen.includes(c));
+    const all = feedback || [];
+    const pam = all.filter(f => f.source === 'accepted' || f.source === 'normal-teacher').length;
+    const ppl1 = all.filter(f => f.source === 'codex-correction' || f.source === 'fallback').length;
+    verdict.innerHTML = '<span class="good">Codex: принял ' + accepted.length + '</span>' +
+      (added.length ? ' · <span class="good">добавил ' + added.join(', ') + '</span>' : '') +
+      (dropped.length ? ' · <span class="bad">отклонил ' + dropped.join(', ') + '</span>' : '') +
+      (fb.source ? ' · источник: ' + fb.source : '') +
+      ' · <span class="dopa">🍬 PAM ' + pam + '</span> · <span class="ppl1">⚡ PPL1 ' + ppl1 + '</span>';
+    recs.querySelectorAll('.rec').forEach(el => {
+      if (added.includes(el.dataset.cap)) el.classList.add('added');
+      if (dropped.includes(el.dataset.cap)) el.classList.add('dropped');
+    });
+    const icon = document.getElementById('fly-icon');
+    if (fb.source === 'accepted' || fb.source === 'normal-teacher') {
+      icon.classList.remove('pain');
+      icon.classList.remove('reward');
+      void icon.offsetWidth;
+      icon.classList.add('reward');
+    } else if (fb.source === 'codex-correction' || fb.source === 'fallback') {
+      icon.classList.remove('reward');
+      icon.classList.remove('pain');
+      void icon.offsetWidth;
+      icon.classList.add('pain');
+    }
+  } else {
+    verdict.innerHTML = '<span class="muted">ожидание решения Codex (routing.fly_feedback)…</span>';
+  }
+
+  document.getElementById('fly-meta').textContent = 'route: ' + ev.route + ' · encoder: ' + ev.encoder +
     ' · max_score: ' + ev.max_score + ' · threshold: ' + ev.threshold + ' · ' + (ev.task || '');
+
+  if (isNew) {
+    const icon = document.getElementById('fly-icon');
+    icon.classList.remove('flying');
+    void icon.offsetWidth;
+    icon.classList.add('flying');
+    recs.querySelectorAll('.rec').forEach((el, i) => setTimeout(() => el.classList.add('show'), 120 * i));
+  } else {
+    recs.querySelectorAll('.rec').forEach(el => el.classList.add('show'));
+  }
 }
 
 function renderCalls(calls) {
@@ -146,13 +224,13 @@ function renderFiles(id, files) {
 
 async function refresh() {
   try {
-    const [routing, calls, fly, inputs, artifacts] = await Promise.all([
-      j('/routing'), j('/calls?limit=40'), j('/fly-events?limit=10'),
+    const [routing, calls, fly, feedback, inputs, artifacts] = await Promise.all([
+      j('/routing'), j('/calls?limit=40'), j('/fly-events?limit=10'), j('/fly-feedback?limit=20'),
       j('/inputs'), j('/artifacts')
     ]);
     renderRouting(routing);
     renderCalls(calls.calls);
-    renderFly(fly.events);
+    renderFly(fly.events, feedback.events);
     renderFiles('inputs', inputs.files);
     renderFiles('artifacts', artifacts.files);
     document.getElementById('status').textContent = 'updated ' + new Date().toLocaleTimeString();

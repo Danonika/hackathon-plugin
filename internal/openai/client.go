@@ -3,6 +3,7 @@ package openai
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -20,11 +21,20 @@ import (
 type Client struct {
 	APIKey          string
 	BaseURL         string
+	SessionID       string
 	HTTP            *http.Client
 	ChatModel       string
 	VisionModel     string
 	TranscribeModel string
 	EmbeddingModel  string
+}
+
+func newSessionID() string {
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		return "hackathonkit-session"
+	}
+	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16])
 }
 
 func New(cfg config.OpenAISettings) *Client {
@@ -35,6 +45,7 @@ func New(cfg config.OpenAISettings) *Client {
 	return &Client{
 		APIKey:          os.Getenv("OPENAI_API_KEY"),
 		BaseURL:         strings.TrimRight(base, "/"),
+		SessionID:       newSessionID(),
 		HTTP:            &http.Client{Timeout: 180 * time.Second},
 		ChatModel:       cfg.ChatModel,
 		VisionModel:     cfg.VisionModel,
@@ -58,6 +69,7 @@ func (c *Client) doJSON(ctx context.Context, path string, payload any, out any) 
 	}
 	req.Header.Set("Authorization", "Bearer "+c.APIKey)
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("x-opencode-session", c.SessionID)
 	resp, err := c.HTTP.Do(req)
 	if err != nil {
 		return err
@@ -175,6 +187,7 @@ func (c *Client) Transcribe(ctx context.Context, path string, language string) (
 	}
 	req.Header.Set("Authorization", "Bearer "+c.APIKey)
 	req.Header.Set("Content-Type", w.FormDataContentType())
+	req.Header.Set("x-opencode-session", c.SessionID)
 	resp, err := c.HTTP.Do(req)
 	if err != nil {
 		return "", err
@@ -191,6 +204,43 @@ func (c *Client) Transcribe(ctx context.Context, path string, language string) (
 		return "", err
 	}
 	return strings.TrimSpace(out.Text), nil
+}
+
+func (c *Client) ClassifyTask(ctx context.Context, task string, categories []string) (map[string]float64, error) {
+	system := "You are a routing classifier for an agent capability layer. Score how relevant each capability category is to the task. Reply with a strict JSON object mapping every category to a number between 0 and 1. No prose, no code fences."
+	user := "Categories: " + strings.Join(categories, ", ") + "\nTask: " + task
+	raw, err := c.Chat(ctx, system, user)
+	if err != nil {
+		return nil, err
+	}
+	raw = strings.TrimSpace(raw)
+	if start := strings.Index(raw, "{"); start >= 0 {
+		if end := strings.LastIndex(raw, "}"); end > start {
+			raw = raw[start : end+1]
+		}
+	}
+	var parsed map[string]float64
+	if err := json.Unmarshal([]byte(raw), &parsed); err != nil {
+		return nil, fmt.Errorf("llm classifier json: %w", err)
+	}
+	out := map[string]float64{}
+	for _, category := range categories {
+		value, ok := parsed[category]
+		if !ok {
+			continue
+		}
+		if value < 0 {
+			value = 0
+		}
+		if value > 1 {
+			value = 1
+		}
+		out[category] = value
+	}
+	if len(out) == 0 {
+		return nil, fmt.Errorf("llm classifier returned no known categories")
+	}
+	return out, nil
 }
 
 func truncate(s string, n int) string {
