@@ -1,0 +1,20 @@
+{
+  "name": "hackathonkit-local",
+  "interface": {
+    "displayName": "Hackathon Agent Kit Local"
+  },
+  "plugins": [
+    {
+      "name": "hackathonkit",
+      "source": {
+        "source": "local",
+        "path": "./plugins/hackathonkit"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Developer Tools"
+    }
+  ]
+}

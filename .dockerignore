@@ -1,0 +1,10 @@
+.git
+.gitignore
+.env
+bin
+data
+logs
+evals
+.agents/skills
+*.md
+!README.md

@@ -1,0 +1,7 @@
+interface:
+  display_name: "Hackathon Agent Kit CP Expert"
+  short_description: "Algorithmic and performance review of hot paths."
+  default_prompt: "Use $cp-expert-refactoring to review the current snapshot."
+
+policy:
+  allow_implicit_invocation: false

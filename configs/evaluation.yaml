@@ -1,0 +1,18 @@
+evaluation:
+  technical_target: 95
+  demo_day_target: 90
+
+  max_technical_iterations: 2
+  max_judge_rounds: 2
+
+  judges: 10
+  roast_agents: 3
+
+  parallel_judges: true
+  parallel_roast: true
+
+  full_cleanroom_each_iteration: false
+  full_cleanroom_on_final_freeze: true
+
+  finalization_reserve_minutes: 45
+  min_delta: 0.5

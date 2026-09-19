@@ -1,0 +1,7 @@
+interface:
+  display_name: "Hackathon Agent Kit Roast"
+  short_description: "Attack the snapshot with three isolated critics, evidence backed."
+  default_prompt: "Use $roast-project to roast the current snapshot."
+
+policy:
+  allow_implicit_invocation: false

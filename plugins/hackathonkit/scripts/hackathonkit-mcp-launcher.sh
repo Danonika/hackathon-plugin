@@ -1,0 +1,16 @@
+#!/usr/bin/env sh
+set -e
+SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
+
+if [ ! -f "$REPO_ROOT/docker-compose.yml" ]; then
+  echo "Hackathon Agent Kit launcher: docker-compose.yml not found at $REPO_ROOT" >&2
+  exit 1
+fi
+
+if [ -x "$REPO_ROOT/bin/hackathonkit-mcp" ]; then
+  exec "$REPO_ROOT/bin/hackathonkit-mcp" --repo-root "$REPO_ROOT"
+fi
+
+cd "$REPO_ROOT"
+exec docker compose -f "$REPO_ROOT/docker-compose.yml" run --rm -T hackathonkit-mcp

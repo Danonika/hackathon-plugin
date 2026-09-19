@@ -1,0 +1,64 @@
+package fly
+
+import (
+	"testing"
+
+	"hackathonkit.local/agentkit/internal/config"
+)
+
+func TestRecommendTelemetry(t *testing.T) {
+	r := NewRouter(config.RoutingSettings{FlyThreshold: 0.55, TopK: 5})
+	available := []string{
+		"documents.extract", "knowledge.search", "data.inspect", "data.analyze",
+		"timeseries.analyze", "timeseries.detect_anomalies", "audio.transcribe",
+		"vision.analyze", "charts.create", "reports.create", "classification.classify",
+	}
+	res := r.Recommend(
+		"Find anomalies in equipment telemetry",
+		map[string]any{
+			"types":         []any{"csv"},
+			"rows":          float64(120000),
+			"has_timestamp": true,
+		},
+		available,
+	)
+	if res.Route != "timeseries" {
+		t.Fatalf("expected route timeseries, got %q (scores=%v)", res.Route, res.CategoryScores)
+	}
+	if res.MaxScore < 0.55 {
+		t.Fatalf("expected max score above threshold, got %v", res.MaxScore)
+	}
+	found := false
+	for _, rec := range res.Recommendations {
+		if rec.Capability == "timeseries.detect_anomalies" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected timeseries.detect_anomalies in recommendations, got %+v", res.Recommendations)
+	}
+}
+
+func TestRecommendAudio(t *testing.T) {
+	r := NewRouter(config.RoutingSettings{FlyThreshold: 0.55, TopK: 5})
+	available := []string{"audio.transcribe", "vision.analyze", "documents.extract", "reports.create"}
+	res := r.Recommend("Generate subtitles for this interview audio", map[string]any{
+		"types": []any{"audio"},
+	}, available)
+	if res.Route != "speech" {
+		t.Fatalf("expected route speech, got %q (scores=%v)", res.Route, res.CategoryScores)
+	}
+	if len(res.Recommendations) == 0 || res.Recommendations[0].Capability != "audio.transcribe" {
+		t.Fatalf("expected audio.transcribe first, got %+v", res.Recommendations)
+	}
+}
+
+func TestRecommendFiltersUnavailable(t *testing.T) {
+	r := NewRouter(config.RoutingSettings{FlyThreshold: 0.55, TopK: 5})
+	res := r.Recommend("find anomalies in telemetry csv", nil, []string{"documents.extract"})
+	for _, rec := range res.Recommendations {
+		if rec.Capability != "documents.extract" {
+			t.Fatalf("unexpected capability outside available list: %s", rec.Capability)
+		}
+	}
+}

@@ -1,0 +1,7 @@
+interface:
+  display_name: "Hackathon Agent Kit System Design Expert"
+  short_description: "Structural review of the snapshot architecture."
+  default_prompt: "Use $system-design-expert to review the current snapshot."
+
+policy:
+  allow_implicit_invocation: false

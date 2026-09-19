@@ -1,0 +1,14 @@
+bin/
+*.exe
+.env
+logs/*.log
+data/artifacts/
+data/index/
+data/judge-bundles/
+.agents/skills/
+evals/calibration/*.json
+evals/project-cost/*.json
+evals/aggregate/*.json
+evals/judges/
+evals/roast/
+evals/snapshots/

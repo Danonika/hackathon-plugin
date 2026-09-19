@@ -1,0 +1,62 @@
+services:
+  hackathonkit-mcp:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: hackathonkit-mcp
+    stdin_open: true
+    environment:
+      HACKATHONKIT_REPO_ROOT: /workspace
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-}
+    volumes:
+      - ./configs:/workspace/configs
+      - ./data:/workspace/data
+      - ./logs:/workspace/logs
+
+  demo-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: demo-api
+    environment:
+      HACKATHONKIT_REPO_ROOT: /workspace
+      HACKATHONKIT_DEMO_PORT: "8787"
+    ports:
+      - "8787:8787"
+    volumes:
+      - ./configs:/workspace/configs
+      - ./data:/workspace/data
+      - ./logs:/workspace/logs
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: hackathonkit
+      POSTGRES_PASSWORD: hackathonkit
+      POSTGRES_DB: hackathonkit
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: hackathonkit
+      MINIO_ROOT_PASSWORD: hackathonkit123
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - miniodata:/data
+
+volumes:
+  pgdata:
+  miniodata:

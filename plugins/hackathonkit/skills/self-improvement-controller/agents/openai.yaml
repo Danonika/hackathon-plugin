@@ -1,0 +1,7 @@
+interface:
+  display_name: "Hackathon Agent Kit Self-Improvement Controller"
+  short_description: "Run bounded improvement rounds with rollback and stop conditions."
+  default_prompt: "Use $self-improvement-controller to run one improvement round."
+
+policy:
+  allow_implicit_invocation: false
