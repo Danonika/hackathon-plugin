@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"hackathonkit.local/agentkit/internal/config"
+	"hackathonkit.local/agentkit/internal/learning"
 	"hackathonkit.local/agentkit/internal/mcp"
 	"hackathonkit.local/agentkit/internal/metadata"
 	"hackathonkit.local/agentkit/internal/observability"
@@ -15,18 +16,21 @@ import (
 )
 
 type Deps struct {
-	Cfg     *config.Manager
-	Store   *storage.Store
-	OpenAI  *openai.Client
-	Metrics *observability.Metrics
-	Router  *fly.Router
-	Meta    metadata.Recorder
-	Version string
+	Cfg      *config.Manager
+	Store    *storage.Store
+	OpenAI   *openai.Client
+	Metrics  *observability.Metrics
+	Router   *fly.Router
+	Learning *learning.Store
+	Meta     metadata.Recorder
+	Version  string
 }
 
 func RegisterAll(reg *mcp.Registry, d Deps) {
 	registerSystem(reg, d)
 	registerEvaluation(reg, d)
+	registerLearning(reg, d)
+	registerContextBudget(reg, d)
 	registerFiles(reg, d)
 	registerDocuments(reg, d)
 	registerKnowledge(reg, d)
@@ -130,7 +134,7 @@ func argMap(args map[string]any, key string) map[string]any {
 func domainCapabilities(reg *mcp.Registry) []string {
 	out := []string{}
 	for _, name := range reg.Names() {
-		if strings.HasPrefix(name, "system.") || strings.HasPrefix(name, "routing.") || strings.HasPrefix(name, "files.") || strings.HasPrefix(name, "eval.") {
+		if strings.HasPrefix(name, "system.") || strings.HasPrefix(name, "routing.") || strings.HasPrefix(name, "files.") || strings.HasPrefix(name, "eval.") || strings.HasPrefix(name, "learning.") {
 			continue
 		}
 		out = append(out, name)

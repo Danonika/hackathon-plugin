@@ -54,6 +54,8 @@ func registerSystem(reg *mcp.Registry, d Deps) {
 				"charts":         available["charts.create"],
 				"reports":        available["reports.create"],
 				"evaluation":     available["eval.aggregate"],
+				"learning":       available["learning.recall"],
+				"context_budget": available["system.context_budget"],
 			}
 			experimental := map[string]any{"fly_router": available["routing.fly_recommend"]}
 			groups["fly_router_available"] = available["routing.fly_recommend"]

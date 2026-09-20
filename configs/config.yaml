@@ -16,3 +16,10 @@ tools:
 routing:
   fly_threshold: 0.55
   top_k: 5
+
+learning:
+  enabled: true
+  min_confidence: 0.5
+  inject_min_confidence: 0.7
+  max_inject: 6
+  promote_after: 3

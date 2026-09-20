@@ -6,8 +6,11 @@ plugins/hackathonkit/.mcp.json
 data/fly-viz/
 data/artifacts/
 data/index/
+data/control/
 data/judge-bundles/
 .agents/skills/
+.claude/skills/
+configs/install-state.json
 evals/calibration/
 evals/decisions/
 evals/project-cost/

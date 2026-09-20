@@ -85,6 +85,44 @@ else
   check "skills mirror" 0 "plugin=$SRC_COUNT fallback=$DST_COUNT"
 fi
 
+if [ -f "$ROOT/plugins/hackathonkit/hooks/codex-hooks.json" ]; then
+  check "session hooks" 1 "codex-hooks.json"
+else
+  check "session hooks" 0 "missing plugins/hackathonkit/hooks/codex-hooks.json"
+fi
+
+AGENT_COUNT=0
+if [ -d "$ROOT/.codex/agents" ]; then
+  AGENT_COUNT=$(find "$ROOT/.codex/agents" -name '*.toml' | wc -l | tr -d ' ')
+fi
+if [ "$AGENT_COUNT" -ge 3 ]; then
+  check "codex subagents" 1 "$AGENT_COUNT roles"
+else
+  check "codex subagents" 0 "expected 3 roles in .codex/agents"
+fi
+
+ADAPTERS_MISSING=0
+for f in AGENTS.md .claude-plugin/plugin.json .claude-plugin/marketplace.json .opencode/opencode.json .cursor/rules/hackathonkit.mdc; do
+  [ -f "$ROOT/$f" ] || ADAPTERS_MISSING=$((ADAPTERS_MISSING + 1))
+done
+if [ "$ADAPTERS_MISSING" = "0" ]; then
+  check "harness adapters" 1 "codex, opencode, claude, cursor"
+else
+  check "harness adapters" 0 "$ADAPTERS_MISSING missing; run scripts/sync-harness.sh"
+fi
+
+if [ -f "$ROOT/configs/install-state.json" ]; then
+  check "install state" 1 "version $(sed -n 's/.*"version": *"\([^"]*\)".*/\1/p' "$ROOT/configs/install-state.json" | head -n 1)"
+else
+  check "install state" 0 "missing configs/install-state.json; run scripts/setup.sh"
+fi
+
+if command -v node >/dev/null 2>&1; then
+  check "node (hooks)" 1 "$(node --version 2>/dev/null)"
+else
+  check "node (hooks)" 0 "not found; session hooks require Node 18+"
+fi
+
 if sh "$ROOT/scripts/smoke.sh" >/dev/null 2>&1; then
   check "mcp handshake" 1 "initialize / tools/list / system.context"
 else

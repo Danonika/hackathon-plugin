@@ -46,6 +46,34 @@ if (Test-Path -LiteralPath $dstPath) {
 }
 Check "skills mirror" ($srcSkills -gt 0 -and $srcSkills -eq $dstSkills) "plugin=$srcSkills fallback=$dstSkills"
 
+$hooksFile = Join-Path $root "plugins\hackathonkit\hooks\codex-hooks.json"
+Check "session hooks" (Test-Path -LiteralPath $hooksFile) $(if (Test-Path -LiteralPath $hooksFile) { "codex-hooks.json" } else { "missing plugins/hackathonkit/hooks/codex-hooks.json" })
+
+$agentCount = 0
+$agentsDir = Join-Path $root ".codex\agents"
+if (Test-Path -LiteralPath $agentsDir) {
+  $agentCount = (Get-ChildItem -LiteralPath $agentsDir -Filter *.toml).Count
+}
+Check "codex subagents" ($agentCount -ge 3) "$agentCount roles"
+
+$adapterFiles = @("AGENTS.md", ".claude-plugin\plugin.json", ".claude-plugin\marketplace.json", ".opencode\opencode.json", ".cursor\rules\hackathonkit.mdc")
+$adapterMissing = 0
+foreach ($f in $adapterFiles) {
+  if (-not (Test-Path -LiteralPath (Join-Path $root $f))) { $adapterMissing++ }
+}
+Check "harness adapters" ($adapterMissing -eq 0) $(if ($adapterMissing -eq 0) { "codex, opencode, claude, cursor" } else { "$adapterMissing missing; run scripts/sync-harness.ps1" })
+
+$statePath = Join-Path $root "configs\install-state.json"
+$stateVersion = ""
+if (Test-Path -LiteralPath $statePath) {
+  $stateMatch = Select-String -Path $statePath -Pattern '"version"\s*:\s*"([^"]+)"' | Select-Object -First 1
+  if ($stateMatch) { $stateVersion = $stateMatch.Matches[0].Groups[1].Value }
+}
+Check "install state" (Test-Path -LiteralPath $statePath) $(if ($stateVersion) { "version $stateVersion" } else { "missing configs/install-state.json; run scripts/setup.ps1" })
+
+$node = Get-Command node -ErrorAction SilentlyContinue
+Check "node (hooks)" ($null -ne $node) $(if ($node) { (node --version) } else { "not found; session hooks require Node 18+" })
+
 if ($codex) {
   $json = (cmd /c "codex plugin list --json 2>nul") -join "`n"
   $pluginInstalled = $false

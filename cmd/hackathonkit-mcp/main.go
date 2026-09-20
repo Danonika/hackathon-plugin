@@ -9,9 +9,12 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
+	"time"
 
 	"hackathonkit.local/agentkit/internal/config"
+	"hackathonkit.local/agentkit/internal/learning"
 	"hackathonkit.local/agentkit/internal/mcp"
 	"hackathonkit.local/agentkit/internal/metadata"
 	"hackathonkit.local/agentkit/internal/objectstore"
@@ -22,13 +25,14 @@ import (
 	"hackathonkit.local/agentkit/internal/tools"
 )
 
-const version = "0.5.0"
+const version = "0.6.0"
 
 func main() {
 	selftest := flag.Bool("selftest", false, "run an in-process MCP handshake and exit")
 	listTools := flag.Bool("list-tools", false, "print tool descriptors as JSON and exit")
 	repoRoot := flag.String("repo-root", "", "repository root (defaults to auto-discovery)")
 	setMode := flag.String("set-routing-mode", "", "set routing mode (normal|fly) and exit")
+	sessionContext := flag.Bool("session-context", false, "print a compact session context block for hooks and exit")
 	flag.Parse()
 
 	root := *repoRoot
@@ -48,6 +52,11 @@ func main() {
 		return
 	}
 
+	if *sessionContext {
+		printSessionContext(root, mgr)
+		return
+	}
+
 	cfg := mgr.Config()
 	metrics := observability.NewMetrics()
 	logger := observability.NewLogger(os.Stderr)
@@ -59,6 +68,12 @@ func main() {
 	router.WithLLM(oa)
 	embedder := fly.NewChainEmbedder(oa, fly.NewHashEncoder(512))
 	router.WithEmbeddings(embedder, filepath.Join(root, "data", "index", "fly-embeddings.json"), cfg.OpenAI.EmbeddingModel+"+hash512")
+
+	var learn *learning.Store
+	if cfg.Learning.Enabled {
+		learn = learning.NewStore(filepath.Join(root, "data", "index", "learnings.json"), learning.ProjectKey(root))
+		learn.WithEmbedder(embedder)
+	}
 
 	var meta metadata.Recorder = metadata.Disabled{}
 	if dsn := os.Getenv("POSTGRES_DSN"); dsn != "" {
@@ -85,13 +100,14 @@ func main() {
 
 	reg := mcp.NewRegistry()
 	tools.RegisterAll(reg, tools.Deps{
-		Cfg:     mgr,
-		Store:   store,
-		OpenAI:  oa,
-		Metrics: metrics,
-		Router:  router,
-		Meta:    meta,
-		Version: version,
+		Cfg:      mgr,
+		Store:    store,
+		OpenAI:   oa,
+		Metrics:  metrics,
+		Router:   router,
+		Learning: learn,
+		Meta:     meta,
+		Version:  version,
 	})
 
 	srv := mcp.NewServer(reg, mcp.ServerOptions{
@@ -137,4 +153,99 @@ func main() {
 		observability.Log(logger, "error", "server_stop", map[string]any{"error": err.Error()})
 		os.Exit(1)
 	}
+}
+
+// printSessionContext emits a compact context block for SessionStart hooks:
+// routing mode, top learnings, current plan stage and pending eval decisions.
+func printSessionContext(root string, mgr *config.Manager) {
+	state := mgr.Routing()
+	fmt.Println("Hackathon Agent Kit session context")
+	fmt.Printf("routing: %s (config v%d)\n", state.Mode, state.Version)
+
+	settings := mgr.Config().Learning
+	if settings.Enabled {
+		store := learning.NewStore(filepath.Join(root, "data", "index", "learnings.json"), learning.ProjectKey(root))
+		if items, err := store.Top(settings.MaxInject, settings.InjectMinConfidence); err == nil && len(items) > 0 {
+			fmt.Println("learnings:")
+			for _, item := range items {
+				fmt.Printf("- [%.2f] when %s -> %s\n", item.Confidence, clip(item.Trigger, 80), clip(item.Insight, 160))
+			}
+		}
+	}
+	if summary, ok := latestPlanSummary(root); ok {
+		fmt.Println(summary)
+	}
+	if count := countFiles(filepath.Join(root, "evals", "decisions")); count > 0 {
+		fmt.Printf("pending eval decisions: %d\n", count)
+	}
+}
+
+func latestPlanSummary(root string) (string, bool) {
+	base := filepath.Join(root, "evals", "plans")
+	entries, err := os.ReadDir(base)
+	if err != nil {
+		return "", false
+	}
+	type planDoc struct {
+		Slug     string `json:"slug"`
+		Revision int    `json:"revision"`
+		Stages   []struct {
+			ID     string `json:"id"`
+			Status string `json:"status"`
+		} `json:"stages"`
+	}
+	var best planDoc
+	var bestTime time.Time
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
+			continue
+		}
+		info, infoErr := entry.Info()
+		if infoErr != nil || info.ModTime().Before(bestTime) {
+			continue
+		}
+		data, readErr := os.ReadFile(filepath.Join(base, entry.Name()))
+		if readErr != nil {
+			continue
+		}
+		var doc planDoc
+		if json.Unmarshal(data, &doc) != nil {
+			continue
+		}
+		best, bestTime = doc, info.ModTime()
+	}
+	if bestTime.IsZero() {
+		return "", false
+	}
+	stage := "unknown"
+	for _, s := range best.Stages {
+		if s.Status != "done" && s.Status != "cut" {
+			stage = fmt.Sprintf("%s (%s)", s.ID, s.Status)
+			break
+		}
+	}
+	return fmt.Sprintf("plan: %s r%d stage %s", best.Slug, best.Revision, stage), true
+}
+
+func countFiles(dir string) int {
+	count := 0
+	_ = filepath.WalkDir(dir, func(path string, entry os.DirEntry, err error) error {
+		if err != nil || entry.IsDir() {
+			return nil
+		}
+		if strings.HasSuffix(entry.Name(), ".json") {
+			count++
+		}
+		return nil
+	})
+	return count
+}
+
+func clip(text string, limit int) string {
+	text = strings.Join(strings.Fields(text), " ")
+	runes := []rune(text)
+	if len(runes) <= limit {
+		return text
+	}
+	return string(runes[:limit]) + "..."
 }

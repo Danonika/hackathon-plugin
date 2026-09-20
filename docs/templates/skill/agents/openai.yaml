@@ -1,0 +1,4 @@
+interface:
+  display_name: "Example Skill"
+  short_description: "One sentence, under 80 characters."
+  default_prompt: "Use $example-skill to <action>."

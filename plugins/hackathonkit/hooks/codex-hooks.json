@@ -1,0 +1,44 @@
+{
+  "description": "Hackathon Agent Kit session lifecycle hooks: context injection, session event capture and learning handoff. Every hook is best-effort and never blocks a session.",
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": ".*",
+        "id": "session:start",
+        "description": "Inject routing mode, current plan stage, top learnings and pending eval decisions",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$PLUGIN_ROOT/scripts/hooks.js\" session-start"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": ".*",
+        "id": "session:tool",
+        "description": "Append tool events to logs/session-events.jsonl for the control plane",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$PLUGIN_ROOT/scripts/hooks.js\" tool-use"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "matcher": ".*",
+        "id": "session:stop",
+        "description": "Close the session and clear the session marker",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$PLUGIN_ROOT/scripts/hooks.js\" stop"
+          }
+        ]
+      }
+    ]
+  }
+}

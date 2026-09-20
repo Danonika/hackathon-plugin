@@ -35,6 +35,14 @@ type RoutingSettings struct {
 	TopK         int     `yaml:"top_k"`
 }
 
+type LearningSettings struct {
+	Enabled             bool    `yaml:"enabled"`
+	MinConfidence       float64 `yaml:"min_confidence"`
+	InjectMinConfidence float64 `yaml:"inject_min_confidence"`
+	MaxInject           int     `yaml:"max_inject"`
+	PromoteAfter        int     `yaml:"promote_after"`
+}
+
 type EvaluationSettings struct {
 	TechnicalTarget            float64 `yaml:"technical_target"`
 	DemoDayTarget              float64 `yaml:"demo_day_target"`
@@ -51,10 +59,11 @@ type EvaluationSettings struct {
 }
 
 type File struct {
-	OpenAI  OpenAISettings  `yaml:"openai"`
-	Storage StorageSettings `yaml:"storage"`
-	Tools   ToolSettings    `yaml:"tools"`
-	Routing RoutingSettings `yaml:"routing"`
+	OpenAI   OpenAISettings   `yaml:"openai"`
+	Storage  StorageSettings  `yaml:"storage"`
+	Tools    ToolSettings     `yaml:"tools"`
+	Routing  RoutingSettings  `yaml:"routing"`
+	Learning LearningSettings `yaml:"learning"`
 }
 
 // filePatch mirrors the numeric fields with pointers so an explicit zero can be
@@ -68,6 +77,13 @@ type filePatch struct {
 		FlyThreshold *float64 `yaml:"fly_threshold"`
 		TopK         *int     `yaml:"top_k"`
 	} `yaml:"routing"`
+	Learning struct {
+		Enabled             *bool    `yaml:"enabled"`
+		MinConfidence       *float64 `yaml:"min_confidence"`
+		InjectMinConfidence *float64 `yaml:"inject_min_confidence"`
+		MaxInject           *int     `yaml:"max_inject"`
+		PromoteAfter        *int     `yaml:"promote_after"`
+	} `yaml:"learning"`
 }
 
 type RoutingState struct {
@@ -132,6 +148,13 @@ func defaults() File {
 		Routing: RoutingSettings{
 			FlyThreshold: 0.55,
 			TopK:         5,
+		},
+		Learning: LearningSettings{
+			Enabled:             true,
+			MinConfidence:       0.5,
+			InjectMinConfidence: 0.7,
+			MaxInject:           6,
+			PromoteAfter:        3,
 		},
 	}
 }
@@ -221,6 +244,21 @@ func mergeNumeric(dst *File, src filePatch) {
 	}
 	if src.Routing.TopK != nil {
 		dst.Routing.TopK = *src.Routing.TopK
+	}
+	if src.Learning.Enabled != nil {
+		dst.Learning.Enabled = *src.Learning.Enabled
+	}
+	if src.Learning.MinConfidence != nil && *src.Learning.MinConfidence >= 0 {
+		dst.Learning.MinConfidence = *src.Learning.MinConfidence
+	}
+	if src.Learning.InjectMinConfidence != nil && *src.Learning.InjectMinConfidence >= 0 {
+		dst.Learning.InjectMinConfidence = *src.Learning.InjectMinConfidence
+	}
+	if src.Learning.MaxInject != nil && *src.Learning.MaxInject >= 0 {
+		dst.Learning.MaxInject = *src.Learning.MaxInject
+	}
+	if src.Learning.PromoteAfter != nil && *src.Learning.PromoteAfter >= 1 {
+		dst.Learning.PromoteAfter = *src.Learning.PromoteAfter
 	}
 }
 

@@ -5,3 +5,10 @@ command = "./plugins/hackathonkit/scripts/hackathonkit-mcp-launcher.sh"
 args = []
 startup_timeout_sec = 60
 tool_timeout_sec = 120
+
+# Live web search lets $theme-research verify external facts. Remove or set to
+# "off" when the environment must stay offline.
+web_search = "live"
+
+# Appended to every prompt (additive, unlike model_instructions_file).
+persistent_instructions = "Follow AGENTS.md. Call system.context before planning, use the Hackathon Agent Kit MCP tools for evidence, and never claim a result without a tool result behind it."

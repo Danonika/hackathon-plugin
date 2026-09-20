@@ -2,7 +2,7 @@
 
 Local Codex plugin backed by a typed MCP capability layer. Codex is the main reasoning engine, Skills define domain workflows, the local MCP server exposes deterministic and AI-powered capabilities, and the experimental Fly router recommends capability routes while Codex keeps the final decision.
 
-Status: v0.5.0. MCP runtime (24 tools), 16 skills, PDF/XLSX processing, Fly v2 (keyword + embeddings + kNN memory + mushroom-body learning + LLM classifier), Postgres/MinIO backends, demo dashboard and the evaluation subsystem (deterministic aggregation, calibration, loop decisions and bundle freezing) are in place.
+Status: v0.6.0. MCP runtime (28 tools), 16 skills, session hooks, durable learnings, Codex subagents, four harness adapters, PDF/XLSX processing, Fly v2 (keyword + embeddings + kNN memory + mushroom-body learning + LLM classifier), Postgres/MinIO backends, demo dashboard, install profiles/repair and the evaluation subsystem (deterministic aggregation, calibration, loop decisions and bundle freezing) are in place.
 
 ## Contents
 
@@ -11,6 +11,8 @@ Status: v0.5.0. MCP runtime (24 tools), 16 skills, PDF/XLSX processing, Fly v2 (
 - [Quickstart](#quickstart)
 - [Build flow](#build-flow)
 - [Skills](#skills)
+- [Session hooks](#session-hooks)
+- [Learnings](#learnings)
 - [MCP tools](#mcp-tools)
 - [Routing modes](#routing-modes)
 - [Evaluation subsystem](#evaluation-subsystem)
@@ -19,6 +21,7 @@ Status: v0.5.0. MCP runtime (24 tools), 16 skills, PDF/XLSX processing, Fly v2 (
 - [Configuration](#configuration)
 - [Observability](#observability)
 - [Plugin packaging](#plugin-packaging)
+- [Harness adapters](#harness-adapters)
 - [Scripts](#scripts)
 - [Repository layout](#repository-layout)
 - [Development](#development)
@@ -38,9 +41,10 @@ Codex (reasoning, final decisions)
   |     report-builder, judge, project-cost, roast-project, cp-expert-refactoring,
   |     system-design-expert, self-improvement-controller
   |
-  |-- MCP server (stdio JSON-RPC, 24 tools, one shared envelope per call)
-        system.*            context and capabilities
+  |-- MCP server (stdio JSON-RPC, 28 tools, one shared envelope per call)
+        system.*            context, capabilities, context budget
         routing.fly_*       capability recommendation + learning feedback
+        learning.*          durable trigger/insight learnings with confidence
         eval.*              deterministic evaluation, calibration, decisions, bundles
         files/documents/*   describe, ingest, extract, get
         knowledge.*         chunk, index, TF-IDF search
@@ -50,7 +54,11 @@ Codex (reasoning, final decisions)
         charts/reports.*    SVG and markdown/HTML artifacts
         audio/vision.*      OpenAI transcription and vision (need OPENAI_API_KEY)
   |
+  |-- Hooks (Node 18+): SessionStart context injection, PostToolUse events, Stop handoff
+  |
   |-- Storage: data/ (authoritative local files)
+        data/index/learnings.json   durable learnings
+        data/control/session.env    current session marker
         Postgres  optional: artifacts, routing_runs, fly_predictions, eval_runs
         MinIO     optional: artifact blob mirror with local read fallback
 ```
@@ -119,7 +127,28 @@ Skills are prompt packages (`plugins/hackathonkit/skills/`). Implicit skills tri
 | `system-design-expert` | explicit-only | Module boundaries, contracts, failure isolation, storage, observability | smoke, routing toggle |
 | `self-improvement-controller` | explicit-only | Bounded improvement rounds, rollback on regression, stop conditions | `eval.calibrate/compare/freeze_bundle` + other skills |
 
-Each skill ships `agents/openai.yaml` (display name, short description, default prompt) and references under `references/` where deeper rules are needed.
+Each skill ships `agents/openai.yaml` (display name, short description, default prompt) and references under `references/` where deeper rules are needed. Authoring rules live in `docs/SKILL-STANDARD.md`.
+
+## Session hooks
+
+`plugins/hackathonkit/hooks/codex-hooks.json` registers three best-effort hooks (Node 18+, never blocks a session):
+
+| Hook | What it does |
+|---|---|
+| `SessionStart` | Injects a compact context block: routing mode, current plan stage, top learnings, pending eval decisions |
+| `PostToolUse` | Appends `{ts, type, session_id, tool}` to `logs/session-events.jsonl` for the control plane |
+| `Stop` | Appends `session_end` to `logs/sessions.jsonl` and clears `data/control/session.env` |
+
+The context block comes from `hackathonkit-mcp --session-context` (local binary, then `docker compose`, then a shell fallback). Session state lives in `data/control/session.env` (gitignored).
+
+## Learnings
+
+Durable, confidence-scored trigger/insight pairs stored in `data/index/learnings.json` (cap 500, deduplicated by trigger+insight):
+
+- `learning.record` - record a lesson with `outcome` (`success`/`failure`/`neutral`), `scope` (`project`/`global`) and evidence. Confidence grows with successes: `0.3 + 0.6 * successes / (successes + failures + 1)`, clamped to 0.3-0.9.
+- `learning.recall` - semantic recall when embeddings are available (keyword overlap otherwise), weighted `0.6 * similarity + 0.4 * confidence`; project scope includes global learnings.
+- `learning.promote` - project to global once observed at least `promote_after` times (default 3) and confident enough.
+- `SessionStart` injects the top `max_inject` (default 6) learnings with confidence >= `inject_min_confidence` (default 0.7). Configure in `configs/config.yaml` under `learning:`.
 
 ## MCP tools
 
@@ -133,6 +162,7 @@ Every tool returns the shared envelope: `status` (`ok` | `partial` | `error`), `
 | `system.capabilities` | - | capability groups (documents, rag, speech, vision, data_analysis, timeseries, classification, charts, reports, evaluation), experimental `fly_router`, tool list |
 | `routing.fly_recommend` | `task` (required), `input_metadata`, `available_capabilities` | `route`, ranked `recommendations`, metrics `max_score`, `threshold`, `encoder`, `category_scores` |
 | `routing.fly_feedback` | `task`, `chosen` (both required), `recommended`, `source` (`accepted`/`codex-correction`/`normal-teacher`/`fallback`), `input_metadata` | `stored`, `learned`, `memory_size` |
+| `system.context_budget` | - | per-item token estimates for tool schemas, skills, references and manifests, flags and recommendations |
 
 ### Evaluation
 
@@ -142,6 +172,14 @@ Every tool returns the shared envelope: `status` (`ok` | `partial` | `error`), `
 | `eval.calibrate` | `run1[]`/`run2[]` or `run1_json[]`/`run2_json[]`, `snapshot_sha`, `min_delta`, `persist` (default true) | `calibration.retest_delta`, `calibration.noise_floor`, `calibration_path` |
 | `eval.compare` | `mode` (`technical`/`judge`), `candidate` (required), `best`, `target`, `noise_floor`, `mandatory_scenario_failed`, `snapshot_sha`, `persist` (default false) | `decision` (`target_reached`/`accept`/`rollback`/`stop`), `reason`, `improvement` |
 | `eval.freeze_bundle` | `out` (default `judge-bundle`), `exclude[]`, `read_only` (default true), `model` | `bundle_path`, `bundle_hash`, `git_sha`, `files`, `bytes`, `excluded[]` |
+
+### Learning
+
+| Tool | Arguments | Returns |
+|---|---|---|
+| `learning.record` | `trigger` (required), `insight` (required), `outcome` (`success`/`failure`/`neutral`), `scope` (`project`/`global`), `evidence[]` | `id`, `confidence`, `observations`, `scope`, `created` |
+| `learning.recall` | `query` (required), `limit` (5), `min_confidence`, `scope` (`project`/`global`/`all`) | ranked `matches[]` with `score` and the full learning |
+| `learning.promote` | `id` (required) | `promoted`, `reason`, `learning` |
 
 ### Files and documents
 
@@ -307,6 +345,20 @@ Every call gets a `trace_id` (`kit-...`) that flows through the envelope, logs a
 
 After editing plugin files, bump the plugin version and re-run `scripts/setup`; Codex loads plugins at session start.
 
+## Harness adapters
+
+The skill directory stays the single source of truth; `scripts/sync-harness.sh` (and `.ps1`) generates mirrors and verifies committed adapter manifests:
+
+| Harness | Files | Notes |
+|---|---|---|
+| Codex | plugin + `.codex/config.toml`, `.codex/AGENTS.md`, `.codex/agents/{researcher,reviewer,evaluator}.toml` | full support: skills, hooks, subagents, MCP |
+| Claude Code | `.claude-plugin/plugin.json`, `.claude-plugin/marketplace.json`, generated `.claude/skills` | MCP command uses a repository-relative compose file |
+| OpenCode | `.opencode/opencode.json`, `.opencode/README.md` | loads `AGENTS.md`, registers the MCP server |
+| Cursor | `.cursor/rules/hackathonkit.mdc` | conventions and MCP usage |
+| Any harness | `AGENTS.md` | portable instructions |
+
+Install profiles: `scripts/setup.sh --profile core` excludes the explicit-only evaluation skills from the generated mirrors (the plugin itself always ships all 16). `scripts/repair.sh` regenerates `.mcp.json`, mirrors and install state; `scripts/uninstall.sh [--yes]` removes generated artifacts (dry run without `--yes`). `configs/install-state.json` records version, profile, runtime and adapters.
+
 ## Scripts
 
 | Script | Purpose |
@@ -320,15 +372,24 @@ After editing plugin files, bump the plugin version and re-run `scripts/setup`; 
 ## Repository layout
 
 ```text
+AGENTS.md                  portable instructions for every harness
+docs/                      SKILL-STANDARD.md + skill template
 plugins/hackathonkit/          Codex plugin (single source of truth for skills)
   .codex-plugin/plugin.json
   .mcp.json               generated by scripts/setup (docker compose run, absolute repo root, not committed)
   .mcp.json.template      template with {{REPO_ROOT}} placeholder
+  hooks/codex-hooks.json  SessionStart / PostToolUse / Stop hook registration
   skills/                 16 skills, each with SKILL.md + agents/openai.yaml (+ references/)
-  scripts/                optional dev launchers (prefer bin/, fall back to docker compose)
+  scripts/                launchers and hooks.js (session lifecycle)
 .agents/plugins/           repo marketplace
 .agents/skills/            generated fallback mirror (scripts/sync-skills)
-.codex/config.toml         fallback MCP registration (POSIX launcher; see comment for Windows)
+.claude-plugin/            Claude Code plugin + marketplace manifests
+.claude/skills/            generated Claude Code project mirror
+.opencode/                 OpenCode config + README
+.cursor/rules/             Cursor rules
+.codex/config.toml         fallback MCP registration, web search, persistent instructions
+.codex/AGENTS.md           Codex supplement
+.codex/agents/             researcher / reviewer / evaluator subagents (read-only)
 cmd/hackathonkit-mcp/          MCP stdio server
 cmd/demo-api/              demo dashboard + API (routing toggle, logs, files, fly-viz)
 cmd/demo-api/static/       embedded dashboard pages
@@ -336,15 +397,16 @@ cmd/fly-train/             offline MB trainer + kNN memory rebuilder
 internal/mcp/              JSON-RPC, registry, contracts, server
 internal/config/           config + live routing/evaluation state (atomic writes)
 internal/routing/fly/      Fly router (keyword, embeddings, kNN memory, MB brain, LLM)
+internal/learning/         durable confidence-scored learnings (instincts)
 internal/evaluation/       judge-report validation/aggregation, calibration, loop decisions, bundle freezer
 internal/tools/            capability implementations
 internal/storage/          filesystem storage with path sanitization + backend attach
 internal/metadata/         Postgres recorder (artifacts, routing runs, fly predictions, eval runs)
 internal/objectstore/      MinIO client (artifact mirror, read fallback)
 internal/openai/           thin OpenAI adapters (chat, vision, embeddings, audio)
-configs/                   config.yaml, routing.yaml, evaluation.yaml
-data/input, data/artifacts, data/index, logs/
-scripts/                   setup, doctor, smoke, sync-skills, plugin-check (ps1 + sh)
+configs/                   config.yaml, routing.yaml, evaluation.yaml, install-state.json (generated)
+data/input, data/artifacts, data/index, data/control, logs/
+scripts/                   setup, doctor, smoke, sync-skills, sync-harness, repair, uninstall, plugin-check (ps1 + sh)
 evals/                     judges, calibration, decisions, project-cost, roast, snapshots (see evals/README.md)
 ```
 
@@ -357,8 +419,11 @@ go test ./...
 go run ./cmd/hackathonkit-mcp --selftest        # in-process MCP handshake
 go run ./cmd/hackathonkit-mcp --list-tools      # tool descriptors JSON
 go run ./cmd/hackathonkit-mcp --set-routing-mode fly
+go run ./cmd/hackathonkit-mcp --session-context # context block used by the SessionStart hook
 go run ./cmd/demo-api                       # demo dashboard + routing toggle API (http://127.0.0.1:8787)
 go run ./cmd/fly-train -model knn           # rebuild Fly memory from feedback logs
+sh scripts/sync-harness.sh                  # regenerate mirrors, verify adapters
+sh scripts/repair.sh                        # regenerate missing generated artifacts
 ```
 
 Sample dataset: `data/input/sample-telemetry.csv` (72 hourly readings with two planted anomalies). Try:
@@ -367,7 +432,7 @@ Sample dataset: `data/input/sample-telemetry.csv` (72 hourly readings with two p
 
 ## Testing
 
-`go test ./...` covers the JSON-RPC handshake, notification suppression, panic containment, live routing and evaluation config re-reads, path sanitization and backend fallback, observability append/tail, judge aggregation/calibration/decisions, the bundle freezer and the eval tool handlers. Run `go run ./cmd/hackathonkit-mcp --selftest` for the end-to-end handshake and `scripts/smoke.sh` for the process-level check.
+`go test ./...` covers the JSON-RPC handshake, notification suppression, panic containment, live routing and evaluation config re-reads, path sanitization and backend fallback, observability append/tail, judge aggregation/calibration/decisions, the bundle freezer, the eval tool handlers, learning confidence/recall/promotion and the context-budget estimator. Run `go run ./cmd/hackathonkit-mcp --selftest` for the end-to-end handshake and `scripts/smoke.sh` for the process-level check.
 
 ## Known limitations
 
@@ -380,6 +445,9 @@ Sample dataset: `data/input/sample-telemetry.csv` (72 hourly readings with two p
 - Judge scoring itself is LLM-driven; only validation, aggregation, calibration and loop decisions are deterministic code.
 - The MCP layer has no internet access: `theme-research` uses the host's web search when available and otherwise works from the provided corpus, marking external gaps explicitly.
 - Codex plugin install writes to `~/.codex`; after editing plugin files bump the plugin version and re-run setup. The `.codex/config.toml` fallback works without the plugin.
+- Session hooks require Node 18+ on the host (Codex CLI already needs Node). Every hook is best-effort and never blocks a session; without Node the hooks are skipped.
+- `--profile core` filters only the generated skill mirrors; the Codex plugin always ships all 16 skills.
+- Learning recall uses embeddings when `OPENAI_API_KEY` is set and keyword overlap otherwise; learnings never leave the local repository.
 
 ## Troubleshooting
 

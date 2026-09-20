@@ -1,15 +1,32 @@
+param(
+  [string]$Profile = "full"
+)
 $ErrorActionPreference = "Continue"
+if ($Profile -notin @("core", "full")) {
+  Write-Error "[setup] invalid profile: $Profile (expected core or full)"
+  exit 1
+}
 $root = Split-Path -Parent (Split-Path -Parent $PSCommandPath)
 Set-Location -LiteralPath $root
-Write-Host "[setup] repository root: $root"
+Write-Host "[setup] repository root: $root (profile: $Profile)"
 
 if (-not (Test-Path -LiteralPath ".env")) {
   Copy-Item -LiteralPath ".env.example" -Destination ".env"
   Write-Host "[setup] created .env from .env.example (set OPENAI_API_KEY for speech/vision)"
 }
 
-& (Join-Path $root "scripts\sync-skills.ps1")
-if ($LASTEXITCODE -ne 0) { Write-Error "[setup] sync-skills failed"; exit 1 }
+& (Join-Path $root "scripts\sync-harness.ps1")
+if ($LASTEXITCODE -ne 0) { Write-Error "[setup] sync-harness failed"; exit 1 }
+
+if ($Profile -eq "core") {
+  foreach ($dir in @((Join-Path $root ".agents\skills"), (Join-Path $root ".claude\skills"))) {
+    if (-not (Test-Path $dir)) { continue }
+    foreach ($skill in @("judge", "project-cost", "roast-project", "cp-expert-refactoring", "system-design-expert", "self-improvement-controller")) {
+      Remove-Item -Recurse -Force (Join-Path $dir $skill) -ErrorAction SilentlyContinue
+    }
+  }
+  Write-Host "[setup] core profile: explicit-only evaluation skills excluded from mirrors (the plugin still ships all skills)"
+}
 
 $templatePath = Join-Path $root "plugins\hackathonkit\.mcp.json.template"
 if (-not (Test-Path -LiteralPath $templatePath)) {
@@ -28,7 +45,7 @@ try {
 }
 Write-Host "[setup] generated plugins/hackathonkit/.mcp.json with the absolute repository root"
 
-New-Item -ItemType Directory -Force -Path (Join-Path $root "logs"), (Join-Path $root "data\artifacts"), (Join-Path $root "data\index") | Out-Null
+New-Item -ItemType Directory -Force -Path (Join-Path $root "logs"), (Join-Path $root "data\artifacts"), (Join-Path $root "data\index"), (Join-Path $root "data\control") | Out-Null
 
 $dockerOk = $false
 if (Get-Command docker -ErrorAction SilentlyContinue) {
@@ -36,7 +53,9 @@ if (Get-Command docker -ErrorAction SilentlyContinue) {
   $dockerOk = ($LASTEXITCODE -eq 0)
 }
 
+$runtime = "binary"
 if ($dockerOk) {
+  $runtime = "docker"
   Write-Host "[setup] building MCP image"
   docker compose -f (Join-Path $root "docker-compose.yml") build hackathonkit-mcp
   if ($LASTEXITCODE -ne 0) { Write-Error "[setup] docker compose build failed"; exit 1 }
@@ -56,6 +75,8 @@ if ($dockerOk) {
   if ($LASTEXITCODE -ne 0) { Write-Error "[setup] go build demo-api failed"; exit 1 }
   Write-Host "[setup] local binaries built in bin/"
 }
+
+& (Join-Path $root "scripts\write-install-state.ps1") -Root $root -Profile $Profile -Runtime $runtime
 
 $codex = Get-Command codex -ErrorAction SilentlyContinue
 if ($codex) {

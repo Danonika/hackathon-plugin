@@ -12,6 +12,15 @@ Read `warnings` before trusting `data`; keep `sources` for citations.
 | `system.capabilities` | - | capability groups, experimental flags, tool list |
 | `routing.fly_recommend` | `task` (required), `input_metadata`, `available_capabilities` | `route`, `recommendations`, `metrics.max_score`, `metrics.threshold`, `metrics.encoder` |
 | `routing.fly_feedback` | `task` (required), `chosen` (required), `recommended`, `source`, `input_metadata` | `stored`, `learned`, `memory_size` |
+| `system.context_budget` | - | per-item token estimates for tools, skills, references and manifests, flags, recommendations |
+
+## Learning
+
+| Tool | Arguments | Returns |
+|---|---|---|
+| `learning.record` | `trigger` (required), `insight` (required), `outcome` (`success`/`failure`/`neutral`), `scope` (`project`/`global`), `evidence[]` | `id`, `confidence`, `observations`, `created` |
+| `learning.recall` | `query` (required), `limit` (5), `min_confidence`, `scope` (`project`/`global`/`all`) | ranked `matches[]` with `score` and full learning |
+| `learning.promote` | `id` (required) | `promoted`, `reason`, `learning` |
 
 ## Evaluation
 

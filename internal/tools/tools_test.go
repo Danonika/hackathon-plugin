@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"hackathonkit.local/agentkit/internal/config"
+	"hackathonkit.local/agentkit/internal/learning"
 	"hackathonkit.local/agentkit/internal/mcp"
 	"hackathonkit.local/agentkit/internal/observability"
 	"hackathonkit.local/agentkit/internal/routing/fly"
@@ -33,11 +34,12 @@ func testRegistry(t *testing.T) (*mcp.Registry, string) {
 	mgr := config.NewManager(root)
 	reg := mcp.NewRegistry()
 	RegisterAll(reg, Deps{
-		Cfg:     mgr,
-		Store:   storage.New(root, mgr.Config().Storage),
-		Metrics: observability.NewMetrics(),
-		Router:  fly.NewRouter(mgr.Config().Routing),
-		Version: "test",
+		Cfg:      mgr,
+		Store:    storage.New(root, mgr.Config().Storage),
+		Metrics:  observability.NewMetrics(),
+		Router:   fly.NewRouter(mgr.Config().Routing),
+		Learning: learning.NewStore(filepath.Join(root, "data", "index", "learnings.json"), learning.ProjectKey(root)),
+		Version:  "test",
 	})
 	return reg, root
 }

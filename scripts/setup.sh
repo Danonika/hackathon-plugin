@@ -1,8 +1,38 @@
 #!/usr/bin/env sh
 set -e
 ROOT="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
+
+PROFILE="full"
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --profile)
+      PROFILE="${2:-}"
+      shift 2
+      ;;
+    --profile=*)
+      PROFILE="${1#*=}"
+      shift
+      ;;
+    -h|--help)
+      echo "usage: scripts/setup.sh [--profile core|full]"
+      exit 0
+      ;;
+    *)
+      echo "[setup] unknown argument: $1" >&2
+      exit 1
+      ;;
+  esac
+done
+case "$PROFILE" in
+  core|full) ;;
+  *)
+    echo "[setup] invalid profile: $PROFILE (expected core or full)" >&2
+    exit 1
+    ;;
+esac
+
 cd "$ROOT"
-echo "[setup] repository root: $ROOT"
+echo "[setup] repository root: $ROOT (profile: $PROFILE)"
 
 if [ ! -f .env ]; then
   cp .env.example .env
@@ -15,32 +45,27 @@ if command -v id >/dev/null 2>&1 && ! grep -q '^HACKATHONKIT_UID=' .env 2>/dev/n
   echo "[setup] recorded HACKATHONKIT_UID/HACKATHONKIT_GID in .env for bind-mount ownership"
 fi
 
-sh "$ROOT/scripts/sync-skills.sh"
+sh "$ROOT/scripts/sync-harness.sh"
 
-TEMPLATE="$ROOT/plugins/hackathonkit/.mcp.json.template"
-if [ ! -f "$TEMPLATE" ]; then
-  echo "[setup] template not found: $TEMPLATE" >&2
-  exit 1
+if [ "$PROFILE" = "core" ]; then
+  for dir in "$ROOT/.agents/skills" "$ROOT/.claude/skills"; do
+    [ -d "$dir" ] || continue
+    for skill in judge project-cost roast-project cp-expert-refactoring system-design-expert self-improvement-controller; do
+      rm -rf "$dir/$skill"
+    done
+  done
+  echo "[setup] core profile: explicit-only evaluation skills excluded from mirrors (the plugin still ships all skills)"
 fi
-TMP_MANIFEST="$ROOT/plugins/hackathonkit/.mcp.json.tmp.$$"
-cleanup_manifest() { rm -f "$TMP_MANIFEST"; }
-trap cleanup_manifest EXIT
-trap 'exit 130' INT
-trap 'exit 143' TERM
-awk -v root="$ROOT" '{
-  while ((i = index($0, "{{REPO_ROOT}}")) > 0) {
-    $0 = substr($0, 1, i - 1) root substr($0, i + 13)
-  }
-  print
-}' "$TEMPLATE" > "$TMP_MANIFEST"
-mv "$TMP_MANIFEST" "$ROOT/plugins/hackathonkit/.mcp.json"
-echo "[setup] generated plugins/hackathonkit/.mcp.json with the absolute repository root"
+
+sh "$ROOT/scripts/gen-mcp-manifest.sh" "$ROOT"
 
 # Pre-create writable mount points as the host user so the non-root
 # containers can write logs and artifacts through the bind mounts.
-mkdir -p "$ROOT/logs" "$ROOT/data/artifacts" "$ROOT/data/index"
+mkdir -p "$ROOT/logs" "$ROOT/data/artifacts" "$ROOT/data/index" "$ROOT/data/control"
 
+RUNTIME="binary"
 if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
+  RUNTIME="docker"
   docker compose -f "$ROOT/docker-compose.yml" build hackathonkit-mcp
   docker compose -f "$ROOT/docker-compose.yml" up -d postgres redis minio
   echo "[setup] MCP image built, infrastructure started"
@@ -51,6 +76,8 @@ else
   go build -o bin/hackathonkit-demo-api ./cmd/demo-api
   echo "[setup] local binaries built in bin/"
 fi
+
+sh "$ROOT/scripts/write-install-state.sh" "$ROOT" "$PROFILE" "$RUNTIME"
 
 if command -v codex >/dev/null 2>&1; then
   echo "[setup] registering repo marketplace and installing the Hackathon Agent Kit plugin"
