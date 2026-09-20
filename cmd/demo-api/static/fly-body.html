@@ -107,7 +107,16 @@ async function loadFly() {
         } else {
           mesh.scale.setScalar(0.1);
         }
-        g.add(mesh);
+        const gpos = (geom.getAttribute('pos') || '0 0 0').split(/\s+/).map(Number);
+        const holder = new THREE.Group();
+        holder.position.set(gpos[0] || 0, gpos[1] || 0, gpos[2] || 0);
+        const gquat = geom.getAttribute('quat');
+        if (gquat) {
+          const q = gquat.split(/\s+/).map(Number);
+          holder.quaternion.set(q[1], q[2], q[3], q[0]);
+        }
+        holder.add(mesh);
+        g.add(holder);
         meshCount++;
       }
       await walk(body, g);
