@@ -1,0 +1,205 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MB 3D — схема грибовидного тела</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: #05070f; color: #e2e8f0; font-family: "Segoe UI", system-ui, sans-serif; overflow: hidden; }
+  #scene { position: fixed; inset: 0; }
+  .panel { position: fixed; z-index: 5; background: rgba(10,16,32,.82); border: 1px solid #24304d; border-radius: 10px; padding: 10px 14px; font-size: 12.5px; backdrop-filter: blur(6px); }
+  #top { top: 12px; left: 12px; max-width: 520px; }
+  #top h1 { margin: 0 0 4px; font-size: 15px; }
+  #top .muted { color: #8ea3c7; font-size: 11.5px; line-height: 1.5; }
+  #top a { color: #93c5fd; }
+  #bottom { bottom: 12px; left: 12px; min-width: 380px; }
+  .good { color: #22c55e; } .bad { color: #f87171; } .muted { color: #64748b; }
+  #err { position: fixed; left: 12px; top: 50%; max-width: 80vw; z-index: 9; background: rgba(80,10,10,.92); border: 1px solid #ef4444; border-radius: 8px; padding: 10px 12px; font-family: ui-monospace, Consolas, monospace; font-size: 12px; display: none; white-space: pre-wrap; }
+</style>
+</head>
+<body>
+<div id="scene"></div>
+<div class="panel" id="top">
+  <h1>🪰 MB 3D — грибовидное тело в работе</h1>
+  <div class="muted">два полушария · KC-нейроны внутри · синапсы KC→MBON · PAM (дофамин) / PPL1 (боль) · <a href="/fly-body">← к мухе</a></div>
+  <div class="muted" id="status">загрузка…</div>
+</div>
+<div class="panel" id="bottom">
+  <div id="mbon" class="muted">MBON: —</div>
+  <div id="verdict" class="muted">ожидание события…</div>
+  <div style="margin-top:4px"><span class="good" id="pam">PAM 0</span> · <span class="bad" id="ppl1">PPL1 0</span> · <span class="muted" id="encoder">—</span></div>
+</div>
+<div id="err"></div>
+<script>
+window.onerror = function (msg, src, line, col) {
+  var box = document.getElementById('err');
+  box.style.display = 'block';
+  box.textContent = 'JS error: ' + msg + '\n' + (src || '') + ':' + line + ':' + col;
+};
+</script>
+<script type="importmap">
+{ "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js" } }
+</script>
+<script type="module">
+import * as THREE from 'three';
+
+const scene = new THREE.Scene();
+scene.fog = new THREE.FogExp2(0x05070f, 0.06);
+const camera = new THREE.PerspectiveCamera(45, innerWidth / innerHeight, 0.1, 100);
+camera.position.set(0, 0.5, 4.2);
+camera.lookAt(0, -0.1, 0);
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setSize(innerWidth, innerHeight);
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+document.getElementById('scene').appendChild(renderer.domElement);
+scene.add(new THREE.AmbientLight(0xffffff, 1.1));
+const key = new THREE.DirectionalLight(0xcfe0ff, 1.4); key.position.set(3, 5, 4); scene.add(key);
+const rim = new THREE.PointLight(0x8b5cf6, 30, 30); rim.position.set(-4, 2, -4); scene.add(rim);
+
+const brain = new THREE.Group();
+scene.add(brain);
+
+const hemiMat = new THREE.MeshStandardMaterial({ color: 0xff9bb3, transparent: true, opacity: 0.07, roughness: .85, side: THREE.DoubleSide });
+for (const s of [-1, 1]) {
+  const hemi = new THREE.Mesh(new THREE.SphereGeometry(1, 40, 28), hemiMat);
+  hemi.position.set(0.36 * s, 0, 0);
+  hemi.scale.set(0.44, 0.62, 0.52);
+  brain.add(hemi);
+}
+
+const KC_N = 1400;
+const kcGeo = new THREE.BufferGeometry();
+const kcPos = new Float32Array(KC_N * 3);
+const kcCol = new Float32Array(KC_N * 3);
+for (let i = 0; i < KC_N; i++) {
+  const side = i % 2 === 0 ? -1 : 1;
+  let x = 0, y = 0, z = 0, d = 2;
+  while (d > 1) {
+    x = Math.random() * 2 - 1; y = Math.random() * 2 - 1; z = Math.random() * 2 - 1;
+    d = (x * x) / (0.42 * 0.42) + (y * y) / (0.6 * 0.6) + (z * z) / (0.5 * 0.5);
+  }
+  kcPos[i * 3] = 0.36 * side + x * 0.88;
+  kcPos[i * 3 + 1] = y * 0.94;
+  kcPos[i * 3 + 2] = z * 0.88;
+  kcCol[i * 3] = 0.42; kcCol[i * 3 + 1] = 0.46; kcCol[i * 3 + 2] = 0.7;
+}
+kcGeo.setAttribute('position', new THREE.BufferAttribute(kcPos, 3));
+kcGeo.setAttribute('color', new THREE.BufferAttribute(kcCol, 3));
+const kcMat = new THREE.PointsMaterial({ size: 0.026, vertexColors: true, transparent: true, opacity: .95 });
+brain.add(new THREE.Points(kcGeo, kcMat));
+
+const mbonMeshes = [];
+for (let i = 0; i < 10; i++) {
+  const m = new THREE.Mesh(new THREE.SphereGeometry(0.055, 14, 12), new THREE.MeshStandardMaterial({ color: 0x7c3aed, emissive: 0x3b1d8f }));
+  const a = (i / 10) * Math.PI * 2;
+  m.position.set(Math.cos(a) * 0.95, -0.95, Math.sin(a) * 0.95);
+  brain.add(m); mbonMeshes.push(m);
+}
+const pam3 = new THREE.Mesh(new THREE.SphereGeometry(0.08, 16, 12), new THREE.MeshStandardMaterial({ color: 0x38bdf8, emissive: 0x0b4a6f }));
+pam3.position.set(-0.55, -1.25, 0); brain.add(pam3);
+const ppl13 = new THREE.Mesh(new THREE.SphereGeometry(0.07, 16, 12), new THREE.MeshStandardMaterial({ color: 0xef4444, emissive: 0x7f1d1d }));
+ppl13.position.set(0.55, -1.25, 0); brain.add(ppl13);
+
+const LINE_N = 64;
+const lineGeo = new THREE.BufferGeometry();
+lineGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(LINE_N * 2 * 3), 3));
+const lineMat = new THREE.LineBasicMaterial({ color: 0x22c55e, transparent: true, opacity: 0.0 });
+brain.add(new THREE.LineSegments(lineGeo, lineMat));
+
+const mb = { active: [], mbon: {}, pam: 0, ppl1: 0, reward: false, flashUntil: 0, lastTs: null, encoder: '' };
+const $ = id => document.getElementById(id);
+
+async function poll() {
+  try {
+    const [neurons, feedback] = await Promise.all([
+      fetch('/fly-neuron-events?limit=20').then(r => r.json()),
+      fetch('/fly-feedback?limit=10').then(r => r.json())
+    ]);
+    const events = (neurons && neurons.events) || [];
+    const rec = events.filter(e => e.type === 'recommend').pop();
+    if (rec) {
+      mb.encoder = rec.encoder || '';
+      mb.mbon = rec.mbon || {};
+      mb.active = (rec.active_kc || []).map(s => s.index % KC_N);
+      const top = Object.entries(mb.mbon).sort((a, b) => b[1] - a[1]).slice(0, 3)
+        .map(([k, v]) => k + ' ' + Math.round(v * 100) + '%').join(' · ');
+      $('status').textContent = 'encoder: ' + (mb.encoder || '?') + ' · route: ' + (rec.route || '?') + ' · max ' + (rec.max_score ?? '?');
+      $('mbon').textContent = 'MBON: ' + (top || '—');
+    }
+    const fb = events.filter(e => e.type === 'feedback').pop();
+    if (fb && fb.ts !== mb.lastTs) {
+      mb.lastTs = fb.ts;
+      mb.reward = !!fb.reward;
+      mb.pam = fb.pam || 0;
+      mb.ppl1 = fb.ppl1 || 0;
+      mb.flashUntil = performance.now() + 2000;
+      $('pam').textContent = 'PAM ' + mb.pam;
+      $('ppl1').textContent = 'PPL1 ' + mb.ppl1;
+      $('verdict').innerHTML = mb.reward
+        ? '<span class="good">🍬 награда — веса KC→MBON усилились (PAM)</span>'
+        : '<span class="bad">⚡ ошибка — ошибочные связи ослабли (PPL1)</span>';
+    }
+    $('encoder').textContent = mb.encoder || '—';
+  } catch (e) {
+    $('status').textContent = 'offline: ' + e.message;
+  }
+}
+poll(); setInterval(poll, 2500);
+
+const clock = new THREE.Clock();
+const baseCol = new THREE.Color(0.42, 0.46, 0.7);
+const flashCol = new THREE.Color(0x22c55e);
+
+function animate() {
+  requestAnimationFrame(animate);
+  const t = clock.getElapsedTime();
+  const flashing = performance.now() < mb.flashUntil;
+  flashCol.set(mb.reward ? 0x22c55e : 0xf87171);
+
+  for (let i = 0; i < KC_N; i++) {
+    const k = i * 3;
+    const breathe = 0.06 * Math.sin(t * 1.4 + i * 0.37);
+    kcCol[k] = baseCol.r + breathe;
+    kcCol[k + 1] = baseCol.g + breathe;
+    kcCol[k + 2] = baseCol.b + breathe;
+  }
+  for (let a = 0; a < mb.active.length && a < LINE_N; a++) {
+    const j = mb.active[a];
+    if (j < 0 || j >= KC_N) continue;
+    kcCol[j * 3] = flashCol.r; kcCol[j * 3 + 1] = flashCol.g; kcCol[j * 3 + 2] = flashCol.b;
+  }
+  kcGeo.attributes.color.needsUpdate = true;
+
+  const entries = Object.entries(mb.mbon).sort((x, y) => y[1] - x[1]);
+  const max = Math.max.apply(null, entries.map(e => e[1]).concat([0.001]));
+  mbonMeshes.forEach((m, i) => {
+    const v = entries[i] ? entries[i][1] / max : 0;
+    m.scale.setScalar(0.6 + 1.6 * v + 0.08 * Math.sin(t * 2 + i));
+    m.material.emissiveIntensity = 0.3 + 1.4 * v;
+  });
+
+  const pos = lineGeo.attributes.position.array;
+  const target = mbonMeshes[0].position;
+  for (let k = 0; k < LINE_N; k++) {
+    const j = mb.active[k] !== undefined ? mb.active[k] : 0;
+    pos[k * 6] = kcPos[j * 3]; pos[k * 6 + 1] = kcPos[j * 3 + 1]; pos[k * 6 + 2] = kcPos[j * 3 + 2];
+    pos[k * 6 + 3] = target.x; pos[k * 6 + 4] = target.y; pos[k * 6 + 5] = target.z;
+  }
+  lineGeo.attributes.position.needsUpdate = true;
+  lineMat.color.copy(flashCol);
+  lineMat.opacity = flashing ? 0.5 : (mb.active.length ? 0.12 : 0.0);
+
+  const pulse = flashing ? 1 + 0.5 * Math.sin(performance.now() / 90) : 1 + 0.06 * Math.sin(t * 3);
+  pam3.scale.setScalar(pulse * (mb.reward ? 1.6 : 1));
+  ppl13.scale.setScalar(pulse * (mb.reward ? 1 : 1.6));
+
+  brain.rotation.y = t * 0.25;
+  renderer.render(scene, camera);
+}
+animate();
+addEventListener('resize', () => { camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix(); renderer.setSize(innerWidth, innerHeight); });
+</script>
+</body>
+</html>

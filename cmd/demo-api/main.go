@@ -108,6 +108,15 @@ func main() {
 		}
 		http.StripPrefix("/fly-body/", http.FileServer(http.Dir(base))).ServeHTTP(w, r)
 	})
+	mux.HandleFunc("/mb-3d", func(w http.ResponseWriter, r *http.Request) {
+		page, err := staticFS.ReadFile("static/mb-3d.html")
+		if err != nil {
+			http.Error(w, "static page missing", http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, _ = w.Write(page)
+	})
 	mux.HandleFunc("/fly-body", func(w http.ResponseWriter, r *http.Request) {
 		page, err := staticFS.ReadFile("static/fly-body.html")
 		if err != nil {
