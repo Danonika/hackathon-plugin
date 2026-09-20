@@ -1,7 +1,7 @@
 {
   "name": "hackathonkit",
-  "version": "0.4.1",
-  "description": "Hackathon Agent Kit: local MCP capability layer with Normal/Fly routing, document, knowledge, data, timeseries, media and report capabilities.",
+  "version": "0.5.0",
+  "description": "Hackathon Agent Kit: local MCP capability layer with Normal/Fly routing, document, knowledge, data, timeseries, media, report and evaluation capabilities.",
   "skills": "./skills/",
   "mcpServers": "./.mcp.json"
 }

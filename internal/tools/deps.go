@@ -26,6 +26,7 @@ type Deps struct {
 
 func RegisterAll(reg *mcp.Registry, d Deps) {
 	registerSystem(reg, d)
+	registerEvaluation(reg, d)
 	registerFiles(reg, d)
 	registerDocuments(reg, d)
 	registerKnowledge(reg, d)
@@ -129,7 +130,7 @@ func argMap(args map[string]any, key string) map[string]any {
 func domainCapabilities(reg *mcp.Registry) []string {
 	out := []string{}
 	for _, name := range reg.Names() {
-		if strings.HasPrefix(name, "system.") || strings.HasPrefix(name, "routing.") || strings.HasPrefix(name, "files.") {
+		if strings.HasPrefix(name, "system.") || strings.HasPrefix(name, "routing.") || strings.HasPrefix(name, "files.") || strings.HasPrefix(name, "eval.") {
 			continue
 		}
 		out = append(out, name)

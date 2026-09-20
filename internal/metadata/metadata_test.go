@@ -19,6 +19,9 @@ func TestDisabledRecorder(t *testing.T) {
 	if err := recorder.RecordFlyPrediction(context.Background(), FlyPrediction{Route: "data"}); err != nil {
 		t.Fatal(err)
 	}
+	if err := recorder.RecordEvalRun(context.Background(), EvalRun{Kind: "aggregate", Score: 84}); err != nil {
+		t.Fatal(err)
+	}
 	recorder.Close()
 }
 

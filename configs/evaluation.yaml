@@ -5,7 +5,7 @@ evaluation:
   max_technical_iterations: 2
   max_judge_rounds: 2
 
-  judges: 10
+  judges: 3
   roast_agents: 3
 
   parallel_judges: true

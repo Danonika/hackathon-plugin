@@ -11,6 +11,18 @@ Read `warnings` before trusting `data`; keep `sources` for citations.
 | `system.context` | - | `routing_mode`, `routing_config_version`, `capabilities` |
 | `system.capabilities` | - | capability groups, experimental flags, tool list |
 | `routing.fly_recommend` | `task` (required), `input_metadata`, `available_capabilities` | `route`, `recommendations`, `metrics.max_score`, `metrics.threshold`, `metrics.encoder` |
+| `routing.fly_feedback` | `task` (required), `chosen` (required), `recommended`, `source`, `input_metadata` | `stored`, `learned`, `memory_size` |
+
+## Evaluation
+
+| Tool | Arguments | Returns |
+|---|---|---|
+| `eval.aggregate` | `reports[]` or `reports_json[]`, `snapshot_sha`, `kind` (judges), `persist` (true) | `valid_judges`, `inconclusive`, `mean_total`, `criterion_means`, `score_variance`, `high_disagreement[]`, `common_deductions[]`, `likely_questions[]`, `dropped_invalid[]`, `dropped_conflict[]`, `aggregate_path` |
+| `eval.calibrate` | `run1[]`/`run2[]` or `run1_json[]`/`run2_json[]`, `snapshot_sha`, `min_delta`, `persist` (true) | `calibration.retest_delta`, `calibration.noise_floor`, `calibration_path` |
+| `eval.compare` | `mode` (technical/judge), `candidate` (required), `best`, `target`, `noise_floor`, `mandatory_scenario_failed`, `persist` (false) | `decision` (`target_reached`/`accept`/`rollback`/`stop`), `reason`, `improvement` |
+| `eval.freeze_bundle` | `out` (judge-bundle), `exclude[]`, `read_only` (true), `model` | `bundle_path`, `bundle_hash`, `git_sha`, `files`, `excluded[]` |
+
+Evaluation scores stay with the judge and project-cost skills; these tools own validation, arithmetic and the stop conditions.
 
 ## Files and documents
 
@@ -66,4 +78,5 @@ Time column accepts RFC3339, `YYYY-MM-DD[ HH:MM[:SS]]`, `DD.MM.YYYY`, epoch seco
 
 - Paths are relative to `data/input`; absolute paths and `..` are rejected.
 - `artifact_id` values are relative to `data/artifacts`.
+- `eval.*` report paths are relative to the repository root (for example `evals/judges/<sha>/judge-01.json`).
 - Numeric arguments may be passed as numbers or numeric strings.

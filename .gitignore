@@ -8,9 +8,11 @@ data/artifacts/
 data/index/
 data/judge-bundles/
 .agents/skills/
-evals/calibration/*.json
-evals/project-cost/*.json
-evals/aggregate/*.json
+evals/calibration/
+evals/decisions/
+evals/project-cost/
+evals/aggregate/
 evals/judges/
 evals/roast/
 evals/snapshots/
+judge-bundle/

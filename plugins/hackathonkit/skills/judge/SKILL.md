@@ -1,6 +1,6 @@
 ---
 name: judge
-description: "Simulate Demo Day scoring of a frozen project snapshot with 10 procedurally isolated judge runs using the official rubric. Explicit-only: never invoke implicitly."
+description: "Simulate Demo Day scoring of a frozen project snapshot with 3 procedurally isolated judge runs using the official rubric. Explicit-only: never invoke implicitly."
 ---
 
 # Judge
@@ -14,7 +14,7 @@ Evaluate a **frozen snapshot**, never a live working tree. Judges do not edit co
 
 ## Input Bundle
 
-The controller prepares `judge-bundle/` and each judge receives a read-only copy:
+The controller prepares `judge-bundle/` with `eval.freeze_bundle` (read-only, hashed) and each judge receives a copy:
 
 `TASK.md`, `README.md`, `architecture.md`, `selected-source/`, `test-results.json`, `smoke-results.json`, `docker-build.json`, `demo-artifacts/`, `known-limitations.md`, `git-sha.txt`, `rubric-version.txt`.
 
@@ -22,12 +22,11 @@ Judges must not read `evals/judges/*`, previous scores, the target score, other 
 
 ## Procedure
 
-1. Launch 10 isolated judge sessions in parallel, each in its own temp directory with the read-only bundle.
+1. Launch 3 isolated judge sessions in parallel, each in its own temp directory with the read-only bundle.
 2. Same rubric and weights for everyone; a different perspective only changes the questions asked:
-   01 product value, 02 result quality, 03 innovation skeptic, 04 scaling, 05 demo and presentation,
-   06 partner/business, 07 technical specialist, 08 critical buyer, 09 adversarial Q&A, 10 strict generalist.
+   01 product value and innovation, 02 result quality and technical depth, 03 adversarial Q&A and scaling/presentation skeptic.
 3. Each judge: scores all five criteria, cites evidence for every deduction, separates observed facts from assumptions, produces likely jury questions, declares `conflict_of_interest`.
-4. Aggregate deterministically: schema validation -> drop invalid and conflicted reports -> require >= 3 valid -> mean, criterion means, sample variance, common deductions, question frequency.
+4. Aggregate with `eval.aggregate`: pass the report paths and the bundle sha. The tool validates schemas, drops invalid and conflicted reports, requires a majority valid (at least 2 of 3), and returns mean, criterion means, sample variance, high-disagreement criteria, common deductions, likely questions and the stored `aggregate_path`.
 
 ## Evidence Rules
 
@@ -47,4 +46,5 @@ Full rubric, aggregation rules and calibration procedure: `references/rubric.md`
 
 - A candidate is never compared to judge scores that do not exist yet.
 - Judges never see the target score; the controller compares and decides.
+- Never aggregate by hand: `eval.aggregate` owns the arithmetic and drops bad reports deterministically.
 - Reproducibility: record model id, runtime version, bundle hash and rubric version with every run.

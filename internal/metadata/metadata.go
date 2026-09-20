@@ -33,11 +33,22 @@ type FlyPrediction struct {
 	Recommendations any
 }
 
+type EvalRun struct {
+	Kind        string
+	SnapshotSHA string
+	Score       float64
+	Target      float64
+	NoiseFloor  float64
+	Decision    string
+	Payload     any
+}
+
 type Recorder interface {
 	Enabled() bool
 	RecordArtifact(ctx context.Context, rec ArtifactRecord) error
 	RecordRoutingRun(ctx context.Context, run RoutingRun) error
 	RecordFlyPrediction(ctx context.Context, pred FlyPrediction) error
+	RecordEvalRun(ctx context.Context, run EvalRun) error
 	Close()
 }
 
@@ -47,6 +58,7 @@ func (Disabled) Enabled() bool                                            { retu
 func (Disabled) RecordArtifact(context.Context, ArtifactRecord) error     { return nil }
 func (Disabled) RecordRoutingRun(context.Context, RoutingRun) error       { return nil }
 func (Disabled) RecordFlyPrediction(context.Context, FlyPrediction) error { return nil }
+func (Disabled) RecordEvalRun(context.Context, EvalRun) error             { return nil }
 func (Disabled) Close()                                                   {}
 
 const schema = `
@@ -74,6 +86,17 @@ CREATE TABLE IF NOT EXISTS fly_predictions (
 	threshold DOUBLE PRECISION,
 	category_scores JSONB,
 	recommendations JSONB,
+	created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE TABLE IF NOT EXISTS eval_runs (
+	id BIGSERIAL PRIMARY KEY,
+	kind TEXT NOT NULL,
+	snapshot_sha TEXT,
+	score DOUBLE PRECISION,
+	target DOUBLE PRECISION,
+	noise_floor DOUBLE PRECISION,
+	decision TEXT,
+	payload JSONB,
 	created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 `
@@ -149,6 +172,21 @@ func (p *Postgres) RecordFlyPrediction(ctx context.Context, pred FlyPrediction) 
 		`INSERT INTO fly_predictions (trace_id, route, encoder, max_score, threshold, category_scores, recommendations)
 		 VALUES ($1,$2,$3,$4,$5,$6,$7)`,
 		pred.TraceID, pred.Route, pred.Encoder, pred.MaxScore, pred.Threshold, scores, recs)
+	return err
+}
+
+func (p *Postgres) RecordEvalRun(ctx context.Context, run EvalRun) error {
+	if !p.Enabled() {
+		return nil
+	}
+	payload, err := json.Marshal(run.Payload)
+	if err != nil {
+		return fmt.Errorf("metadata: marshal eval payload: %w", err)
+	}
+	_, err = p.pool.Exec(ctx,
+		`INSERT INTO eval_runs (kind, snapshot_sha, score, target, noise_floor, decision, payload)
+		 VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+		run.Kind, run.SnapshotSHA, run.Score, run.Target, run.NoiseFloor, run.Decision, payload)
 	return err
 }
 

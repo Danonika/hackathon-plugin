@@ -29,6 +29,7 @@ description: "Entry point for every Hackathon Agent Kit task: reads the live rou
 
 ## Planning Rules
 
+- Multi-step build? Start with `$build-planner` and follow its stages and gates; for an unfamiliar theme run `$theme-research` first. Do not improvise stage order.
 - Discover before analysing: `files.describe` or `data.inspect` before deeper tools.
 - Deterministic tools compute; you interpret. Never invent numbers, timestamps or quotes.
 - Keep `trace_id` and `sources` from every envelope; cite them in the final answer.

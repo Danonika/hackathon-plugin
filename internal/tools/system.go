@@ -53,6 +53,7 @@ func registerSystem(reg *mcp.Registry, d Deps) {
 				"classification": available["classification.classify"],
 				"charts":         available["charts.create"],
 				"reports":        available["reports.create"],
+				"evaluation":     available["eval.aggregate"],
 			}
 			experimental := map[string]any{"fly_router": available["routing.fly_recommend"]}
 			groups["fly_router_available"] = available["routing.fly_recommend"]
@@ -121,16 +122,16 @@ func registerSystem(reg *mcp.Registry, d Deps) {
 			if d.Store != nil {
 				snapshot := d.Router.ActivationSnapshot(ctx, task, 64)
 				_ = observability.AppendJSONL(filepath.Join(d.Store.Root(), "logs", "fly-neuron-events.jsonl"), map[string]any{
-					"ts":         time.Now().UTC().Format(time.RFC3339Nano),
-					"type":       "recommend",
-					"trace_id":   trace(ctx),
-					"task":       snippet(task, 200),
-					"route":      res.Route,
-					"encoder":    res.Encoder,
-					"max_score":  res.MaxScore,
-					"active_kc":  snapshot["active_kc"],
-					"mbon":       snapshot["mbon"],
-					"kc_total":   snapshot["kc_total"],
+					"ts":        time.Now().UTC().Format(time.RFC3339Nano),
+					"type":      "recommend",
+					"trace_id":  trace(ctx),
+					"task":      snippet(task, 200),
+					"route":     res.Route,
+					"encoder":   res.Encoder,
+					"max_score": res.MaxScore,
+					"active_kc": snapshot["active_kc"],
+					"mbon":      snapshot["mbon"],
+					"kc_total":  snapshot["kc_total"],
 				})
 			}
 			if d.Meta != nil && d.Meta.Enabled() {
@@ -187,13 +188,13 @@ func registerSystem(reg *mcp.Registry, d Deps) {
 			}
 			if d.Store != nil {
 				_ = observability.AppendJSONL(filepath.Join(d.Store.Root(), "logs", "fly-feedback.jsonl"), map[string]any{
-					"ts":           time.Now().UTC().Format(time.RFC3339Nano),
-					"trace_id":     trace(ctx),
-					"task":         snippet(task, 200),
-					"chosen":       chosen,
-					"recommended":  recommended,
-					"source":       source,
-					"memory_size":  size,
+					"ts":          time.Now().UTC().Format(time.RFC3339Nano),
+					"trace_id":    trace(ctx),
+					"task":        snippet(task, 200),
+					"chosen":      chosen,
+					"recommended": recommended,
+					"source":      source,
+					"memory_size": size,
 				})
 				stats := d.Router.Dopamine()
 				_ = observability.AppendJSONL(filepath.Join(d.Store.Root(), "logs", "fly-neuron-events.jsonl"), map[string]any{

@@ -35,6 +35,21 @@ type RoutingSettings struct {
 	TopK         int     `yaml:"top_k"`
 }
 
+type EvaluationSettings struct {
+	TechnicalTarget            float64 `yaml:"technical_target"`
+	DemoDayTarget              float64 `yaml:"demo_day_target"`
+	MaxTechnicalIterations     int     `yaml:"max_technical_iterations"`
+	MaxJudgeRounds             int     `yaml:"max_judge_rounds"`
+	Judges                     int     `yaml:"judges"`
+	RoastAgents                int     `yaml:"roast_agents"`
+	ParallelJudges             bool    `yaml:"parallel_judges"`
+	ParallelRoast              bool    `yaml:"parallel_roast"`
+	FullCleanroomEachIteration bool    `yaml:"full_cleanroom_each_iteration"`
+	FullCleanroomOnFinalFreeze bool    `yaml:"full_cleanroom_on_final_freeze"`
+	FinalizationReserveMinutes int     `yaml:"finalization_reserve_minutes"`
+	MinDelta                   float64 `yaml:"min_delta"`
+}
+
 type File struct {
 	OpenAI  OpenAISettings  `yaml:"openai"`
 	Storage StorageSettings `yaml:"storage"`
@@ -64,6 +79,25 @@ type routingDoc struct {
 	Routing RoutingState `yaml:"routing"`
 }
 
+// evaluationPatch mirrors every evaluation field with a pointer so an explicit
+// false or zero can be distinguished from an absent key.
+type evaluationPatch struct {
+	Evaluation struct {
+		TechnicalTarget            *float64 `yaml:"technical_target"`
+		DemoDayTarget              *float64 `yaml:"demo_day_target"`
+		MaxTechnicalIterations     *int     `yaml:"max_technical_iterations"`
+		MaxJudgeRounds             *int     `yaml:"max_judge_rounds"`
+		Judges                     *int     `yaml:"judges"`
+		RoastAgents                *int     `yaml:"roast_agents"`
+		ParallelJudges             *bool    `yaml:"parallel_judges"`
+		ParallelRoast              *bool    `yaml:"parallel_roast"`
+		FullCleanroomEachIteration *bool    `yaml:"full_cleanroom_each_iteration"`
+		FullCleanroomOnFinalFreeze *bool    `yaml:"full_cleanroom_on_final_freeze"`
+		FinalizationReserveMinutes *int     `yaml:"finalization_reserve_minutes"`
+		MinDelta                   *float64 `yaml:"min_delta"`
+	} `yaml:"evaluation"`
+}
+
 type Manager struct {
 	root string
 
@@ -72,6 +106,10 @@ type Manager struct {
 	routingCache RoutingState
 	routingMtime time.Time
 	routingInit  bool
+
+	evaluationCache EvaluationSettings
+	evaluationMtime time.Time
+	evaluationInit  bool
 }
 
 func defaults() File {
@@ -95,6 +133,23 @@ func defaults() File {
 			FlyThreshold: 0.55,
 			TopK:         5,
 		},
+	}
+}
+
+func defaultsEvaluation() EvaluationSettings {
+	return EvaluationSettings{
+		TechnicalTarget:            95,
+		DemoDayTarget:              90,
+		MaxTechnicalIterations:     2,
+		MaxJudgeRounds:             2,
+		Judges:                     3,
+		RoastAgents:                3,
+		ParallelJudges:             true,
+		ParallelRoast:              true,
+		FullCleanroomEachIteration: false,
+		FullCleanroomOnFinalFreeze: true,
+		FinalizationReserveMinutes: 45,
+		MinDelta:                   0.5,
 	}
 }
 
@@ -324,4 +379,78 @@ func (m *Manager) SetRoutingMode(mode string) (RoutingState, error) {
 		m.routingMtime = st.ModTime()
 	}
 	return next, nil
+}
+
+func (m *Manager) EvaluationPath() string {
+	return filepath.Join(m.root, "configs", "evaluation.yaml")
+}
+
+// Evaluation re-reads configs/evaluation.yaml when its mtime changes and
+// always returns complete settings: built-in defaults overridden by the file.
+func (m *Manager) Evaluation() EvaluationSettings {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	path := m.EvaluationPath()
+	st, err := os.Stat(path)
+	if err == nil && m.evaluationInit && st.ModTime().Equal(m.evaluationMtime) {
+		return m.evaluationCache
+	}
+	if err == nil {
+		if data, readErr := os.ReadFile(path); readErr == nil {
+			settings := defaultsEvaluation()
+			var patch evaluationPatch
+			if yaml.Unmarshal(data, &patch) == nil {
+				applyEvaluationPatch(&settings, patch)
+				m.evaluationCache = settings
+				m.evaluationMtime = st.ModTime()
+				m.evaluationInit = true
+				return settings
+			}
+			log.Printf("config: cannot parse %s (using defaults)", path)
+		}
+	}
+	if m.evaluationInit {
+		return m.evaluationCache
+	}
+	return defaultsEvaluation()
+}
+
+func applyEvaluationPatch(dst *EvaluationSettings, src evaluationPatch) {
+	p := src.Evaluation
+	if p.TechnicalTarget != nil && *p.TechnicalTarget >= 0 {
+		dst.TechnicalTarget = *p.TechnicalTarget
+	}
+	if p.DemoDayTarget != nil && *p.DemoDayTarget >= 0 {
+		dst.DemoDayTarget = *p.DemoDayTarget
+	}
+	if p.MaxTechnicalIterations != nil && *p.MaxTechnicalIterations >= 0 {
+		dst.MaxTechnicalIterations = *p.MaxTechnicalIterations
+	}
+	if p.MaxJudgeRounds != nil && *p.MaxJudgeRounds >= 0 {
+		dst.MaxJudgeRounds = *p.MaxJudgeRounds
+	}
+	if p.Judges != nil && *p.Judges >= 1 {
+		dst.Judges = *p.Judges
+	}
+	if p.RoastAgents != nil && *p.RoastAgents >= 1 {
+		dst.RoastAgents = *p.RoastAgents
+	}
+	if p.ParallelJudges != nil {
+		dst.ParallelJudges = *p.ParallelJudges
+	}
+	if p.ParallelRoast != nil {
+		dst.ParallelRoast = *p.ParallelRoast
+	}
+	if p.FullCleanroomEachIteration != nil {
+		dst.FullCleanroomEachIteration = *p.FullCleanroomEachIteration
+	}
+	if p.FullCleanroomOnFinalFreeze != nil {
+		dst.FullCleanroomOnFinalFreeze = *p.FullCleanroomOnFinalFreeze
+	}
+	if p.FinalizationReserveMinutes != nil && *p.FinalizationReserveMinutes >= 0 {
+		dst.FinalizationReserveMinutes = *p.FinalizationReserveMinutes
+	}
+	if p.MinDelta != nil && *p.MinDelta >= 0 {
+		dst.MinDelta = *p.MinDelta
+	}
 }

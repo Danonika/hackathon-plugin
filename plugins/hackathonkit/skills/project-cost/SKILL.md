@@ -17,10 +17,10 @@ Technical readiness score, not a price. Every point needs an artifact behind it.
 1. Collect evidence: tests, smoke results, README sections, build output, demo artifacts, clean-room report.
 2. Score the five criteria; a criterion with no evidence scores zero for the unproven part.
 3. List `blocking_issues` (things that prevent a demo) separately from `deductions` (lost points).
-4. Compare with the previous accepted snapshot:
-   - Mandatory scenario broken -> rollback, stop.
-   - Regression -> rollback.
-   - Improvement below the configured noise floor -> do not iterate further on this axis.
+4. Compare with the previous accepted snapshot using `eval.compare` with `mode=technical` and follow its `decision`:
+   - `rollback` -> restore the previous accepted snapshot, stop.
+   - `stop` -> improvement below the configured noise floor; do not iterate further on this axis.
+   - `accept` / `target_reached` -> record the score and continue or exit.
 
 ## Output Contract
 

@@ -14,8 +14,8 @@ Run improvement rounds with hard limits. Read `configs/evaluation.yaml` for targ
 
 ## Preconditions
 
-1. Main scenario passes; otherwise fix it first.
-2. Judge calibration completed once: score one frozen snapshot twice, `noise_floor = max(min_delta, 2 * retest_delta)`.
+1. Main scenario passes; otherwise fix it first. The mandatory scenario and stage gates come from the `$build-planner` plan; use its latest revision.
+2. Judge calibration completed once: score one frozen snapshot twice and run `eval.calibrate`; use the returned `calibration.noise_floor` everywhere.
 3. Time budget check: stop self-improvement when remaining time <= `finalization_reserve_minutes`.
 
 ## Fast Block 1
@@ -27,7 +27,7 @@ Run improvement rounds with hard limits. Read `configs/evaluation.yaml` for targ
 5. Targeted tests again.
 6. Quick smoke: existing MCP image starts, `initialize`, `tools/list`, main happy path.
 7. Build demo evidence (demo-artifacts bundle).
-8. Freeze candidate snapshot.
+8. Freeze candidate snapshot with `eval.freeze_bundle`; keep its `bundle_hash` and `git_sha`.
 
 Full clean-room rebuild is **not** part of each iteration; it runs once on the final candidate.
 
@@ -35,22 +35,27 @@ Full clean-room rebuild is **not** part of each iteration; it runs once on the f
 
 ```text
 candidate = run_fast_block1(best)
-if mandatory_scenario_failed(candidate): rollback; stop
-if project_cost_regressed(candidate, best): rollback; stop
-best = candidate; if best.score >= technical_target: exit loop
+decision = eval.compare(mode=technical, candidate=candidate.score, best=best.score,
+                        mandatory_scenario_failed=<bool>)
+if decision.decision == rollback: rollback; stop
+if decision.decision == target_reached: best = candidate; exit loop
+if decision.decision == stop: best = candidate; stop
+best = candidate
 ```
 
 ## Judge Loop
 
 ```text
 for round in 1..max_judge_rounds:
-    bundle = freeze_judge_bundle(best)
-    judge  = $judge(bundle)                      # 10 isolated runs, parallel
-    if previous judge mean exists:
-        regression > noise_floor  -> rollback to previous judged snapshot, stop
-        improvement < noise_floor -> stop
-    if judge.mean >= demo_day_target: stop
-    fixes = prioritize_common_deductions(judge)
+    bundle = eval.freeze_bundle(best)
+    judge  = $judge(bundle)                      # 3 isolated runs, parallel
+    aggregate = eval.aggregate(reports, snapshot_sha=bundle.git_sha)
+    decision = eval.compare(mode=judge, candidate=aggregate.mean_total,
+                            best=previous_judge_mean, noise_floor=calibrated_noise_floor)
+    rollback -> restore previous judged snapshot, stop
+    stop     -> stop
+    target_reached -> stop
+    fixes = prioritize_common_deductions(aggregate)
     candidate = run_fast_block1(best, focused_fixes=fixes)
     accept candidate only by project_cost, tests and mandatory scenario
 ```
@@ -58,7 +63,7 @@ for round in 1..max_judge_rounds:
 ## Guardrails
 
 - A candidate is **never** compared to judge scores that do not exist yet.
-- Judges never see the target score; the controller owns acceptance decisions.
+- Judges never see the target score; `eval.compare` owns the decision, Codex performs the rollback.
 - Rollback restores the last judged or last clean-room-passing snapshot.
 - Every round stores artifacts under `evals/<kind>/<git-sha>/` and records the bundle hash, model id and rubric version.
 
