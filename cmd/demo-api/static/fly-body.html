@@ -1,9 +1,9 @@
-<!doctype html>
+﻿<!doctype html>
 <html lang="ru">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Fly Body — flybody (MJCF) в Three.js</title>
+<title>Fly Body тАФ flybody (MJCF) ╨▓ Three.js</title>
 <style>
   :root { color-scheme: dark; }
   * { box-sizing: border-box; }
@@ -32,22 +32,22 @@
 <body>
 <div id="scene"></div>
 <div class="panel" id="top">
-  <h1>🪰 Fly Body — реалистичная модель</h1>
-  <div class="muted">flybody (Google DeepMind + Janelia, Apache-2.0): 67 сегментов, 86 мешей из MuJoCo MJCF, собрано в Three.js в реальном времени</div>
-  <div class="muted" id="status">загрузка модели…</div>
+  <h1>ЁЯк░ Fly Body тАФ ╤А╨╡╨░╨╗╨╕╤Б╤В╨╕╤З╨╜╨░╤П ╨╝╨╛╨┤╨╡╨╗╤М</h1>
+  <div class="muted">flybody (Google DeepMind + Janelia, Apache-2.0): 67 ╤Б╨╡╨│╨╝╨╡╨╜╤В╨╛╨▓, 86 ╨╝╨╡╤И╨╡╨╣ ╨╕╨╖ MuJoCo MJCF, ╤Б╨╛╨▒╤А╨░╨╜╨╛ ╨▓ Three.js ╨▓ ╤А╨╡╨░╨╗╤М╨╜╨╛╨╝ ╨▓╤А╨╡╨╝╨╡╨╜╨╕</div>
+  <div class="muted" id="status">╨╖╨░╨│╤А╤Г╨╖╨║╨░ ╨╝╨╛╨┤╨╡╨╗╨╕тАж</div>
 </div>
 <div class="panel" id="bottom">
-  <div class="row"><span style="width:70px">Голод</span><div class="bar"><span id="hunger" style="width:40%;background:linear-gradient(90deg,#f97316,#ef4444)"></span></div><span id="hunger-val" class="muted">40%</span></div>
-  <div class="row"><span style="width:70px">Дофамин</span><div class="bar"><span id="dopa" style="width:0%;background:linear-gradient(90deg,#22c55e,#86efac)"></span></div><span id="dopa-val" class="muted">0</span></div>
-  <div id="verdict" class="muted">ожидание решения Codex (routing.fly_feedback)…</div>
+  <div class="row"><span style="width:70px">╨У╨╛╨╗╨╛╨┤</span><div class="bar"><span id="hunger" style="width:40%;background:linear-gradient(90deg,#f97316,#ef4444)"></span></div><span id="hunger-val" class="muted">40%</span></div>
+  <div class="row"><span style="width:70px">╨Ф╨╛╤Д╨░╨╝╨╕╨╜</span><div class="bar"><span id="dopa" style="width:0%;background:linear-gradient(90deg,#22c55e,#86efac)"></span></div><span id="dopa-val" class="muted">0</span></div>
+  <div id="verdict" class="muted">╨╛╨╢╨╕╨┤╨░╨╜╨╕╨╡ ╤А╨╡╤И╨╡╨╜╨╕╤П Codex (routing.fly_feedback)тАж</div>
 </div>
 <div id="brain-corner">
   <div class="bar">
-    <span>мозг 3D:</span>
-    <button onclick="setBrainCorner('mb')">MB (обученный)</button>
+    <span>╨╝╨╛╨╖╨│ 3D:</span>
+    <button onclick="setBrainCorner('mb')">MB (╨╛╨▒╤Г╤З╨╡╨╜╨╜╤Л╨╣)</button>
     <button class="alt" onclick="setBrainCorner('flybrain')">flybrain</button>
-    <button class="alt" onclick="window.open(VFB_URL, '_blank')">VFB ↗</button>
-    <span id="brain-src">MB · 4133 KC · два полушария</span>
+    <button class="alt" onclick="window.open(VFB_URL, '_blank')">VFB тЖЧ</button>
+    <span id="brain-src">MB ┬╖ 4133 KC ┬╖ ╨┤╨▓╨░ ╨┐╨╛╨╗╤Г╤И╨░╤А╨╕╤П</span>
   </div>
   <canvas id="mb-canvas" width="1000" height="760"></canvas>
   <iframe id="brain-frame" class="hidden" src="/fly-brain/" title="Fly brain 3D"></iframe>
@@ -151,9 +151,9 @@ async function loadFly() {
   const scale = 3.2 / Math.max(size.x, size.y, size.z, 1e-6);
   fly.scale.setScalar(scale);
   fly.position.set(-center.x * scale, -center.y * scale, -center.z * scale);
-  document.getElementById('status').textContent = 'модель собрана: ' + meshCount + ' мешей, ' + wingBodies.length + ' групп крыльев';
+  document.getElementById('status').textContent = '╨╝╨╛╨┤╨╡╨╗╤М ╤Б╨╛╨▒╤А╨░╨╜╨░: ' + meshCount + ' ╨╝╨╡╤И╨╡╨╣, ' + wingBodies.length + ' ╨│╤А╤Г╨┐╨┐ ╨║╤А╤Л╨╗╤М╨╡╨▓';
 }
-loadFly().catch(e => { document.getElementById('status').textContent = 'ошибка загрузки: ' + e.message; });
+loadFly().catch(e => { document.getElementById('status').textContent = '╨╛╤И╨╕╨▒╨║╨░ ╨╖╨░╨│╤А╤Г╨╖╨║╨╕: ' + e.message; });
 
 const sugar = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.4, 0.4), new THREE.MeshStandardMaterial({ color: 0xfacc15, emissive: 0x6b5300, roughness: .4 }));
 sugar.position.set(2.4, 0.2, 1.9); sugar.castShadow = true; sugar.visible = false; scene.add(sugar);
@@ -168,8 +168,8 @@ function setBrainCorner(kind) {
   frame.classList.toggle('hidden', kind === 'mb');
   if (kind === 'flybrain') frame.src = '/fly-brain/';
   document.getElementById('brain-src').textContent = kind === 'mb'
-    ? 'MB · 4133 KC · PAM/PPL1'
-    : (kind === 'flybrain' ? 'flybrain · FlyWire v783 (MIT)' : 'VFB · FBbt_00045048');
+    ? 'MB ┬╖ 4133 KC ┬╖ PAM/PPL1'
+    : (kind === 'flybrain' ? 'flybrain ┬╖ FlyWire v783 (MIT)' : 'VFB ┬╖ FBbt_00045048');
 }
 setBrainCorner('mb');
 
@@ -256,101 +256,9 @@ function drawMB() {
   mbCtx.fillText('PAM ' + mb.pam, w - 320, h - 112);
   mbCtx.fillText('PPL1 ' + mb.ppl1, w - 190, h - 112);
   mbCtx.fillStyle = 'rgba(148,163,184,.8)';
-  mbCtx.fillText(mb.encoder || '—', 18, 32);
+  mbCtx.fillText(mb.encoder || 'тАФ', 18, 32);
 }
-const mbRenderer = new THREE.WebGLRenderer({ canvas: mbCanvas, antialias: true, alpha: true });
-mbRenderer.setPixelRatio(1);
-mbRenderer.setSize(1000, 760, false);
-const mbScene = new THREE.Scene();
-const mbCamera = new THREE.PerspectiveCamera(45, 1000 / 760, 0.1, 100);
-mbCamera.position.set(0, 0.2, 3.4);
-mbScene.add(new THREE.AmbientLight(0xffffff, 1.3));
-const hemiMat = new THREE.MeshStandardMaterial({ color: 0xff9bb3, transparent: true, opacity: 0.07, roughness: .8, side: THREE.DoubleSide });
-for (const s of [-1, 1]) {
-  const hemi = new THREE.Mesh(new THREE.SphereGeometry(1, 32, 24), hemiMat);
-  hemi.position.set(0.34 * s, 0, 0); hemi.scale.set(0.42, 0.6, 0.5);
-  mbScene.add(hemi);
-}
-const KC_N = 1600;
-const kcGeo = new THREE.BufferGeometry();
-const kcPosArr = new Float32Array(KC_N * 3);
-const kcCol = new Float32Array(KC_N * 3);
-for (let i = 0; i < KC_N; i++) {
-  const side = i % 2 === 0 ? -1 : 1;
-  let x = 0, y = 0, z = 0, d = 2;
-  while (d > 1) {
-    x = Math.random() * 2 - 1; y = Math.random() * 2 - 1; z = Math.random() * 2 - 1;
-    d = (x * x) / (0.42 * 0.42) + (y * y) / (0.6 * 0.6) + (z * z) / (0.5 * 0.5);
-  }
-  kcPosArr[i * 3] = 0.34 * side + x * 0.9;
-  kcPosArr[i * 3 + 1] = y * 0.95;
-  kcPosArr[i * 3 + 2] = z * 0.9;
-  kcCol[i * 3] = 0.35; kcCol[i * 3 + 1] = 0.4; kcCol[i * 3 + 2] = 0.6;
-}
-kcGeo.setAttribute('position', new THREE.BufferAttribute(kcPosArr, 3));
-kcGeo.setAttribute('color', new THREE.BufferAttribute(kcCol, 3));
-mbScene.add(new THREE.Points(kcGeo, new THREE.PointsMaterial({ size: 0.022, vertexColors: true, transparent: true, opacity: .95 })));
-const mbonMeshes = [];
-for (let i = 0; i < 10; i++) {
-  const m = new THREE.Mesh(new THREE.SphereGeometry(0.05, 12, 10), new THREE.MeshStandardMaterial({ color: 0x7c3aed, emissive: 0x3b1d8f }));
-  const a = (i / 10) * Math.PI * 2;
-  m.position.set(Math.cos(a) * 0.8, -0.8, Math.sin(a) * 0.8);
-  mbScene.add(m); mbonMeshes.push(m);
-}
-const pam3 = new THREE.Mesh(new THREE.SphereGeometry(0.075, 14, 12), new THREE.MeshStandardMaterial({ color: 0x38bdf8, emissive: 0x0b4a6f }));
-pam3.position.set(-0.5, -1.05, 0); mbScene.add(pam3);
-const ppl13 = new THREE.Mesh(new THREE.SphereGeometry(0.065, 14, 12), new THREE.MeshStandardMaterial({ color: 0xef4444, emissive: 0x7f1d1d }));
-ppl13.position.set(0.5, -1.05, 0); mbScene.add(ppl13);
-const lineGeo = new THREE.BufferGeometry();
-lineGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(64 * 2 * 3), 3));
-const lineMat = new THREE.LineBasicMaterial({ color: 0x22c55e, transparent: true, opacity: 0.2 });
-mbScene.add(new THREE.LineSegments(lineGeo, lineMat));
-
-function updateMB3D() {
-  const flashing = performance.now() < mb.flashUntil;
-  const col = new THREE.Color(mb.reward ? 0x22c55e : 0xf87171);
-  const act = Array.from(mb.active).slice(0, 64);
-  act.forEach(idx => {
-    const j = idx % KC_N;
-    kcCol[j * 3] = col.r; kcCol[j * 3 + 1] = col.g; kcCol[j * 3 + 2] = col.b;
-  });
-  for (let i = 0; i < KC_N; i++) {
-    kcCol[i * 3] += (0.35 - kcCol[i * 3]) * 0.03;
-    kcCol[i * 3 + 1] += (0.4 - kcCol[i * 3 + 1]) * 0.03;
-    kcCol[i * 3 + 2] += (0.6 - kcCol[i * 3 + 2]) * 0.03;
-  }
-  kcGeo.attributes.color.needsUpdate = true;
-
-  const mbon = Object.entries(mb.mbon).sort((a, b) => b[1] - a[1]);
-  const max = Math.max(...mbon.map(m => m[1]), 0.001);
-  mbonMeshes.forEach((m, i) => {
-    const v = mbon[i] ? mbon[i][1] / max : 0;
-    m.scale.setScalar(0.5 + 1.8 * v);
-    m.material.emissiveIntensity = 0.3 + 1.5 * v;
-  });
-
-  const pos = lineGeo.attributes.position.array;
-  const target = mbonMeshes[0].position;
-  for (let k = 0; k < 64; k++) {
-    const idx = act[k] !== undefined ? act[k] % KC_N : 0;
-    pos[k * 6] = kcPosArr[idx * 3]; pos[k * 6 + 1] = kcPosArr[idx * 3 + 1]; pos[k * 6 + 2] = kcPosArr[idx * 3 + 2];
-    pos[k * 6 + 3] = target.x; pos[k * 6 + 4] = target.y; pos[k * 6 + 5] = target.z;
-  }
-  lineGeo.attributes.position.needsUpdate = true;
-  lineMat.color.copy(col);
-  lineMat.opacity = flashing ? 0.55 : 0.18;
-
-  const pulse = flashing ? 1 + 0.6 * Math.sin(performance.now() / 90) : 1;
-  pam3.scale.setScalar(pulse * (mb.reward ? 1.5 : 1));
-  ppl13.scale.setScalar(pulse * (mb.reward ? 1 : 1.5));
-}
-function animateMB() {
-  requestAnimationFrame(animateMB);
-  mbScene.rotation.y += 0.004;
-  updateMB3D();
-  mbRenderer.render(mbScene, mbCamera);
-}
-animateMB();
+drawMB();
 const $ = id => document.getElementById(id);
 
 async function poll() {
@@ -363,7 +271,7 @@ async function poll() {
     const lastNeuron = neuronEvents[neuronEvents.length - 1];
     if (lastNeuron && lastNeuron.type === 'recommend' && lastNeuron.trace_id !== state.lastTrace) {
       state.lastTrace = lastNeuron.trace_id;
-      $('status').textContent = 'encoder: ' + (lastNeuron.encoder || '?') + ' · route: ' + (lastNeuron.route || '?') + ' · max ' + (lastNeuron.max_score ?? '?');
+      $('status').textContent = 'encoder: ' + (lastNeuron.encoder || '?') + ' ┬╖ route: ' + (lastNeuron.route || '?') + ' ┬╖ max ' + (lastNeuron.max_score ?? '?');
     }
     const fb = (feedback.events || [])[(feedback.events || []).length - 1];
     if (fb && fb.ts !== state.lastFeedbackTs) {
@@ -374,12 +282,12 @@ async function poll() {
         state.dopamine = Math.min(100, state.dopamine + 22);
         state.hunger = Math.max(0, state.hunger - 18);
         state.mode = 'reward';
-        $('verdict').innerHTML = '<span class="good">🍬 награда · PAM ' + (feedbackNeuron.pam ?? 0) + ' · дофамин растёт</span>';
+        $('verdict').innerHTML = '<span class="good">ЁЯНм ╨╜╨░╨│╤А╨░╨┤╨░ ┬╖ PAM ' + (feedbackNeuron.pam ?? 0) + ' ┬╖ ╨┤╨╛╤Д╨░╨╝╨╕╨╜ ╤А╨░╤Б╤В╤С╤В</span>';
       } else {
         state.dopamine = Math.max(0, state.dopamine - 10);
         state.hunger = Math.min(100, state.hunger + 25);
         state.mode = 'punish';
-        $('verdict').innerHTML = '<span class="bad">⚡ ошибка · PPL1 ' + (feedbackNeuron.ppl1 ?? 0) + ' · боль и голод</span>';
+        $('verdict').innerHTML = '<span class="bad">тЪб ╨╛╤И╨╕╨▒╨║╨░ ┬╖ PPL1 ' + (feedbackNeuron.ppl1 ?? 0) + ' ┬╖ ╨▒╨╛╨╗╤М ╨╕ ╨│╨╛╨╗╨╛╨┤</span>';
       }
       $('hunger').style.width = state.hunger + '%';
       $('hunger-val').textContent = Math.round(state.hunger) + '%';
