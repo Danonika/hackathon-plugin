@@ -324,6 +324,26 @@ export async function createBrainView(container) {
         points.geometry.attributes.color.needsUpdate = true;
       }
     }
+    if (magnitude > 0.02 && neuronCount > 0) {
+      const probe = new Float32Array(3);
+      const wave = (1 - magnitude) * 3.4;
+      const band = 0.3;
+      for (let i = 0; i < neuronCount; i++) {
+        neuronPosition(i, neuronCount, probe);
+        const distance = Math.sqrt(probe[0] * probe[0] + probe[1] * probe[1] + probe[2] * probe[2]);
+        const offset = Math.abs(distance - wave);
+        if (offset < band) {
+          const strength = Math.max(intensity[i], 1 - offset / band);
+          intensity[i] = strength;
+          const s = Math.sqrt(strength);
+          colors[i * 3] = 0.19 + s * (pulse < 0 ? 0.79 : 0.05);
+          colors[i * 3 + 1] = 0.14 + s * (pulse < 0 ? 0.16 : 0.84);
+          colors[i * 3 + 2] = 0.32 + s * (pulse < 0 ? 0.22 : 0.36);
+        }
+      }
+      points.geometry.attributes.intensity.needsUpdate = true;
+      points.geometry.attributes.color.needsUpdate = true;
+    }
     controls.update();
     renderer.render(scene, camera);
   }
