@@ -34,6 +34,10 @@
   #fly-speech { position: absolute; left: 16px; top: 16px; z-index: 2; max-width: 280px; background: #141826f2; border: 1px solid #ffffff22; border-radius: 14px; padding: 10px 14px; font-size: 13px; line-height: 1.45; opacity: 0; transform: translateY(6px); transition: opacity .25s ease, transform .25s ease; pointer-events: none; }
   #fly-speech.show { opacity: 1; transform: none; }
   #fly-speech::after { content: ''; position: absolute; left: 26px; bottom: -8px; border: 8px solid transparent; border-top-color: #141826f2; border-bottom: 0; }
+  .tune { display: flex; gap: 16px; align-items: center; flex-wrap: wrap; border: 1px solid #ffffff14; border-radius: 12px; padding: 10px 14px; font-size: 11.5px; color: #87909f; }
+  .tune label { display: flex; gap: 8px; align-items: center; }
+  .tune input[type=range] { width: 110px; accent-color: #a4e8cf; }
+  #tune-readout { margin-left: auto; font-variant-numeric: tabular-nums; }
   #error { margin: 0 20px 16px; padding: 10px 12px; border: 1px solid #ef444455; background: #2a1414; color: #f3c4c4; border-radius: 8px; font-size: 12px; display: none; white-space: pre-wrap; }
   @media (max-width: 900px) { .wrap { grid-template-columns: 1fr; grid-template-rows: 1fr 380px; } .right { border-left: 0; border-top: 1px solid #ffffff14; } }
 </style>
@@ -49,6 +53,12 @@
       <button class="pain" id="btn-pain">⚡ Ошибка (PPL1)</button>
       <button id="btn-live">▶ Живые события: вкл</button>
       <button id="btn-reset">Сброс</button>
+    </div>
+    <div class="tune">
+      <label>задир <input type="range" id="t-pitch" min="0" max="1.5" step="0.05" value="0.9"></label>
+      <label>подъём <input type="range" id="t-lift" min="0" max="0.8" step="0.02" value="0.38"></label>
+      <label>хлопок <input type="range" id="t-clap" min="0" max="3" step="0.1" value="1"></label>
+      <span id="tune-readout"></span>
     </div>
     <div class="muted" id="status">ожидание…</div>
     <div class="stage" id="fly-stage"><div id="fly-speech"></div></div>
@@ -147,6 +157,20 @@ function showSpeech(reward) {
   clearTimeout(speechTimer);
   speechTimer = setTimeout(() => el.classList.remove('show'), 4200);
 }
+
+const tune = { pitch: 0.9, lift: 0.38, clapAmp: 1 };
+function bindTune() {
+  const pitch = $('t-pitch'), lift = $('t-lift'), clap = $('t-clap');
+  const sync = () => {
+    tune.pitch = Number(pitch.value);
+    tune.lift = Number(lift.value);
+    tune.clapAmp = Number(clap.value);
+    $('tune-readout').textContent = 'pitch ' + tune.pitch.toFixed(2) + ' · lift ' + tune.lift.toFixed(2) + ' · clap ×' + tune.clapAmp.toFixed(1);
+  };
+  [pitch, lift, clap].forEach(el => el.addEventListener('input', sync));
+  sync();
+}
+bindTune();
 
 function synthRecommendation(strength) {
   const count = Math.round(KC_TOTAL * 0.06);
@@ -256,18 +280,19 @@ function loop(now) {
   if (state.mode === 'reward') { tx = 1.5; tz = 1.5; ty = y + 0.35; }
   if (state.mode === 'correction') { tx = -1.6 + Math.sin(t * 42) * 0.07; tz = -1.2; ty = y - 0.1; }
   const rear = state.mode === 'reward' ? Math.max(0, state.pulse) : 0;
-  ty += 0.38 * rear;
+  ty += tune.lift * rear;
   flyTarget.set(tx, ty, tz);
   flyModel.group.position.lerp(flyTarget, 1 - Math.exp(-dt * 2.6));
   const dx = flyTarget.x - flyModel.group.position.x;
   const dz = flyTarget.z - flyModel.group.position.z;
   if (dx * dx + dz * dz > 1e-5) flyModel.group.rotation.y = Math.atan2(-dz, dx);
-  flyModel.group.rotation.x = -0.9 * rear;
+  flyModel.group.rotation.x = -tune.pitch * rear;
   flyModel.animate(t, dt, {
     mode: state.mode,
     activity: state.activity,
     pulse: state.pulse,
     clap: state.mode === 'reward' ? Math.max(0, state.pulse) : 0,
+    clapAmp: tune.clapAmp,
     speed: state.mode === 'reward' ? 0 : 0.05 + state.activity * 0.35,
     turn: flyModel.group.rotation.y,
     flight: state.mode === 'reward' ? 0.9 : state.mode === 'correction' ? 0.55 : 0

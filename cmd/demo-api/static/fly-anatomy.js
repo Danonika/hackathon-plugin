@@ -261,7 +261,7 @@ export async function loadFlyModel() {
     wingPhase = (wingPhase + step * TAU * (6 + flight * 12)) % TAU;
     const correction = mode === 'correction' ? activity : 0;
     const reward = mode === 'reward' ? activity : 0;
-    const clap = mode === 'reward' ? Math.min(1, Number(state.clap) || reward) : 0;
+    const clap = mode === 'reward' ? Math.min(1, Number(state.clap) || reward) * (Number(state.clapAmp) > 0 ? Number(state.clapAmp) : 1) : 0;
 
     for (const body of articulated) {
       const name = body.part.name;
