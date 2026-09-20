@@ -145,7 +145,7 @@ function animate(frameTime) {
   const shared={mode:live.mode,activity:energy,pulse:reduced?0:live.pulse,speed:.05+energy*.35,turn:0,flight:0};
   if(view && model){
     const y=model.groundOffset||.75;
-    const amplitude=reduced?0:(live.mode==='idle'?.16:.3);
+    const amplitude=reduced?0:(live.mode==='idle'?.9:1.15);
     const reaction=live.mode==='correction'?-live.pulse*.22:live.mode==='reward'?live.pulse*.2:0;
     const wander=Math.sin(elapsed*.11)*.5+Math.sin(elapsed*.047+1.3)*.35;
     const pause=Math.max(0,Math.sin(elapsed*.09+2.1))*.6;

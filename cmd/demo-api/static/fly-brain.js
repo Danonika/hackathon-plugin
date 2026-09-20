@@ -67,6 +67,11 @@ export async function createBrainView(container) {
 
   const anatomy = new THREE.Group();
   brain.add(anatomy);
+  const pulseShell = new THREE.Mesh(
+    new THREE.SphereGeometry(2.7, 32, 24),
+    new THREE.MeshBasicMaterial({ color: 0x2bff9e, transparent: true, opacity: 0, depthWrite: false, blending: THREE.AdditiveBlending })
+  );
+  brain.add(pulseShell);
   const controls = new OrbitControls(camera, renderer.domElement);
   controls.enableDamping = true;
   controls.dampingFactor = 0.09;
@@ -289,8 +294,36 @@ export async function createBrainView(container) {
     const pulse = clamp(finite(shared.pulse), -1, 1);
     // The shared feedback pulse is visible in the anatomy only. KC points are
     // driven solely by the current recommendation's activation vector.
-    regionMaterials[1].emissive.setHex(pulse < 0 ? 0x8a203d : 0x613579);
-    regionMaterials[1].emissiveIntensity = 0.14 + Math.abs(pulse) * 0.46;
+    const magnitude = Math.abs(pulse);
+    const pulseColor = pulse < 0 ? 0xff3b5c : 0x2bff9e;
+    regionMaterials[0].emissive.setHex(pulseColor);
+    regionMaterials[1].emissive.setHex(pulseColor);
+    regionMaterials[0].emissiveIntensity = 0.12 + magnitude * 1.2;
+    regionMaterials[1].emissiveIntensity = 0.14 + magnitude * 1.8;
+    pulseShell.material.color.setHex(pulseColor);
+    pulseShell.material.opacity = magnitude * 0.3;
+    pulseShell.scale.setScalar(0.85 + magnitude * 0.5);
+    if (colors && points) {
+      if (magnitude > 0.02) {
+        const targetR = pulse < 0 ? 0.98 : 0.16;
+        const targetG = pulse < 0 ? 0.24 : 0.98;
+        const targetB = pulse < 0 ? 0.36 : 0.66;
+        const k = Math.min(1, magnitude * 0.95);
+        for (let i = 0; i < neuronCount; i++) {
+          colors[i * 3] += (targetR - colors[i * 3]) * k;
+          colors[i * 3 + 1] += (targetG - colors[i * 3 + 1]) * k;
+          colors[i * 3 + 2] += (targetB - colors[i * 3 + 2]) * k;
+        }
+        points.geometry.attributes.color.needsUpdate = true;
+      } else if (hasVisibleActivation) {
+        for (let i = 0; i < neuronCount; i++) {
+          colors[i * 3] += (0.19 - colors[i * 3]) * 0.08;
+          colors[i * 3 + 1] += (0.14 - colors[i * 3 + 1]) * 0.08;
+          colors[i * 3 + 2] += (0.32 - colors[i * 3 + 2]) * 0.08;
+        }
+        points.geometry.attributes.color.needsUpdate = true;
+      }
+    }
     controls.update();
     renderer.render(scene, camera);
   }
