@@ -66,8 +66,9 @@ go build ./... && go vet ./... && go test ./...
 go run ./cmd/hackathonkit-mcp --selftest
 go run ./cmd/hackathonkit-mcp --list-tools
 go run ./cmd/hackathonkit-mcp --session-context
+go run ./cmd/hackathonkit-mcp --validate-skills
 scripts/setup.sh          # install plugin, mirrors, adapters, infrastructure
-scripts/doctor.sh         # verify runtime, plugin, hooks, adapters, handshake
+scripts/doctor.sh         # verify runtime, plugin, hooks, adapters, skills, handshake
 scripts/repair.sh         # regenerate missing generated artifacts
 ```
 

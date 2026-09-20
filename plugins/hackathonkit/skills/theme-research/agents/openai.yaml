@@ -1,4 +1,4 @@
 interface:
   display_name: "Theme Research"
-  short_description: "Cited research on the hackathon theme, domain and prior art."
+  short_description: "Cited theme brief with evidence tables, confidence and gaps."
   default_prompt: "Use $theme-research to research this theme and produce a cited brief."

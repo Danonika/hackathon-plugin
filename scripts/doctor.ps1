@@ -74,6 +74,14 @@ Check "install state" (Test-Path -LiteralPath $statePath) $(if ($stateVersion) {
 $node = Get-Command node -ErrorAction SilentlyContinue
 Check "node (hooks)" ($null -ne $node) $(if ($node) { (node --version) } else { "not found; session hooks require Node 18+" })
 
+$mcpExe = Join-Path $root "bin\hackathonkit-mcp.exe"
+if (Test-Path -LiteralPath $mcpExe) {
+  & $mcpExe --repo-root $root --validate-skills *> $null
+  Check "skill standard" ($LASTEXITCODE -eq 0) "catalog passes docs/SKILL-STANDARD.md"
+} else {
+  Write-Host ("[info] {0,-22} skipped (no local binary; run scripts/setup.ps1)" -f "skill standard")
+}
+
 if ($codex) {
   $json = (cmd /c "codex plugin list --json 2>nul") -join "`n"
   $pluginInstalled = $false

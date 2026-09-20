@@ -1,4 +1,4 @@
 interface:
   display_name: "Data Analysis"
-  short_description: "Profile, query and analyse CSV/TSV/XLSX tables."
-  default_prompt: "Use $data-analysis to analyse this table."
+  short_description: "Profile, query and quantify CSV, TSV and XLSX tables."
+  default_prompt: "Use $data-analysis to profile this table and back the answer with computed numbers."

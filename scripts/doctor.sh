@@ -117,6 +117,16 @@ else
   check "install state" 0 "missing configs/install-state.json; run scripts/setup.sh"
 fi
 
+if [ -x "$ROOT/bin/hackathonkit-mcp" ]; then
+  if "$ROOT/bin/hackathonkit-mcp" --repo-root "$ROOT" --validate-skills >/dev/null 2>&1; then
+    check "skill standard" 1 "catalog passes docs/SKILL-STANDARD.md"
+  else
+    check "skill standard" 0 "run scripts/validate-skills.sh for details"
+  fi
+else
+  echo "[info] skill standard check skipped (no local binary; run scripts/setup.sh)"
+fi
+
 if command -v node >/dev/null 2>&1; then
   check "node (hooks)" 1 "$(node --version 2>/dev/null)"
 else

@@ -2,7 +2,7 @@
 
 Local Codex plugin backed by a typed MCP capability layer. Codex is the main reasoning engine, Skills define domain workflows, the local MCP server exposes deterministic and AI-powered capabilities, and the experimental Fly router recommends capability routes while Codex keeps the final decision.
 
-Status: v0.7.0. MCP runtime (31 tools), 16 skills, session hooks, durable learnings, Codex subagents, four harness adapters, a full control plane (SQLite store, daemon, TUI, worktrees, agent runs, risk scoring, session handoff), staged build plans, PDF/XLSX processing, Fly v2 (keyword + embeddings + kNN memory + mushroom-body learning + LLM classifier), Postgres/MinIO backends, demo dashboard, install profiles/repair and the evaluation subsystem (deterministic aggregation, calibration, loop decisions and bundle freezing) are in place.
+Status: v0.8.0. MCP runtime (31 tools), 16 standard-compliant skills (validator-enforced), session hooks, durable learnings, Codex subagents, four harness adapters, a full control plane (SQLite store, daemon, TUI, worktrees, agent runs, risk scoring, session handoff), staged build plans, PDF/XLSX processing, Fly v2 (keyword + embeddings + kNN memory + mushroom-body learning + LLM classifier), Postgres/MinIO backends, demo dashboard, install profiles/repair and the evaluation subsystem (deterministic aggregation, calibration, loop decisions and bundle freezing) are in place.
 
 ## Contents
 
@@ -132,7 +132,9 @@ Skills are prompt packages (`plugins/hackathonkit/skills/`). Implicit skills tri
 | `system-design-expert` | explicit-only | Module boundaries, contracts, failure isolation, storage, observability | smoke, routing toggle |
 | `self-improvement-controller` | explicit-only | Bounded improvement rounds, rollback on regression, stop conditions | `eval.calibrate/compare/freeze_bundle` + other skills |
 
-Each skill ships `agents/openai.yaml` (display name, short description, default prompt) and references under `references/` where deeper rules are needed. Authoring rules live in `docs/SKILL-STANDARD.md`.
+Each skill ships `agents/openai.yaml` (display name, short description, default prompt) and 1-3 references under `references/` for depth. Authoring rules live in `docs/SKILL-STANDARD.md` (150-250 line SKILL.md, required sections, trigger-rich descriptions, untrusted-content block for document-facing skills).
+
+The standard is enforced mechanically: `hackathonkit-mcp --validate-skills` (or `scripts/validate-skills.sh`) checks frontmatter, sections, line bounds, reference links and interface metadata, exits non-zero on violations, and `go test ./internal/skills` keeps the real catalog compliant in CI.
 
 ## Session hooks
 
@@ -404,6 +406,7 @@ Install profiles: `scripts/setup.sh --profile core` excludes the explicit-only e
 | `smoke.sh` / `smoke.ps1` | send `initialize`, `tools/list`, `tools/call system.context` and validate the three JSON-RPC responses |
 | `sync-skills.sh` / `sync-skills.ps1` | mirror `plugins/hackathonkit/skills/` to `.agents/skills/` and verify counts |
 | `plugin-check.sh` / `plugin-check.ps1` | spawn the installed plugin's MCP command from a temp cwd and validate the handshake (exit 0 ok, 1 failed, 2 skipped) |
+| `validate-skills.sh` | validate the skill catalog against `docs/SKILL-STANDARD.md` (exit 1 on violations) |
 
 ## Repository layout
 
@@ -459,6 +462,7 @@ go run ./cmd/hackathonkit-mcp --selftest        # in-process MCP handshake
 go run ./cmd/hackathonkit-mcp --list-tools      # tool descriptors JSON
 go run ./cmd/hackathonkit-mcp --set-routing-mode fly
 go run ./cmd/hackathonkit-mcp --session-context # context block used by the SessionStart hook
+go run ./cmd/hackathonkit-mcp --validate-skills  # skill catalog standard check
 go run ./cmd/demo-api                       # demo dashboard + routing toggle API (http://127.0.0.1:8787)
 go run ./cmd/fly-train -model knn           # rebuild Fly memory from feedback logs
 go run ./cmd/hackathonkit-ctl ingest            # replay logs into the control database
@@ -475,7 +479,7 @@ Sample dataset: `data/input/sample-telemetry.csv` (72 hourly readings with two p
 
 ## Testing
 
-`go test ./...` covers the JSON-RPC handshake, notification suppression, panic containment, live routing and evaluation config re-reads, path sanitization and backend fallback, observability append/tail, judge aggregation/calibration/decisions, the bundle freezer, the eval and plan tool handlers, learning confidence/recall/promotion, the context-budget estimator, control-plane ingest idempotency, deterministic risk scoring, handoff rendering and the daemon HTTP handlers. Run `go run ./cmd/hackathonkit-mcp --selftest` for the end-to-end handshake and `scripts/smoke.sh` for the process-level check.
+`go test ./...` covers the JSON-RPC handshake, notification suppression, panic containment, live routing and evaluation config re-reads, path sanitization and backend fallback, observability append/tail, judge aggregation/calibration/decisions, the bundle freezer, the eval and plan tool handlers, learning confidence/recall/promotion, the context-budget estimator, control-plane ingest idempotency, deterministic risk scoring, handoff rendering, the daemon HTTP handlers and the skill-standard validator (including a catalog-wide regression test). Run `go run ./cmd/hackathonkit-mcp --selftest` for the end-to-end handshake and `scripts/smoke.sh` for the process-level check.
 
 ## Known limitations
 

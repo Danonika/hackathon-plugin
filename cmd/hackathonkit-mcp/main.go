@@ -21,11 +21,12 @@ import (
 	"hackathonkit.local/agentkit/internal/openai"
 	"hackathonkit.local/agentkit/internal/plans"
 	"hackathonkit.local/agentkit/internal/routing/fly"
+	"hackathonkit.local/agentkit/internal/skills"
 	"hackathonkit.local/agentkit/internal/storage"
 	"hackathonkit.local/agentkit/internal/tools"
 )
 
-const version = "0.7.0"
+const version = "0.8.0"
 
 func main() {
 	selftest := flag.Bool("selftest", false, "run an in-process MCP handshake and exit")
@@ -33,6 +34,7 @@ func main() {
 	repoRoot := flag.String("repo-root", "", "repository root (defaults to auto-discovery)")
 	setMode := flag.String("set-routing-mode", "", "set routing mode (normal|fly) and exit")
 	sessionContext := flag.Bool("session-context", false, "print a compact session context block for hooks and exit")
+	validateSkills := flag.Bool("validate-skills", false, "validate the skill catalog against docs/SKILL-STANDARD.md and exit")
 	flag.Parse()
 
 	root := *repoRoot
@@ -54,6 +56,24 @@ func main() {
 
 	if *sessionContext {
 		printSessionContext(root, mgr)
+		return
+	}
+
+	if *validateSkills {
+		report, err := skills.Validate(root)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "error:", err)
+			os.Exit(1)
+		}
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+		if err := enc.Encode(report); err != nil {
+			fmt.Fprintln(os.Stderr, "error:", err)
+			os.Exit(1)
+		}
+		if !report.OK {
+			os.Exit(1)
+		}
 		return
 	}
 

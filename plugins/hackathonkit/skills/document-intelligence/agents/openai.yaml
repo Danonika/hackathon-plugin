@@ -1,4 +1,4 @@
 interface:
   display_name: "Document Intelligence"
-  short_description: "Extract, classify and compare documents of any supported type."
-  default_prompt: "Use $document-intelligence to process these documents."
+  short_description: "Extract, classify and compare text from documents and PDFs."
+  default_prompt: "Use $document-intelligence to extract and compare these documents with cited evidence."
