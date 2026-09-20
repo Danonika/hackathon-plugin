@@ -100,6 +100,15 @@ func main() {
 		}
 		http.StripPrefix("/fly-brain/", http.FileServer(http.Dir(base))).ServeHTTP(w, r)
 	})
+	mux.HandleFunc("/fly-viz-3d", func(w http.ResponseWriter, r *http.Request) {
+		page, err := staticFS.ReadFile("static/fly-viz-3d.html")
+		if err != nil {
+			http.Error(w, "static page missing", http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, _ = w.Write(page)
+	})
 	mux.HandleFunc("/fly-viz", func(w http.ResponseWriter, r *http.Request) {
 		page, err := staticFS.ReadFile("static/fly-viz.html")
 		if err != nil {
