@@ -255,18 +255,20 @@ function loop(now) {
   let ty = y;
   if (state.mode === 'reward') { tx = 1.5; tz = 1.5; ty = y + 0.35; }
   if (state.mode === 'correction') { tx = -1.6 + Math.sin(t * 42) * 0.07; tz = -1.2; ty = y - 0.1; }
+  const rear = state.mode === 'reward' ? Math.max(0, state.pulse) : 0;
+  ty += 0.38 * rear;
   flyTarget.set(tx, ty, tz);
   flyModel.group.position.lerp(flyTarget, 1 - Math.exp(-dt * 2.6));
   const dx = flyTarget.x - flyModel.group.position.x;
   const dz = flyTarget.z - flyModel.group.position.z;
   if (dx * dx + dz * dz > 1e-5) flyModel.group.rotation.y = Math.atan2(-dz, dx);
-  flyModel.group.rotation.x = state.mode === 'reward' ? -0.28 * Math.max(0, state.pulse) : 0;
+  flyModel.group.rotation.x = -0.9 * rear;
   flyModel.animate(t, dt, {
     mode: state.mode,
     activity: state.activity,
     pulse: state.pulse,
     clap: state.mode === 'reward' ? Math.max(0, state.pulse) : 0,
-    speed: 0.05 + state.activity * 0.35 + (state.mode === 'reward' ? 0.25 : 0),
+    speed: state.mode === 'reward' ? 0 : 0.05 + state.activity * 0.35,
     turn: flyModel.group.rotation.y,
     flight: state.mode === 'reward' ? 0.9 : state.mode === 'correction' ? 0.55 : 0
   });

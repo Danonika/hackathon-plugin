@@ -152,12 +152,13 @@ function animate(frameTime) {
     const pause=Math.max(0,Math.sin(elapsed*.09+2.1))*.6;
     const targetX=Math.sin(elapsed*.25+wander)*amplitude*(1-pause)+reaction;
     const targetZ=Math.sin(elapsed*.34+wander*.7)*amplitude*.4*(1-pause*.5);
-    target.set(targetX,y,targetZ);
+    const rearUp=live.mode==='reward'?Math.max(0,live.pulse):0;
+    target.set(targetX,y+rearUp*.38,targetZ);
     view.organism.position.lerp(target,1-Math.exp(-dt*4));
     view.organism.rotation.y=reduced?0:Math.sin(elapsed*.23)*.14+reaction+wander*.08;
-    view.organism.rotation.x=live.mode==='reward'?-0.28*Math.max(0,live.pulse):0;
+    view.organism.rotation.x=-0.9*rearUp;
     shared.turn=view.organism.rotation.y;
-    shared.speed=.05+energy*.35+(live.mode==='reward'?.25:0);
+    shared.speed=live.mode==='reward'?0:.05+energy*.35;
     shared.flight=live.mode==='reward'?.9:live.mode==='correction'?.55:0;
     model.animate(elapsed,dt,shared);
     view.controls.update();view.renderer.render(view.scene,view.camera);
