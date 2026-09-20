@@ -34,6 +34,10 @@
   <h1>🪰 Fly Brain — реальный мозг + наши события</h1>
   <div class="muted">справа — симуляция FlyWire v783 (flybrain, MIT, 139 255 нейронов); панель внизу — события Hackathon Agent Kit</div>
   <div class="muted" id="status">ожидание события…</div>
+  <div style="margin-top:6px">
+    <button onclick="setBrain('flybrain')" style="background:#1d4ed8;border:0;color:#fff;border-radius:6px;padding:4px 10px;cursor:pointer">мозг: flybrain (локально)</button>
+    <button onclick="setBrain('vfb')" style="background:#7c3aed;border:0;color:#fff;border-radius:6px;padding:4px 10px;cursor:pointer;margin-left:6px">мозг: VFB 3D (онлайн)</button>
+  </div>
 </div>
 
 <div class="panel" id="legend">
@@ -52,6 +56,13 @@
 
 <script>
 const state = { hunger: 40, dopamine: 0, lastTrace: null, lastFeedbackTs: null };
+const VFB_URL = 'https://v2.virtualflybrain.org/org.geppetto.frontend/geppetto?id=FBbt_00045048&i=VFB_00101567';
+function setBrain(kind) {
+  document.getElementById('brain').src = kind === 'vfb' ? VFB_URL : '/fly-brain/';
+  document.getElementById('model-note').textContent = kind === 'vfb'
+    ? 'мозг: Virtual Fly Brain (Geppetto, онлайн) — нейроны FBbt_00045048'
+    : 'мозг: flybrain (MIT, локально, 139 255 нейронов FlyWire v783)';
+}
 const $ = id => document.getElementById(id);
 
 function fmtMBON(mbon) {
