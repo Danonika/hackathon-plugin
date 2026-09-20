@@ -147,10 +147,16 @@ function animate(frameTime) {
     const y=model.groundOffset||.75;
     const amplitude=reduced?0:(live.mode==='idle'?.16:.3);
     const reaction=live.mode==='correction'?-live.pulse*.22:live.mode==='reward'?live.pulse*.2:0;
-    target.set(Math.sin(elapsed*.25)*amplitude+reaction,y,Math.sin(elapsed*.34)*amplitude*.4);
+    const wander=Math.sin(elapsed*.11)*.5+Math.sin(elapsed*.047+1.3)*.35;
+    const pause=Math.max(0,Math.sin(elapsed*.09+2.1))*.6;
+    const targetX=Math.sin(elapsed*.25+wander)*amplitude*(1-pause)+reaction;
+    const targetZ=Math.sin(elapsed*.34+wander*.7)*amplitude*.4*(1-pause*.5);
+    target.set(targetX,y,targetZ);
     view.organism.position.lerp(target,1-Math.exp(-dt*4));
-    view.organism.rotation.y=reduced?0:Math.sin(elapsed*.23)*.14+reaction;
+    view.organism.rotation.y=reduced?0:Math.sin(elapsed*.23)*.14+reaction+wander*.08;
     shared.turn=view.organism.rotation.y;
+    shared.speed=.05+energy*.35+(live.mode==='reward'?.25:0);
+    shared.flight=live.mode==='reward'?.9:live.mode==='correction'?.55:0;
     model.animate(elapsed,dt,shared);
     view.controls.update();view.renderer.render(view.scene,view.camera);
   }else if(view){view.controls.update();view.renderer.render(view.scene,view.camera);}

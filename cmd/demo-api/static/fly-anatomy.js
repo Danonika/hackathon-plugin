@@ -93,8 +93,13 @@ export async function loadFlyModel() {
   function materialFor(values, bodyName) {
     const name = values.material || 'body';
     const definition = definitions.get(name) || {};
-    const rgba = numbers(values.rgba || definition.rgba, [0.674, 0.35, 0.143, 1]);
+    let rgba = numbers(values.rgba || definition.rgba, [0.674, 0.35, 0.143, 1]);
     const isLeg = /^(coxa|femur|tibia|tarsus|claw)/.test(bodyName);
+    const lowerBody = bodyName.toLowerCase();
+    if (/wing/.test(lowerBody)) rgba = [0.74, 0.80, 0.87, 0.34];
+    else if (/eye/.test(lowerBody)) rgba = [0.45, 0.07, 0.07, 1];
+    else if (isLeg) rgba = [0.16, 0.12, 0.10, 1];
+    else if (/^(thorax|abdomen|head|antenna|rostrum|haustellum|haltere)/.test(lowerBody)) rgba = [0.21, 0.16, 0.13, 1];
     const tone = name === 'body' ? (isLeg ? 0.59 : /^(head|antenna|rostrum|haustellum)/.test(bodyName) ? 0.75 : 1) : 1;
     const key = `${name}:${rgba.join(',')}:${tone}`;
     if (!materials.has(key)) {
