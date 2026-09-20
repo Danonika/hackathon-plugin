@@ -129,10 +129,20 @@ const FLY_PHRASES = [
   'I can do better',
   'Please, give me one more chance'
 ];
+const REWARD_PHRASES = [
+  "I'm the best!",
+  "I'm the best here 🏆",
+  "This hackathon is mine!",
+  "Hackathon Agent Kit? I own this stage.",
+  "Fly brain — best in show 🪰",
+  "Sugar of victory 🍬"
+];
 let speechTimer = null;
 function showSpeech(reward) {
   const el = $('fly-speech');
-  el.textContent = reward ? '🍬 Thank you! I will keep it up.' : '⚡ ' + FLY_PHRASES[Math.floor(Math.random() * FLY_PHRASES.length)];
+  el.textContent = reward
+    ? '🍬 ' + REWARD_PHRASES[Math.floor(Math.random() * REWARD_PHRASES.length)]
+    : '⚡ ' + FLY_PHRASES[Math.floor(Math.random() * FLY_PHRASES.length)];
   el.classList.add('show');
   clearTimeout(speechTimer);
   speechTimer = setTimeout(() => el.classList.remove('show'), 4200);
