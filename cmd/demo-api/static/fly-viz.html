@@ -21,10 +21,14 @@
   .bar > span { display: block; height: 100%; transition: width .4s ease; }
   .good { color: #22c55e; } .bad { color: #f87171; } .muted { color: #64748b; }
   #verdict { margin-top: 6px; }
+  #brain-frame { position: fixed; top: 0; right: 0; width: 50vw; height: 100vh; border: 0; background: #000; }
+  #brain-caption { position: fixed; top: 14px; right: 14px; z-index: 6; }
 </style>
 </head>
 <body>
 <div id="scene"></div>
+<iframe id="brain-frame" src="/fly-brain/" title="FlyWire whole-brain simulation"></iframe>
+<div class="panel" id="brain-caption">реальный мозг: flybrain (MIT) · 139 255 нейронов FlyWire v783 · <a href="/fly-brain/" target="_blank" style="color:#93c5fd">открыть отдельно</a></div>
 <div class="panel" id="top">
   <h1>🪰 Fly Brain 3D</h1>
   <div class="muted" id="status">подключение…</div>
@@ -54,10 +58,10 @@ import { GLTFLoader } from 'https://cdn.jsdelivr.net/npm/three@0.160.0/examples/
 const KC_TOTAL = 4133, TOP_N = 64;
 const scene = new THREE.Scene();
 scene.fog = new THREE.FogExp2(0x060913, 0.045);
-const camera = new THREE.PerspectiveCamera(50, innerWidth / innerHeight, 0.1, 200);
+const camera = new THREE.PerspectiveCamera(50, (innerWidth / 2) / innerHeight, 0.1, 200);
 camera.position.set(0, 4.5, 14);
 const renderer = new THREE.WebGLRenderer({ antialias: true });
-renderer.setSize(innerWidth, innerHeight);
+renderer.setSize(innerWidth / 2, innerHeight);
 document.getElementById('scene').appendChild(renderer.domElement);
 scene.add(new THREE.AmbientLight(0x8899cc, 1.1));
 const key = new THREE.DirectionalLight(0xffffff, 1.4); key.position.set(6, 10, 8); scene.add(key);
@@ -77,7 +81,7 @@ scene.add(fly);
 const sugar = new THREE.Mesh(new THREE.BoxGeometry(.9, .9, .9), new THREE.MeshStandardMaterial({ color: 0xfacc15, emissive: 0x8a6d00, roughness: .4 }));
 sugar.position.set(4.6, .45, 0); scene.add(sugar);
 
-const brain = new THREE.Group(); brain.position.set(4.6, 4.4, 0); scene.add(brain);
+const brain = new THREE.Group(); brain.position.set(4.6, 4.4, 0); brain.visible = false; scene.add(brain);
 const kcPositions = new Float32Array(KC_TOTAL * 3);
 const kcColors = new Float32Array(KC_TOTAL * 3);
 for (let i = 0; i < KC_TOTAL; i++) {
@@ -255,7 +259,7 @@ function animate() {
   renderer.render(scene, camera);
 }
 animate();
-addEventListener('resize', () => { camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix(); renderer.setSize(innerWidth, innerHeight); });
+addEventListener('resize', () => { camera.aspect = (innerWidth / 2) / innerHeight; camera.updateProjectionMatrix(); renderer.setSize(innerWidth / 2, innerHeight); });
 </script>
 </body>
 </html>
