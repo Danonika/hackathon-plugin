@@ -73,6 +73,8 @@ if ($dockerOk) {
   if ($LASTEXITCODE -ne 0) { Write-Error "[setup] go build hackathonkit-mcp failed"; exit 1 }
   go build -o bin/hackathonkit-demo-api.exe ./cmd/demo-api
   if ($LASTEXITCODE -ne 0) { Write-Error "[setup] go build demo-api failed"; exit 1 }
+  go build -o bin/hackathonkit-ctl.exe ./cmd/hackathonkit-ctl
+  if ($LASTEXITCODE -ne 0) { Write-Error "[setup] go build hackathonkit-ctl failed"; exit 1 }
   Write-Host "[setup] local binaries built in bin/"
 }
 

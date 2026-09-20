@@ -25,6 +25,7 @@ if (-not (Test-Path $bin) -and $runtime -eq "binary") {
     New-Item -ItemType Directory -Force -Path (Join-Path $root "bin") | Out-Null
     go build -o bin/hackathonkit-mcp.exe ./cmd/hackathonkit-mcp
     go build -o bin/hackathonkit-demo-api.exe ./cmd/demo-api
+    go build -o bin/hackathonkit-ctl.exe ./cmd/hackathonkit-ctl
     Write-Host "[repair] rebuilt local binaries in bin/"
   } else {
     Write-Warning "[repair] no Go toolchain and no docker engine; MCP runtime unavailable"

@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"hackathonkit.local/agentkit/internal/config"
+	"hackathonkit.local/agentkit/internal/control"
 	"hackathonkit.local/agentkit/internal/metadata"
 	"hackathonkit.local/agentkit/internal/observability"
 )
@@ -108,6 +109,52 @@ func main() {
 		}
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		_, _ = w.Write(page)
+	})
+	mux.HandleFunc("/control", func(w http.ResponseWriter, r *http.Request) {
+		page, err := staticFS.ReadFile("static/control.html")
+		if err != nil {
+			http.Error(w, "static page missing", http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, _ = w.Write(page)
+	})
+	mux.HandleFunc("/control/api/sessions", func(w http.ResponseWriter, r *http.Request) {
+		store, err := control.OpenReadOnly(control.DefaultPath(root))
+		if err != nil {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]any{
+				"error": "control database not available; run `hackathonkit-ctl ingest` or `hackathonkit-ctl daemon start`",
+			})
+			return
+		}
+		defer store.Close()
+		sessions, err := store.Sessions(r.Context(), queryLimit(r, 50))
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"sessions": sessions})
+	})
+	mux.HandleFunc("/control/api/session", func(w http.ResponseWriter, r *http.Request) {
+		id := r.URL.Query().Get("id")
+		if id == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "id is required"})
+			return
+		}
+		store, err := control.OpenReadOnly(control.DefaultPath(root))
+		if err != nil {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": "control database not available"})
+			return
+		}
+		defer store.Close()
+		session, err := store.Session(r.Context(), id)
+		if err != nil {
+			writeJSON(w, http.StatusNotFound, map[string]any{"error": "session not found"})
+			return
+		}
+		events, _ := store.Events(r.Context(), id, queryLimit(r, 50))
+		outputs, _ := store.Outputs(r.Context(), id, 10)
+		writeJSON(w, http.StatusOK, map[string]any{"session": session, "events": events, "outputs": outputs})
 	})
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{

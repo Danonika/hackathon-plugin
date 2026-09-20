@@ -9,6 +9,7 @@ git-ignored; this README is the committed description of the layout.
 | `evals/judges/<sha>/aggregate.json` | `eval.aggregate` | validated aggregate: mean, variance, high disagreement, common deductions, likely questions |
 | `evals/calibration/<sha>/calibration.json` | `eval.calibrate` | `retest_delta` and `noise_floor` from two runs over one frozen snapshot |
 | `evals/decisions/<sha>/<mode>-<ts>.json` | `eval.compare` | deterministic loop decision (`target_reached`, `accept`, `rollback`, `stop`) |
+| `evals/plans/<slug>.json` | `plan.create` / `plan.update` | staged build plan (S0-S6) with statuses, evidence and revision |
 | `evals/project-cost/<sha>.json` | project-cost skill | technical readiness score with evidence |
 | `evals/roast/<sha>/`, `evals/snapshots/` | roast / freeze skills | critic findings and frozen inputs |
 

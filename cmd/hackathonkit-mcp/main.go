@@ -11,7 +11,6 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
-	"time"
 
 	"hackathonkit.local/agentkit/internal/config"
 	"hackathonkit.local/agentkit/internal/learning"
@@ -20,12 +19,13 @@ import (
 	"hackathonkit.local/agentkit/internal/objectstore"
 	"hackathonkit.local/agentkit/internal/observability"
 	"hackathonkit.local/agentkit/internal/openai"
+	"hackathonkit.local/agentkit/internal/plans"
 	"hackathonkit.local/agentkit/internal/routing/fly"
 	"hackathonkit.local/agentkit/internal/storage"
 	"hackathonkit.local/agentkit/internal/tools"
 )
 
-const version = "0.6.0"
+const version = "0.7.0"
 
 func main() {
 	selftest := flag.Bool("selftest", false, "run an in-process MCP handshake and exit")
@@ -172,59 +172,12 @@ func printSessionContext(root string, mgr *config.Manager) {
 			}
 		}
 	}
-	if summary, ok := latestPlanSummary(root); ok {
-		fmt.Println(summary)
+	if plan, ok := plans.Latest(root); ok {
+		fmt.Println(plans.Summary(plan))
 	}
 	if count := countFiles(filepath.Join(root, "evals", "decisions")); count > 0 {
 		fmt.Printf("pending eval decisions: %d\n", count)
 	}
-}
-
-func latestPlanSummary(root string) (string, bool) {
-	base := filepath.Join(root, "evals", "plans")
-	entries, err := os.ReadDir(base)
-	if err != nil {
-		return "", false
-	}
-	type planDoc struct {
-		Slug     string `json:"slug"`
-		Revision int    `json:"revision"`
-		Stages   []struct {
-			ID     string `json:"id"`
-			Status string `json:"status"`
-		} `json:"stages"`
-	}
-	var best planDoc
-	var bestTime time.Time
-	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
-			continue
-		}
-		info, infoErr := entry.Info()
-		if infoErr != nil || info.ModTime().Before(bestTime) {
-			continue
-		}
-		data, readErr := os.ReadFile(filepath.Join(base, entry.Name()))
-		if readErr != nil {
-			continue
-		}
-		var doc planDoc
-		if json.Unmarshal(data, &doc) != nil {
-			continue
-		}
-		best, bestTime = doc, info.ModTime()
-	}
-	if bestTime.IsZero() {
-		return "", false
-	}
-	stage := "unknown"
-	for _, s := range best.Stages {
-		if s.Status != "done" && s.Status != "cut" {
-			stage = fmt.Sprintf("%s (%s)", s.ID, s.Status)
-			break
-		}
-	}
-	return fmt.Sprintf("plan: %s r%d stage %s", best.Slug, best.Revision, stage), true
 }
 
 func countFiles(dir string) int {

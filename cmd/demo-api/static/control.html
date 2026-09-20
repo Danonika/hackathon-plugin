@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Hackathon Agent Kit control plane</title>
+<style>
+  :root { color-scheme: dark; }
+  body { margin: 0; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; background: #0f1115; color: #e6e6e6; }
+  header { padding: 16px 24px; border-bottom: 1px solid #23262d; display: flex; gap: 16px; align-items: baseline; }
+  h1 { font-size: 18px; margin: 0; color: #ff7ac6; }
+  a { color: #7ac6ff; text-decoration: none; }
+  main { display: grid; grid-template-columns: minmax(420px, 1fr) minmax(320px, 1fr); gap: 16px; padding: 16px 24px; }
+  table { border-collapse: collapse; width: 100%; font-size: 13px; }
+  th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid #23262d; }
+  th { color: #8b93a1; font-weight: 500; }
+  tr.session { cursor: pointer; }
+  tr.session:hover { background: #171a21; }
+  tr.session.selected { background: #1d2230; }
+  .risk-low { color: #4ade80; }
+  .risk-mid { color: #fbbf24; }
+  .risk-high { color: #f87171; }
+  .muted { color: #8b93a1; }
+  pre { background: #14171d; border: 1px solid #23262d; border-radius: 6px; padding: 12px; overflow: auto; font-size: 12px; }
+  .status { font-size: 12px; color: #8b93a1; margin-top: 8px; }
+  .banner { margin: 16px 24px; padding: 12px; border: 1px solid #7a4a4a; background: #2a1b1b; border-radius: 6px; display: none; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Control plane</h1>
+  <a href="/">dashboard</a>
+  <a href="/fly-viz">fly-viz</a>
+  <span class="muted" id="counts"></span>
+</header>
+<div class="banner" id="banner"></div>
+<main>
+  <section>
+    <table>
+      <thead><tr><th>session</th><th>status</th><th>risk</th><th>updated</th><th>task</th></tr></thead>
+      <tbody id="sessions"></tbody>
+    </table>
+    <div class="status" id="status">loading...</div>
+  </section>
+  <section>
+    <div class="muted" id="detail-title">select a session</div>
+    <pre id="detail">-</pre>
+  </section>
+</main>
+<script>
+let selected = null;
+
+function riskClass(score) {
+  if (score >= 50) return "risk-high";
+  if (score >= 20) return "risk-mid";
+  return "risk-low";
+}
+
+function esc(value) {
+  return String(value ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+}
+
+async function loadSessions() {
+  const banner = document.getElementById("banner");
+  try {
+    const res = await fetch("/control/api/sessions?limit=50");
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || res.statusText);
+    banner.style.display = "none";
+    const tbody = document.getElementById("sessions");
+    tbody.innerHTML = "";
+    for (const s of data.sessions || []) {
+      const tr = document.createElement("tr");
+      tr.className = "session" + (s.id === selected ? " selected" : "");
+      tr.innerHTML =
+        "<td>" + esc(s.id) + "</td>" +
+        "<td>" + esc(s.status) + "</td>" +
+        '<td class="' + riskClass(s.risk_score) + '">' + (s.risk_score ?? 0).toFixed(1) + "</td>" +
+        "<td>" + esc((s.updated_at || "").replace("T", " ").slice(0, 19)) + "</td>" +
+        "<td>" + esc((s.task || "").slice(0, 60)) + "</td>";
+      tr.addEventListener("click", () => { selected = s.id; loadSessions(); loadDetail(s.id); });
+      tbody.appendChild(tr);
+    }
+    document.getElementById("counts").textContent = (data.sessions || []).length + " sessions";
+    document.getElementById("status").textContent = "refreshed " + new Date().toLocaleTimeString();
+    if (selected) loadDetail(selected);
+  } catch (err) {
+    banner.textContent = err.message;
+    banner.style.display = "block";
+    document.getElementById("status").textContent = "control database unavailable";
+  }
+}
+
+async function loadDetail(id) {
+  const res = await fetch("/control/api/session?id=" + encodeURIComponent(id));
+  const data = await res.json();
+  if (!res.ok) { document.getElementById("detail").textContent = data.error || res.statusText; return; }
+  document.getElementById("detail-title").textContent = id + " (" + data.session.status + ")";
+  const lines = [];
+  if (data.session.task) lines.push("task: " + data.session.task);
+  if ((data.session.risk_reasons || []).length) lines.push("risk: " + data.session.risk_reasons.join("; "));
+  if (data.session.worktree) lines.push("worktree: " + data.session.worktree);
+  lines.push("");
+  for (const ev of data.events || []) {
+    const tool = ev.tool ? " " + ev.tool : "";
+    const status = ev.status ? " [" + ev.status + "]" : "";
+    lines.push((ev.ts || "").slice(11, 19) + " " + ev.type + tool + status);
+  }
+  document.getElementById("detail").textContent = lines.join("\n") || "no events";
+}
+
+loadSessions();
+setInterval(loadSessions, 3000);
+</script>
+</body>
+</html>

@@ -7,6 +7,7 @@ data/fly-viz/
 data/artifacts/
 data/index/
 data/control/
+data/worktrees/
 data/judge-bundles/
 .agents/skills/
 .claude/skills/

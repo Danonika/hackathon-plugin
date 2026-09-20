@@ -1,0 +1,196 @@
+// Package plans stores staged build plans as JSON files under evals/plans/.
+// The build-planner skill and the session-context hook read the same files.
+package plans
+
+import (
+	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
+	"sort"
+	"strings"
+	"time"
+)
+
+type Stage struct {
+	ID            string   `json:"id"`
+	Goal          string   `json:"goal,omitempty"`
+	Status        string   `json:"status"`
+	Evidence      []string `json:"evidence,omitempty"`
+	TimeboxMinute int      `json:"timebox_minutes,omitempty"`
+}
+
+type Plan struct {
+	Slug              string         `json:"slug"`
+	Revision          int            `json:"revision"`
+	Task              string         `json:"task,omitempty"`
+	MandatoryScenario map[string]any `json:"mandatory_scenario,omitempty"`
+	Stages            []Stage        `json:"stages"`
+	UpdatedAt         time.Time      `json:"updated_at"`
+
+	Path string `json:"-"`
+}
+
+var DefaultStages = []Stage{
+	{ID: "S0", Goal: "outcome, mandatory scenario, constraints", Status: "todo", TimeboxMinute: 20},
+	{ID: "S1", Goal: "inputs inventory and research brief", Status: "todo", TimeboxMinute: 30},
+	{ID: "S2", Goal: "skeleton: build and MCP handshake with one tool", Status: "todo", TimeboxMinute: 45},
+	{ID: "S3", Goal: "vertical slice: mandatory scenario passes on real input", Status: "todo", TimeboxMinute: 90},
+	{ID: "S4", Goal: "hardening: error paths, tests, docs", Status: "todo", TimeboxMinute: 60},
+	{ID: "S5", Goal: "evaluation: project-cost gate and judge round", Status: "todo", TimeboxMinute: 60},
+	{ID: "S6", Goal: "freeze: clean-room gate and final bundle", Status: "todo", TimeboxMinute: 30},
+}
+
+var validStatus = map[string]bool{
+	"todo": true, "doing": true, "done": true, "failed": true, "cut": true,
+}
+
+func ValidStatus(status string) bool {
+	return validStatus[strings.ToLower(strings.TrimSpace(status))]
+}
+
+func Dir(root string) string {
+	return filepath.Join(root, "evals", "plans")
+}
+
+func Path(root, slug string) string {
+	return filepath.Join(Dir(root), Slug(slug)+".json")
+}
+
+// Slug normalizes a plan name into a safe file stem.
+func Slug(value string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	var b strings.Builder
+	lastDash := false
+	for _, r := range value {
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9', r >= 'а' && r <= 'я', r == 'ё':
+			b.WriteRune(r)
+			lastDash = false
+		default:
+			if !lastDash && b.Len() > 0 {
+				b.WriteByte('-')
+				lastDash = true
+			}
+		}
+	}
+	out := strings.Trim(b.String(), "-")
+	if out == "" {
+		out = "plan"
+	}
+	if len(out) > 60 {
+		out = strings.Trim(out[:60], "-")
+	}
+	return out
+}
+
+func Load(root, slug string) (Plan, error) {
+	path := Path(root, slug)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return Plan{}, err
+	}
+	var plan Plan
+	if err := json.Unmarshal(data, &plan); err != nil {
+		return Plan{}, fmt.Errorf("plan %s: %w", path, err)
+	}
+	if plan.Slug == "" {
+		plan.Slug = Slug(slug)
+	}
+	plan.Path = path
+	return plan, nil
+}
+
+// Latest returns the most recently updated plan, if any.
+func Latest(root string) (Plan, bool) {
+	entries, err := os.ReadDir(Dir(root))
+	if err != nil {
+		return Plan{}, false
+	}
+	best := Plan{}
+	bestTime := time.Time{}
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
+			continue
+		}
+		info, infoErr := entry.Info()
+		if infoErr != nil || info.ModTime().Before(bestTime) {
+			continue
+		}
+		data, readErr := os.ReadFile(filepath.Join(Dir(root), entry.Name()))
+		if readErr != nil {
+			continue
+		}
+		var plan Plan
+		if json.Unmarshal(data, &plan) != nil {
+			continue
+		}
+		plan.Path = filepath.Join(Dir(root), entry.Name())
+		best, bestTime = plan, info.ModTime()
+	}
+	if bestTime.IsZero() {
+		return Plan{}, false
+	}
+	return best, true
+}
+
+func Save(root string, plan Plan) error {
+	slug := strings.TrimSpace(plan.Slug)
+	if slug == "" {
+		return fmt.Errorf("plan slug is required")
+	}
+	plan.Slug = Slug(slug)
+	if plan.Revision < 1 {
+		plan.Revision = 1
+	}
+	if plan.Stages == nil {
+		plan.Stages = []Stage{}
+	}
+	plan.UpdatedAt = time.Now().UTC()
+	data, err := json.MarshalIndent(plan, "", "  ")
+	if err != nil {
+		return err
+	}
+	dir := Dir(root)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	path := Path(root, plan.Slug)
+	tmp, err := os.CreateTemp(dir, "plan-*.tmp")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	if _, err := tmp.Write(append(data, '\n')); err != nil {
+		tmp.Close()
+		os.Remove(tmpName)
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		os.Remove(tmpName)
+		return err
+	}
+	return os.Rename(tmpName, path)
+}
+
+func CurrentStage(plan Plan) (Stage, bool) {
+	for _, stage := range plan.Stages {
+		if stage.Status != "done" && stage.Status != "cut" {
+			return stage, true
+		}
+	}
+	return Stage{}, false
+}
+
+// Summary is a one-line description used by hooks and the CLI.
+func Summary(plan Plan) string {
+	stage, ok := CurrentStage(plan)
+	if !ok {
+		return fmt.Sprintf("plan: %s r%d all stages complete", plan.Slug, plan.Revision)
+	}
+	return fmt.Sprintf("plan: %s r%d stage %s (%s)", plan.Slug, plan.Revision, stage.ID, stage.Status)
+}
+
+func SortStages(stages []Stage) {
+	sort.SliceStable(stages, func(i, j int) bool { return stages[i].ID < stages[j].ID })
+}

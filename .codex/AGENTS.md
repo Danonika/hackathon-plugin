@@ -28,7 +28,8 @@ and final decisions.
 1. Call `system.context` first: it returns `routing_mode`, `routing_config_version` and the live capability list.
 2. In fly mode call `routing.fly_recommend` before domain tools; validate, accept, reject or extend. Fly is a hint, never a blocker.
 3. Report outcomes with `routing.fly_feedback` and durable lessons with `learning.record`.
-4. Check `system.context_budget` before adding skills or tools; keep `SKILL.md` under 400 lines.
+4. Track multi-step work with `plan.create` / `plan.update` / `plan.status`.
+5. Check `system.context_budget` before adding skills or tools; keep `SKILL.md` under 400 lines.
 
 ## Commands
 
@@ -36,6 +37,8 @@ and final decisions.
 go build ./... && go vet ./... && go test ./...
 go run ./cmd/hackathonkit-mcp --selftest
 go run ./cmd/hackathonkit-mcp --session-context
+go run ./cmd/hackathonkit-ctl ingest
+go run ./cmd/hackathonkit-ctl tui
 scripts/doctor.sh
 ```
 

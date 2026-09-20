@@ -2,7 +2,7 @@
 
 Local Codex plugin backed by a typed MCP capability layer. Codex is the main reasoning engine, Skills define domain workflows, the local MCP server exposes deterministic and AI-powered capabilities, and the experimental Fly router recommends capability routes while Codex keeps the final decision.
 
-Status: v0.6.0. MCP runtime (28 tools), 16 skills, session hooks, durable learnings, Codex subagents, four harness adapters, PDF/XLSX processing, Fly v2 (keyword + embeddings + kNN memory + mushroom-body learning + LLM classifier), Postgres/MinIO backends, demo dashboard, install profiles/repair and the evaluation subsystem (deterministic aggregation, calibration, loop decisions and bundle freezing) are in place.
+Status: v0.7.0. MCP runtime (31 tools), 16 skills, session hooks, durable learnings, Codex subagents, four harness adapters, a full control plane (SQLite store, daemon, TUI, worktrees, agent runs, risk scoring, session handoff), staged build plans, PDF/XLSX processing, Fly v2 (keyword + embeddings + kNN memory + mushroom-body learning + LLM classifier), Postgres/MinIO backends, demo dashboard, install profiles/repair and the evaluation subsystem (deterministic aggregation, calibration, loop decisions and bundle freezing) are in place.
 
 ## Contents
 
@@ -13,6 +13,7 @@ Status: v0.6.0. MCP runtime (28 tools), 16 skills, session hooks, durable learni
 - [Skills](#skills)
 - [Session hooks](#session-hooks)
 - [Learnings](#learnings)
+- [Control plane](#control-plane)
 - [MCP tools](#mcp-tools)
 - [Routing modes](#routing-modes)
 - [Evaluation subsystem](#evaluation-subsystem)
@@ -41,7 +42,7 @@ Codex (reasoning, final decisions)
   |     report-builder, judge, project-cost, roast-project, cp-expert-refactoring,
   |     system-design-expert, self-improvement-controller
   |
-  |-- MCP server (stdio JSON-RPC, 28 tools, one shared envelope per call)
+  |-- MCP server (stdio JSON-RPC, 31 tools, one shared envelope per call)
         system.*            context, capabilities, context budget
         routing.fly_*       capability recommendation + learning feedback
         learning.*          durable trigger/insight learnings with confidence
@@ -56,9 +57,13 @@ Codex (reasoning, final decisions)
   |
   |-- Hooks (Node 18+): SessionStart context injection, PostToolUse events, Stop handoff
   |
+  |-- Control plane (hackathonkit-ctl): JSONL -> SQLite ingest, daemon API, TUI, worktrees, risk, handoff
+  |
   |-- Storage: data/ (authoritative local files)
         data/index/learnings.json   durable learnings
         data/control/session.env    current session marker
+        data/control/control.db     control plane database (generated)
+        data/worktrees/             per-session git worktrees
         Postgres  optional: artifacts, routing_runs, fly_predictions, eval_runs
         MinIO     optional: artifact blob mirror with local read fallback
 ```
@@ -150,6 +155,29 @@ Durable, confidence-scored trigger/insight pairs stored in `data/index/learnings
 - `learning.promote` - project to global once observed at least `promote_after` times (default 3) and confident enough.
 - `SessionStart` injects the top `max_inject` (default 6) learnings with confidence >= `inject_min_confidence` (default 0.7). Configure in `configs/config.yaml` under `learning:`.
 
+## Control plane
+
+`cmd/hackathonkit-ctl` is the layer above individual agent sessions. JSONL logs stay the cross-process source of truth; the daemon replays them into SQLite (`data/control/control.db`) with per-file byte cursors, so repeated ingests never duplicate records.
+
+```sh
+hackathonkit-ctl ingest                          # one-shot replay into SQLite
+hackathonkit-ctl sessions list [--limit N]       # status, risk, updated, task
+hackathonkit-ctl sessions show <id>              # session + events + outputs (JSON)
+hackathonkit-ctl sessions resume <id>            # paste-ready handoff block
+hackathonkit-ctl daemon start|stop|status        # background ingest + loopback API
+hackathonkit-ctl tui                             # live dashboard (bubbletea)
+hackathonkit-ctl worktree create|list|remove     # git worktree per session
+hackathonkit-ctl run --task "..." [--worktree]   # codex exec in a recorded session
+```
+
+- **Daemon API** on `127.0.0.1:8788` (env `HACKATHONKIT_CONTROL_PORT`, optional `HACKATHONKIT_CONTROL_TOKEN` via `X-HackathonKit-Token`): `/healthz`, `/api/sessions`, `/api/sessions/{id}`, `/api/events`, `/api/risk`. Logs to `data/control/daemon.log`, PID in `data/control/daemon.pid`.
+- **Risk scoring** is deterministic: failed tool calls (+8, cap 40), tool panics (+15, cap 30), eval rollbacks (+25, cap 50), stalled active sessions (+10), clamped to 100, with reasons stored per session.
+- **Handoff** combines the session, the latest plan stage, top learnings, recent events, outputs and pending eval decisions.
+- **Worktrees** live under `data/worktrees/<slug>` on branch `hackathonkit/<slug>`; `run` spawns `codex exec --cd <dir>` when the Codex CLI is available.
+- **Web view**: the demo API serves `/control` with a live sessions/risk table (reads SQLite read-only; shows a hint when the database does not exist yet).
+
+Plans (`plan.create` / `plan.update` / `plan.status`) are stored under `evals/plans/<slug>.json` with stages S0-S6, statuses `todo|doing|done|failed|cut` and evidence references; `plan.update` bumps the revision.
+
 ## MCP tools
 
 Every tool returns the shared envelope: `status` (`ok` | `partial` | `error`), `data`, `sources`, `warnings`, `metrics`, `trace_id`. Read `warnings` before trusting `data`; keep `sources` for citations. The JSON-RPC response wraps the envelope in `content[0].text` and mirrors `status == "error"` in `isError`.
@@ -180,6 +208,14 @@ Every tool returns the shared envelope: `status` (`ok` | `partial` | `error`), `
 | `learning.record` | `trigger` (required), `insight` (required), `outcome` (`success`/`failure`/`neutral`), `scope` (`project`/`global`), `evidence[]` | `id`, `confidence`, `observations`, `scope`, `created` |
 | `learning.recall` | `query` (required), `limit` (5), `min_confidence`, `scope` (`project`/`global`/`all`) | ranked `matches[]` with `score` and the full learning |
 | `learning.promote` | `id` (required) | `promoted`, `reason`, `learning` |
+
+### Plans
+
+| Tool | Arguments | Returns |
+|---|---|---|
+| `plan.create` | `slug` (required), `task`, `mandatory_scenario`, `stages[]` (defaults S0-S6) | `slug`, `revision`, `path`, `stages`, `summary` |
+| `plan.update` | `slug`, `stage`, `status` (all required), `evidence[]`, `goal` | `revision`, `stage`, `status`, `summary` |
+| `plan.status` | `slug` (optional, defaults to latest) | `plan` with `current_stage` or partial when none exists |
 
 ### Files and documents
 
@@ -391,13 +427,16 @@ plugins/hackathonkit/          Codex plugin (single source of truth for skills)
 .codex/AGENTS.md           Codex supplement
 .codex/agents/             researcher / reviewer / evaluator subagents (read-only)
 cmd/hackathonkit-mcp/          MCP stdio server
-cmd/demo-api/              demo dashboard + API (routing toggle, logs, files, fly-viz)
+cmd/hackathonkit-ctl/          control plane CLI (ingest, daemon, sessions, TUI, worktrees, run)
+cmd/demo-api/              demo dashboard + API (routing toggle, logs, files, fly-viz, control)
 cmd/demo-api/static/       embedded dashboard pages
 cmd/fly-train/             offline MB trainer + kNN memory rebuilder
 internal/mcp/              JSON-RPC, registry, contracts, server
 internal/config/           config + live routing/evaluation state (atomic writes)
 internal/routing/fly/      Fly router (keyword, embeddings, kNN memory, MB brain, LLM)
 internal/learning/         durable confidence-scored learnings (instincts)
+internal/plans/            staged build plans under evals/plans/
+internal/control/          SQLite store, JSONL ingest, risk scoring, session handoff
 internal/evaluation/       judge-report validation/aggregation, calibration, loop decisions, bundle freezer
 internal/tools/            capability implementations
 internal/storage/          filesystem storage with path sanitization + backend attach
@@ -422,6 +461,10 @@ go run ./cmd/hackathonkit-mcp --set-routing-mode fly
 go run ./cmd/hackathonkit-mcp --session-context # context block used by the SessionStart hook
 go run ./cmd/demo-api                       # demo dashboard + routing toggle API (http://127.0.0.1:8787)
 go run ./cmd/fly-train -model knn           # rebuild Fly memory from feedback logs
+go run ./cmd/hackathonkit-ctl ingest            # replay logs into the control database
+go run ./cmd/hackathonkit-ctl sessions list
+go run ./cmd/hackathonkit-ctl daemon start      # background ingest + loopback API
+go run ./cmd/hackathonkit-ctl tui               # live dashboard
 sh scripts/sync-harness.sh                  # regenerate mirrors, verify adapters
 sh scripts/repair.sh                        # regenerate missing generated artifacts
 ```
@@ -432,7 +475,7 @@ Sample dataset: `data/input/sample-telemetry.csv` (72 hourly readings with two p
 
 ## Testing
 
-`go test ./...` covers the JSON-RPC handshake, notification suppression, panic containment, live routing and evaluation config re-reads, path sanitization and backend fallback, observability append/tail, judge aggregation/calibration/decisions, the bundle freezer, the eval tool handlers, learning confidence/recall/promotion and the context-budget estimator. Run `go run ./cmd/hackathonkit-mcp --selftest` for the end-to-end handshake and `scripts/smoke.sh` for the process-level check.
+`go test ./...` covers the JSON-RPC handshake, notification suppression, panic containment, live routing and evaluation config re-reads, path sanitization and backend fallback, observability append/tail, judge aggregation/calibration/decisions, the bundle freezer, the eval and plan tool handlers, learning confidence/recall/promotion, the context-budget estimator, control-plane ingest idempotency, deterministic risk scoring, handoff rendering and the daemon HTTP handlers. Run `go run ./cmd/hackathonkit-mcp --selftest` for the end-to-end handshake and `scripts/smoke.sh` for the process-level check.
 
 ## Known limitations
 
@@ -448,6 +491,8 @@ Sample dataset: `data/input/sample-telemetry.csv` (72 hourly readings with two p
 - Session hooks require Node 18+ on the host (Codex CLI already needs Node). Every hook is best-effort and never blocks a session; without Node the hooks are skipped.
 - `--profile core` filters only the generated skill mirrors; the Codex plugin always ships all 16 skills.
 - Learning recall uses embeddings when `OPENAI_API_KEY` is set and keyword overlap otherwise; learnings never leave the local repository.
+- The control plane is optional: hooks and MCP work without it. `demo-api /control` reads SQLite read-only and shows a hint until `hackathonkit-ctl ingest` or the daemon has run.
+- `hackathonkit-ctl run` requires the Codex CLI on `PATH` and `git` for `--worktree`; the daemon binds loopback only and never proxies to the network.
 
 ## Troubleshooting
 

@@ -52,6 +52,13 @@ Skill authoring rules: `docs/SKILL-STANDARD.md`.
 - Before repeating a class of task: `learning.recall` and apply the matches.
 - Promote project learnings to global with `learning.promote` once they are proven (3+ observations).
 
+## Control Plane
+
+- `plan.create` / `plan.update` / `plan.status` keep the staged build plan under `evals/plans/`; update the current stage with evidence as you go.
+- `hackathonkit-ctl ingest` replays session logs into SQLite; `hackathonkit-ctl sessions resume <id>` prints a handoff block for a new session.
+- `hackathonkit-ctl tui` shows sessions, risk and events; `hackathonkit-ctl worktree create <slug>` isolates a run.
+- Risk is deterministic (failed tools, panics, eval rollbacks, stalls); do not edit risk by hand.
+
 ## Commands
 
 ```sh

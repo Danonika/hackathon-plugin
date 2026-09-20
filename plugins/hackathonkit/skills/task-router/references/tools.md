@@ -22,6 +22,14 @@ Read `warnings` before trusting `data`; keep `sources` for citations.
 | `learning.recall` | `query` (required), `limit` (5), `min_confidence`, `scope` (`project`/`global`/`all`) | ranked `matches[]` with `score` and full learning |
 | `learning.promote` | `id` (required) | `promoted`, `reason`, `learning` |
 
+## Plans
+
+| Tool | Arguments | Returns |
+|---|---|---|
+| `plan.create` | `slug` (required), `task`, `mandatory_scenario`, `stages[]` | `slug`, `revision`, `path`, `stages`, `summary` |
+| `plan.update` | `slug`, `stage`, `status` (required), `evidence[]`, `goal` | `revision`, `stage`, `status`, `summary` |
+| `plan.status` | `slug` (optional, defaults to latest) | plan with `current_stage` |
+
 ## Evaluation
 
 | Tool | Arguments | Returns |

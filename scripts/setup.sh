@@ -74,6 +74,7 @@ else
   mkdir -p "$ROOT/bin"
   go build -o bin/hackathonkit-mcp ./cmd/hackathonkit-mcp
   go build -o bin/hackathonkit-demo-api ./cmd/demo-api
+  go build -o bin/hackathonkit-ctl ./cmd/hackathonkit-ctl
   echo "[setup] local binaries built in bin/"
 fi
 

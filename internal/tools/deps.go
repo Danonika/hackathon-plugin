@@ -30,6 +30,7 @@ func RegisterAll(reg *mcp.Registry, d Deps) {
 	registerSystem(reg, d)
 	registerEvaluation(reg, d)
 	registerLearning(reg, d)
+	registerPlans(reg, d)
 	registerContextBudget(reg, d)
 	registerFiles(reg, d)
 	registerDocuments(reg, d)
