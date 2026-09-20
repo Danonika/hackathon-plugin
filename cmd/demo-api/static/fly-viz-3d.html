@@ -59,12 +59,20 @@ const KC_TOTAL = 4133, TOP_N = 64;
 const scene = new THREE.Scene();
 scene.fog = new THREE.FogExp2(0x060913, 0.045);
 const camera = new THREE.PerspectiveCamera(50, (innerWidth / 2) / innerHeight, 0.1, 200);
-camera.position.set(0, 4.5, 14);
+camera.position.set(0, 2.8, 8.5);
+camera.lookAt(0, 1.1, 0);
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setSize(innerWidth / 2, innerHeight);
 document.getElementById('scene').appendChild(renderer.domElement);
 scene.add(new THREE.AmbientLight(0x8899cc, 1.1));
-const key = new THREE.DirectionalLight(0xffffff, 1.4); key.position.set(6, 10, 8); scene.add(key);
+const key = new THREE.DirectionalLight(0xffffff, 1.4); key.position.set(6, 10, 8); key.castShadow = true; scene.add(key);
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.shadowMap.enabled = true;
+scene.add(new THREE.HemisphereLight(0x9db4ff, 0x0b1020, 0.9));
+const rim = new THREE.PointLight(0x8b5cf6, 30, 40); rim.position.set(-6, 6, -6); scene.add(rim);
+const grid = new THREE.GridHelper(40, 40, 0x1e293b, 0x111a2e); scene.add(grid);
+const ground = new THREE.Mesh(new THREE.PlaneGeometry(40, 40), new THREE.MeshStandardMaterial({ color: 0x070b14, roughness: 1 }));
+ground.rotation.x = -Math.PI / 2; ground.receiveShadow = true; scene.add(ground);
 
 const fly = new THREE.Group();
 const bodyMat = new THREE.MeshStandardMaterial({ color: 0x2b3a55, roughness: .5, metalness: .25 });
@@ -125,6 +133,12 @@ async function loadRealFly() {
     model.scale.setScalar(scale);
     model.position.set(-center.x * scale, -center.y * scale, -center.z * scale);
     fly.add(model);
+    model.traverse(n => {
+      if (n.isMesh) {
+        n.castShadow = true;
+        n.material = new THREE.MeshStandardMaterial({ color: 0x9a6a3a, roughness: .55, metalness: .15 });
+      }
+    });
     if (gltf.animations && gltf.animations.length) {
       const mixer = new THREE.AnimationMixer(model);
       gltf.animations.forEach(clip => mixer.clipAction(clip).play());
