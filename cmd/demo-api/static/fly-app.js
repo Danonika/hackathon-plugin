@@ -155,6 +155,7 @@ function animate(frameTime) {
     target.set(targetX,y,targetZ);
     view.organism.position.lerp(target,1-Math.exp(-dt*4));
     view.organism.rotation.y=reduced?0:Math.sin(elapsed*.23)*.14+reaction+wander*.08;
+    view.organism.rotation.x=live.mode==='reward'?-0.28*Math.max(0,live.pulse):0;
     shared.turn=view.organism.rotation.y;
     shared.speed=.05+energy*.35+(live.mode==='reward'?.25:0);
     shared.flight=live.mode==='reward'?.9:live.mode==='correction'?.55:0;

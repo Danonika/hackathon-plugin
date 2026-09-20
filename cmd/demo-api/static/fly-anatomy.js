@@ -288,14 +288,14 @@ export async function loadFlyModel() {
           if (joint.name === 'head_abduct') angle = turn * 0.075 + Math.sin(t * 0.7) * 0.015;
           else if (joint.name === 'head') angle = Math.sin(t * 1.3) * 0.015 - reward * 0.03;
         } else if (name.startsWith('coxa_')) {
-          if (joint.name.includes('abduct')) angle = stride * 0.08 + turn * side * speed * 0.025 + (pair === 1 ? clap * side * (0.75 + 0.45 * Math.sin(t * 14)) : 0);
+          if (joint.name.includes('abduct')) angle = stride * 0.08 + turn * side * speed * 0.025 + (pair === 1 ? clap * side * (1.8 + 0.9 * Math.sin(t * 12)) : 0);
           else if (!joint.name.includes('twist')) angle = lift * 0.07 + flight * 0.04;
         } else if (name.startsWith('femur_')) {
-          if (!joint.name.includes('twist')) angle = stride * 0.11 - flight * 0.055 - (pair === 1 ? clap * 0.95 : 0);
+          if (!joint.name.includes('twist')) angle = stride * 0.11 - flight * 0.055 - (pair === 1 ? clap * 2.2 : 0);
         } else if (name.startsWith('tibia_')) {
-          angle = -lift * 0.105 + flight * 0.055 + (pair === 1 ? clap * 0.7 * (1 + 0.45 * Math.sin(t * 14)) : 0);
+          angle = -lift * 0.105 + flight * 0.055 + (pair === 1 ? clap * 1.7 * (1 + 0.5 * Math.sin(t * 12)) : 0);
         } else if (name.startsWith('tarsus_')) {
-          angle = lift * 0.045 + (pair === 1 ? clap * 0.5 * Math.sin(t * 14 + 0.6) : 0);
+          angle = lift * 0.045 + (pair === 1 ? clap * 1.1 * Math.sin(t * 12 + 0.6) : 0);
         } else if (name.startsWith('abdomen')) {
           if (!joint.name.includes('abduct')) angle = Math.sin(t * 2.6) * 0.0025 + flight * 0.0015;
         } else if (name.startsWith('haltere_')) {
