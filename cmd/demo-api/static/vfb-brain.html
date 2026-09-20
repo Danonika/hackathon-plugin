@@ -52,10 +52,10 @@ camera.lookAt(0, 0, 0);
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setSize(innerWidth, innerHeight);
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
-renderer.shadowMap.enabled = true;
 document.getElementById('scene').appendChild(renderer.domElement);
+scene.add(new THREE.AmbientLight(0xffffff, 0.7));
 scene.add(new THREE.HemisphereLight(0xcfe0ff, 0x0b1020, 2.2));
-const key = new THREE.DirectionalLight(0xfff2dd, 2.6); key.position.set(300, 500, 400); key.castShadow = true; scene.add(key);
+const key = new THREE.DirectionalLight(0xfff2dd, 2.6); key.position.set(300, 500, 400); scene.add(key);
 const fill = new THREE.DirectionalLight(0x9db4ff, 1.2); fill.position.set(-400, 100, 300); scene.add(fill);
 const rim = new THREE.PointLight(0x8b5cf6, 800, 2000); rim.position.set(-400, 200, -400); scene.add(rim);
 const grid = new THREE.GridHelper(2000, 40, 0x1e293b, 0x111a2e); grid.position.y = -260; scene.add(grid);
@@ -87,9 +87,8 @@ async function loadMeshes() {
       const obj = await loader.loadAsync('/vfb-mesh/' + it.file);
       obj.traverse(n => {
         if (n.isMesh) {
-          if (n.geometry && !n.geometry.attributes.normal) n.geometry.computeVertexNormals();
+          if (n.geometry) n.geometry.computeVertexNormals();
           n.material = it.mat;
-          n.castShadow = true;
         }
       });
       brain.add(normalize(obj));
