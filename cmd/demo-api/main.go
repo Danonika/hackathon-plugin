@@ -21,7 +21,7 @@ import (
 	"hackathonkit.local/agentkit/internal/observability"
 )
 
-//go:embed static/*.html
+//go:embed static/*.html static/*.js
 var staticFS embed.FS
 
 func main() {
@@ -51,6 +51,22 @@ func main() {
 	token := os.Getenv("HACKATHONKIT_DEMO_TOKEN")
 
 	mux := http.NewServeMux()
+	mux.Handle("/fly-live", newFlyLiveHandler(root))
+	mux.HandleFunc("/fly-static/", func(w http.ResponseWriter, r *http.Request) {
+		name := strings.TrimPrefix(r.URL.Path, "/fly-static/")
+		if strings.Contains(name, "/") || !strings.HasSuffix(name, ".js") {
+			http.NotFound(w, r)
+			return
+		}
+		content, err := staticFS.ReadFile("static/" + name)
+		if err != nil {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
+		w.Header().Set("Cache-Control", "no-cache")
+		_, _ = w.Write(content)
+	})
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/" {
 			http.NotFound(w, r)

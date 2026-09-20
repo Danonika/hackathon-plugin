@@ -10,12 +10,20 @@ type KCSample struct {
 	Activation float64 `json:"activation"`
 }
 
+// ActivationSnapshot returns the actual sparse KC code. A zero limit includes
+// every active cell; omitted cells are zero only when activation_complete is true.
 func (r *Router) ActivationSnapshot(ctx context.Context, task string, topN int) map[string]any {
-	if topN <= 0 || topN > 512 {
+	if topN < 0 {
 		topN = 64
 	}
-	empty := map[string]any{"active_kc": []KCSample{}, "mbon": map[string]float64{}, "kc_total": MBKenyonCells}
+	empty := map[string]any{
+		"active_kc": []KCSample{}, "mbon": map[string]float64{}, "kc_total": MBKenyonCells,
+		"activation_available": false, "activation_complete": false, "active_kc_count": 0,
+	}
 	brain := r.loadBrain()
+	if brain != nil {
+		empty["kc_total"] = brain.KC
+	}
 	if brain == nil || r.embedder == nil {
 		return empty
 	}
@@ -27,15 +35,25 @@ func (r *Router) ActivationSnapshot(ctx context.Context, task string, topN int) 
 	if !ok {
 		return empty
 	}
-	samples := make([]KCSample, 0, topN)
+	samples := make([]KCSample, 0)
 	for i, v := range code {
 		if v > 0 {
 			samples = append(samples, KCSample{Index: i, Activation: v})
 		}
 	}
-	sort.Slice(samples, func(i, j int) bool { return samples[i].Activation > samples[j].Activation })
-	if len(samples) > topN {
+	sort.Slice(samples, func(i, j int) bool {
+		if samples[i].Activation == samples[j].Activation {
+			return samples[i].Index < samples[j].Index
+		}
+		return samples[i].Activation > samples[j].Activation
+	})
+	activeCount := len(samples)
+	if topN > 0 && len(samples) > topN {
 		samples = samples[:topN]
 	}
-	return map[string]any{"active_kc": samples, "mbon": scores, "kc_total": brain.KC}
+	return map[string]any{
+		"active_kc": samples, "mbon": scores, "kc_total": brain.KC,
+		"activation_available": true, "activation_complete": len(samples) == activeCount,
+		"active_kc_count": activeCount,
+	}
 }
