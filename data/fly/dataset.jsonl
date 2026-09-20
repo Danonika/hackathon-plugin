@@ -1,0 +1,50 @@
+﻿{"task":"собери отчёт с выводами","category":"reports","domain":"hackathonkit"}
+{"task":"подготовь итоговую сводку","category":"reports","domain":"hackathonkit"}
+{"task":"оформи результаты анализа","category":"reports","domain":"hackathonkit"}
+{"task":"сделай презентацию результатов","category":"reports","domain":"hackathonkit"}
+{"task":"собери финальный отчёт","category":"reports","domain":"hackathonkit"}
+{"task":"посчитай статистику по таблице","category":"data","domain":"hackathonkit"}
+{"task":"проанализируй csv","category":"data","domain":"hackathonkit"}
+{"task":"найди корреляции в данных","category":"data","domain":"hackathonkit"}
+{"task":"сделай выборку из xlsx","category":"data","domain":"hackathonkit"}
+{"task":"посчитай средние по колонкам","category":"data","domain":"hackathonkit"}
+{"task":"проанализируй изображение","category":"vision","domain":"hackathonkit"}
+{"task":"прочитай скриншот","category":"vision","domain":"hackathonkit"}
+{"task":"что на фото оборудования","category":"vision","domain":"hackathonkit"}
+{"task":"распознай объекты на картинке","category":"vision","domain":"hackathonkit"}
+{"task":"опиши схему на изображении","category":"vision","domain":"hackathonkit"}
+{"task":"классифицируй логи","category":"classification","domain":"hackathonkit"}
+{"task":"определи тип обращения","category":"classification","domain":"hackathonkit"}
+{"task":"раздели сообщения по категориям","category":"classification","domain":"hackathonkit"}
+{"task":"оцени риск текста","category":"classification","domain":"hackathonkit"}
+{"task":"определи вид инцидента","category":"classification","domain":"hackathonkit"}
+{"task":"извлеки текст из pdf договора","category":"documents","domain":"hackathonkit"}
+{"task":"разбери сканы документов","category":"documents","domain":"hackathonkit"}
+{"task":"сравни два docx","category":"documents","domain":"hackathonkit"}
+{"task":"вытащи поля из акта","category":"documents","domain":"hackathonkit"}
+{"task":"прочитай вложение и найди даты","category":"documents","domain":"hackathonkit"}
+{"task":"найди ответ в регламенте","category":"knowledge","domain":"hackathonkit"}
+{"task":"поищи в базе знаний","category":"knowledge","domain":"hackathonkit"}
+{"task":"какие правила оформления","category":"knowledge","domain":"hackathonkit"}
+{"task":"найди справку в документах","category":"knowledge","domain":"hackathonkit"}
+{"task":"проверь по источникам","category":"knowledge","domain":"hackathonkit"}
+{"task":"найди аномалии в телеметрии датчиков","category":"timeseries","domain":"hackathonkit"}
+{"task":"проанализируй показатели во времени","category":"timeseries","domain":"hackathonkit"}
+{"task":"построй тренд метрики","category":"timeseries","domain":"hackathonkit"}
+{"task":"обнаружь выбросы в показаниях","category":"timeseries","domain":"hackathonkit"}
+{"task":"посчитай динамику за неделю","category":"timeseries","domain":"hackathonkit"}
+{"task":"нанеси точки на карту","category":"geo","domain":"hackathonkit"}
+{"task":"обработай координаты участка","category":"geo","domain":"hackathonkit"}
+{"task":"сделай гео анализ","category":"geo","domain":"hackathonkit"}
+{"task":"свяжи данные с местностью","category":"geo","domain":"hackathonkit"}
+{"task":"построй карту полей","category":"geo","domain":"hackathonkit"}
+{"task":"расшифруй аудиозапись встречи","category":"speech","domain":"hackathonkit"}
+{"task":"сделай субтитры из интервью","category":"speech","domain":"hackathonkit"}
+{"task":"переведи голос в текст","category":"speech","domain":"hackathonkit"}
+{"task":"транскрибируй запись разговора","category":"speech","domain":"hackathonkit"}
+{"task":"обработай аудио на казахском","category":"speech","domain":"hackathonkit"}
+{"task":"нарежь видео на фрагменты","category":"media","domain":"hackathonkit"}
+{"task":"сделай клип из записи","category":"media","domain":"hackathonkit"}
+{"task":"выбери лучшие моменты видео","category":"media","domain":"hackathonkit"}
+{"task":"смонтируй фрагменты","category":"media","domain":"hackathonkit"}
+{"task":"обработай медиафайл","category":"media","domain":"hackathonkit"}

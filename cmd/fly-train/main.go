@@ -37,9 +37,11 @@ func main() {
 	cfg := config.NewManager(root).Config()
 
 	client := openai.New(cfg.OpenAI)
-	if !client.Available() {
-		fmt.Fprintln(os.Stderr, "fly-train: OPENAI_API_KEY is required to compute embeddings")
-		os.Exit(1)
+	var embedder fly.Embedder
+	if client.Available() {
+		embedder = fly.NewChainEmbedder(client, fly.NewHashEncoder(512))
+	} else {
+		embedder = fly.NewHashEncoder(512)
 	}
 
 	if *dataset == "" && *model == "knn" {
@@ -76,7 +78,7 @@ func main() {
 	for _, row := range rows {
 		texts = append(texts, row.Task)
 	}
-	vectors, err := client.Embed(context.Background(), texts)
+	vectors, err := embedder.Embed(context.Background(), texts)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "fly-train: embeddings failed:", err)
 		os.Exit(1)
@@ -106,7 +108,7 @@ func main() {
 			fmt.Fprintln(os.Stderr, "fly-train: eval:", err)
 			os.Exit(1)
 		}
-		runEval(client, brain, evalRows)
+		runEval(embedder, brain, evalRows)
 	}
 }
 
@@ -152,12 +154,12 @@ func rebuildFromFeedback(root string, cfg config.File, client *openai.Client) {
 		count, router.MemorySize(), router.Dopamine())
 }
 
-func runEval(client *openai.Client, brain *fly.MBrain, rows []datasetRow) {
+func runEval(embedder fly.Embedder, brain *fly.MBrain, rows []datasetRow) {
 	texts := make([]string, 0, len(rows))
 	for _, row := range rows {
 		texts = append(texts, row.Task)
 	}
-	vectors, err := client.Embed(context.Background(), texts)
+	vectors, err := embedder.Embed(context.Background(), texts)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "fly-train: eval embeddings failed:", err)
 		return
