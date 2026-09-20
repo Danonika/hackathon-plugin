@@ -70,8 +70,8 @@ func TestContextBudgetReportsToolsAndSkills(t *testing.T) {
 		t.Fatalf("status %s data %+v", env.Status, env.Data)
 	}
 	data := env.Data.(map[string]any)
-	if data["tool_count"].(int) != 31 {
-		t.Fatalf("tool_count = %v, want 31", data["tool_count"])
+	if data["tool_count"].(int) != 33 {
+		t.Fatalf("tool_count = %v, want 33", data["tool_count"])
 	}
 	if data["total_tokens"].(int) <= 0 {
 		t.Fatalf("total_tokens must be positive: %+v", data)

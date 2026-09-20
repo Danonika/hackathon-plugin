@@ -1,0 +1,225 @@
+// Package quality runs the deterministic build/verify gate and stores its
+// evidence under evals/quality/<sha>/gate.json.
+package quality
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"sort"
+	"strings"
+	"time"
+)
+
+type Check struct {
+	Name       string `json:"name"`
+	Command    string `json:"command"`
+	Status     string `json:"status"`
+	DurationMS int64  `json:"duration_ms"`
+	Output     string `json:"output,omitempty"`
+}
+
+type Report struct {
+	SHA        string         `json:"sha"`
+	OK         bool           `json:"ok"`
+	StartedAt  time.Time      `json:"started_at"`
+	FinishedAt time.Time      `json:"finished_at"`
+	Checks     []Check        `json:"checks"`
+	Summary    map[string]int `json:"summary"`
+}
+
+type checkSpec struct {
+	name    string
+	command []string
+	timeout time.Duration
+}
+
+var defaultChecks = []checkSpec{
+	{"gofmt", []string{"gofmt", "-l", "internal", "cmd"}, 60 * time.Second},
+	{"build", []string{"go", "build", "./..."}, 5 * time.Minute},
+	{"vet", []string{"go", "vet", "./..."}, 5 * time.Minute},
+	{"test", []string{"go", "test", "./..."}, 10 * time.Minute},
+	{"selftest", []string{"go", "run", "./cmd/hackathonkit-mcp", "--selftest"}, 5 * time.Minute},
+	{"skills", []string{"go", "run", "./cmd/hackathonkit-mcp", "--validate-skills"}, 5 * time.Minute},
+}
+
+// Run executes the gate in the repository root. The caller decides how to
+// treat a failing report.
+func Run(ctx context.Context, root string) Report {
+	report := Report{
+		SHA:       GitSHA(root),
+		StartedAt: time.Now().UTC(),
+		Checks:    []Check{},
+		Summary:   map[string]int{},
+	}
+	for _, spec := range defaultChecks {
+		report.Checks = append(report.Checks, runCheck(ctx, root, spec))
+	}
+	report.FinishedAt = time.Now().UTC()
+	report.OK = true
+	for _, check := range report.Checks {
+		report.Summary[check.Status]++
+		if check.Status != "ok" {
+			report.OK = false
+		}
+	}
+	return report
+}
+
+func runCheck(ctx context.Context, root string, spec checkSpec) Check {
+	check := Check{Name: spec.name, Command: strings.Join(spec.command, " ")}
+	runCtx, cancel := context.WithTimeout(ctx, spec.timeout)
+	defer cancel()
+	start := time.Now()
+	cmd := exec.CommandContext(runCtx, spec.command[0], spec.command[1:]...)
+	cmd.Dir = root
+	output, err := cmd.CombinedOutput()
+	check.DurationMS = time.Since(start).Milliseconds()
+	check.Output = tail(string(output), 2000)
+	switch {
+	case runCtx.Err() == context.DeadlineExceeded:
+		check.Status = "timeout"
+	case err != nil:
+		check.Status = "failed"
+	case spec.name == "gofmt" && strings.TrimSpace(string(output)) != "":
+		check.Status = "failed"
+	default:
+		check.Status = "ok"
+	}
+	return check
+}
+
+func tail(text string, limit int) string {
+	text = strings.TrimRight(text, "\n")
+	if len(text) <= limit {
+		return text
+	}
+	return "..." + text[len(text)-limit:]
+}
+
+func Dir(root string) string {
+	return filepath.Join(root, "evals", "quality")
+}
+
+func Path(root, sha string) string {
+	if strings.TrimSpace(sha) == "" {
+		sha = "unknown"
+	}
+	return filepath.Join(Dir(root), sha, "gate.json")
+}
+
+// Save writes the report atomically and returns the repository-relative path.
+func Save(root string, report Report) (string, error) {
+	path := Path(root, report.SHA)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return "", err
+	}
+	data, err := json.MarshalIndent(report, "", "  ")
+	if err != nil {
+		return "", err
+	}
+	tmp, err := os.CreateTemp(filepath.Dir(path), "gate-*.tmp")
+	if err != nil {
+		return "", err
+	}
+	tmpName := tmp.Name()
+	if _, err := tmp.Write(append(data, '\n')); err != nil {
+		tmp.Close()
+		os.Remove(tmpName)
+		return "", err
+	}
+	if err := tmp.Close(); err != nil {
+		os.Remove(tmpName)
+		return "", err
+	}
+	if err := os.Rename(tmpName, path); err != nil {
+		os.Remove(tmpName)
+		return "", err
+	}
+	if rel, err := filepath.Rel(root, path); err == nil {
+		return filepath.ToSlash(rel), nil
+	}
+	return path, nil
+}
+
+// Latest returns the most recently written gate report.
+func Latest(root string) (Report, bool) {
+	entries, err := os.ReadDir(Dir(root))
+	if err != nil {
+		return Report{}, false
+	}
+	var best Report
+	var bestTime time.Time
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		info, infoErr := entry.Info()
+		if infoErr != nil || info.ModTime().Before(bestTime) {
+			continue
+		}
+		data, readErr := os.ReadFile(filepath.Join(Dir(root), entry.Name(), "gate.json"))
+		if readErr != nil {
+			continue
+		}
+		var report Report
+		if json.Unmarshal(data, &report) != nil {
+			continue
+		}
+		best, bestTime = report, info.ModTime()
+	}
+	if bestTime.IsZero() {
+		return Report{}, false
+	}
+	return best, true
+}
+
+// GitSHA resolves HEAD without requiring a git binary.
+func GitSHA(root string) string {
+	gitDir := filepath.Join(root, ".git")
+	head, err := os.ReadFile(filepath.Join(gitDir, "HEAD"))
+	if err != nil {
+		return "unknown"
+	}
+	value := strings.TrimSpace(string(head))
+	if !strings.HasPrefix(value, "ref: ") {
+		if len(value) >= 40 {
+			return value
+		}
+		return "unknown"
+	}
+	ref := strings.TrimSpace(strings.TrimPrefix(value, "ref: "))
+	if data, err := os.ReadFile(filepath.Join(gitDir, filepath.FromSlash(ref))); err == nil {
+		if sha := strings.TrimSpace(string(data)); sha != "" {
+			return sha
+		}
+	}
+	if packed, err := os.ReadFile(filepath.Join(gitDir, "packed-refs")); err == nil {
+		for _, line := range strings.Split(string(packed), "\n") {
+			line = strings.TrimSpace(line)
+			if line == "" || strings.HasPrefix(line, "#") || strings.HasPrefix(line, "^") {
+				continue
+			}
+			parts := strings.Fields(line)
+			if len(parts) == 2 && parts[1] == ref {
+				return parts[0]
+			}
+		}
+	}
+	return "unknown"
+}
+
+// FailedChecks lists failed check names in deterministic order.
+func FailedChecks(report Report) []string {
+	out := []string{}
+	for _, check := range report.Checks {
+		if check.Status != "ok" {
+			out = append(out, fmt.Sprintf("%s (%s)", check.Name, check.Status))
+		}
+	}
+	sort.Strings(out)
+	return out
+}

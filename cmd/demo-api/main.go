@@ -20,6 +20,7 @@ import (
 	"hackathonkit.local/agentkit/internal/control"
 	"hackathonkit.local/agentkit/internal/metadata"
 	"hackathonkit.local/agentkit/internal/observability"
+	"hackathonkit.local/agentkit/internal/plans"
 )
 
 //go:embed static/*.html
@@ -156,6 +157,72 @@ func main() {
 		outputs, _ := store.Outputs(r.Context(), id, 10)
 		writeJSON(w, http.StatusOK, map[string]any{"session": session, "events": events, "outputs": outputs})
 	})
+	mux.HandleFunc("/plan", func(w http.ResponseWriter, r *http.Request) {
+		page, err := staticFS.ReadFile("static/plan.html")
+		if err != nil {
+			http.Error(w, "static page missing", http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, _ = w.Write(page)
+	})
+	mux.HandleFunc("/plan/api/latest", func(w http.ResponseWriter, r *http.Request) {
+		plan, ok := plans.Latest(root)
+		if !ok {
+			writeJSON(w, http.StatusOK, map[string]any{"plan": nil, "approval": nil})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"plan":     plan,
+			"approval": readApproval(root, plan.Slug),
+		})
+	})
+	mux.HandleFunc("/plan/decision", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"error": "method not allowed"})
+			return
+		}
+		if !originAllowed(r) {
+			writeJSON(w, http.StatusForbidden, map[string]any{"error": "forbidden origin"})
+			return
+		}
+		if token != "" && r.Header.Get("X-HackathonKit-Token") != token {
+			writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "missing or invalid X-HackathonKit-Token"})
+			return
+		}
+		var body struct {
+			Slug     string `json:"slug"`
+			Decision string `json:"decision"`
+			Note     string `json:"note"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid json: " + err.Error()})
+			return
+		}
+		if body.Decision != "approve" && body.Decision != "request_changes" {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "decision must be approve or request_changes"})
+			return
+		}
+		plan, ok := plans.Latest(root)
+		if body.Slug != "" {
+			loaded, err := plans.Load(root, body.Slug)
+			if err != nil {
+				writeJSON(w, http.StatusNotFound, map[string]any{"error": "plan not found"})
+				return
+			}
+			plan, ok = loaded, true
+		}
+		if !ok {
+			writeJSON(w, http.StatusNotFound, map[string]any{"error": "no plan to review"})
+			return
+		}
+		record, err := writeApproval(root, plan.Slug, plan.Revision, body.Decision, body.Note)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"approval": record})
+	})
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{
 			"status": "ok",
@@ -249,6 +316,67 @@ func main() {
 		fmt.Fprintln(os.Stderr, "demo-api error:", err)
 		os.Exit(1)
 	}
+}
+
+type planApproval struct {
+	Slug      string    `json:"slug"`
+	Revision  int       `json:"revision"`
+	Decision  string    `json:"decision"`
+	Note      string    `json:"note,omitempty"`
+	DecidedAt time.Time `json:"decided_at"`
+}
+
+func approvalPath(root, slug string) string {
+	return filepath.Join(plans.Dir(root), slug+".approval.json")
+}
+
+func readApproval(root, slug string) *planApproval {
+	data, err := os.ReadFile(approvalPath(root, slug))
+	if err != nil {
+		return nil
+	}
+	var record planApproval
+	if json.Unmarshal(data, &record) != nil {
+		return nil
+	}
+	return &record
+}
+
+func writeApproval(root, slug string, revision int, decision, note string) (planApproval, error) {
+	record := planApproval{
+		Slug:      slug,
+		Revision:  revision,
+		Decision:  decision,
+		Note:      note,
+		DecidedAt: time.Now().UTC(),
+	}
+	data, err := json.MarshalIndent(record, "", "  ")
+	if err != nil {
+		return record, err
+	}
+	if err := os.MkdirAll(plans.Dir(root), 0o755); err != nil {
+		return record, err
+	}
+	path := approvalPath(root, slug)
+	tmp, err := os.CreateTemp(plans.Dir(root), "approval-*.tmp")
+	if err != nil {
+		return record, err
+	}
+	tmpName := tmp.Name()
+	if _, err := tmp.Write(append(data, '\n')); err != nil {
+		tmp.Close()
+		os.Remove(tmpName)
+		return record, err
+	}
+	if err := tmp.Close(); err != nil {
+		os.Remove(tmpName)
+		return record, err
+	}
+	if err := os.Rename(tmpName, path); err != nil {
+		os.Remove(tmpName)
+		return record, err
+	}
+	return record, nil
 }
 
 func tail(logger *log.Logger, root, rel string, limit int) []json.RawMessage {

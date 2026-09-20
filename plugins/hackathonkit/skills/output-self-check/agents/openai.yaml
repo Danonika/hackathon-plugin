@@ -1,0 +1,7 @@
+interface:
+  display_name: "Output Self-Check"
+  short_description: "Rate finished output on five axes and flag the gaps before handoff."
+  default_prompt: "Use $output-self-check to rate this output on the five axes."
+
+policy:
+  allow_implicit_invocation: false

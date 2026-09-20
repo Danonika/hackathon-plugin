@@ -41,6 +41,20 @@ services:
       - ./data:/workspace/data
       - ./logs:/workspace/logs
 
+  quality:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: quality
+    profiles: ["quality"]
+    working_dir: /workspace
+    environment:
+      HACKATHONKIT_REPO_ROOT: /workspace
+    volumes:
+      - ./:/workspace
+      - go-mod-cache:/go/pkg/mod
+      - go-build-cache:/root/.cache/go-build
+
   postgres:
     image: postgres:16.15-alpine3.24
     environment:
@@ -72,3 +86,5 @@ services:
 volumes:
   pgdata:
   miniodata:
+  go-mod-cache:
+  go-build-cache:

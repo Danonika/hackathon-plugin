@@ -14,6 +14,9 @@ data/judge-bundles/
 configs/install-state.json
 evals/calibration/
 evals/decisions/
+evals/quality/
+evals/plans/
+evals/fly-ab/
 evals/project-cost/
 evals/aggregate/
 evals/judges/

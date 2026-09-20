@@ -2,7 +2,7 @@
 
 Local Codex plugin backed by a typed MCP capability layer. Codex is the main reasoning engine, Skills define domain workflows, the local MCP server exposes deterministic and AI-powered capabilities, and the experimental Fly router recommends capability routes while Codex keeps the final decision.
 
-Status: v0.8.0. MCP runtime (31 tools), 16 standard-compliant skills (validator-enforced), session hooks, durable learnings, Codex subagents, four harness adapters, a full control plane (SQLite store, daemon, TUI, worktrees, agent runs, risk scoring, session handoff), staged build plans, PDF/XLSX processing, Fly v2 (keyword + embeddings + kNN memory + mushroom-body learning + LLM classifier), Postgres/MinIO backends, demo dashboard, install profiles/repair and the evaluation subsystem (deterministic aggregation, calibration, loop decisions and bundle freezing) are in place.
+Status: v0.9.0. MCP runtime (33 tools), 17 standard-compliant skills (validator-enforced), session hooks, durable learnings, Codex subagents, four harness adapters, a full control plane (SQLite store, daemon, TUI, worktrees, agent runs, risk scoring, session handoff), staged build plans, PDF/XLSX processing, Fly v2 (keyword + embeddings + kNN memory + mushroom-body learning + LLM classifier), Postgres/MinIO backends, demo dashboard, install profiles/repair, a quality gate with a Go-enabled Docker target, a Fly A/B benchmark, plan review, security review and the evaluation subsystem (deterministic aggregation, calibration, loop decisions and bundle freezing) are in place.
 
 ## Contents
 
@@ -131,6 +131,7 @@ Skills are prompt packages (`plugins/hackathonkit/skills/`). Implicit skills tri
 | `cp-expert-refactoring` | explicit-only | Algorithmic and performance review of hot paths | `go test`, smoke handshake |
 | `system-design-expert` | explicit-only | Module boundaries, contracts, failure isolation, storage, observability | smoke, routing toggle |
 | `self-improvement-controller` | explicit-only | Bounded improvement rounds, rollback on regression, stop conditions | `eval.calibrate/compare/freeze_bundle` + other skills |
+| `output-self-check` | explicit-only | 5-axis self-evaluation (accuracy, completeness, clarity, actionability, conciseness) with an evidence-backed scorecard artifact | `reports.create`, `learning.record` |
 
 Each skill ships `agents/openai.yaml` (display name, short description, default prompt) and 1-3 references under `references/` for depth. Authoring rules live in `docs/SKILL-STANDARD.md` (150-250 line SKILL.md, required sections, trigger-rich descriptions, untrusted-content block for document-facing skills).
 
@@ -178,7 +179,26 @@ hackathonkit-ctl run --task "..." [--worktree]   # codex exec in a recorded sess
 - **Worktrees** live under `data/worktrees/<slug>` on branch `hackathonkit/<slug>`; `run` spawns `codex exec --cd <dir>` when the Codex CLI is available.
 - **Web view**: the demo API serves `/control` with a live sessions/risk table (reads SQLite read-only; shows a hint when the database does not exist yet).
 
-Plans (`plan.create` / `plan.update` / `plan.status`) are stored under `evals/plans/<slug>.json` with stages S0-S6, statuses `todo|doing|done|failed|cut` and evidence references; `plan.update` bumps the revision.
+Plans (`plan.create` / `plan.update` / `plan.status`) are stored under `evals/plans/<slug>.json` with stages S0-S6, statuses `todo|doing|done|failed|cut` and evidence references; `plan.update` bumps the revision. The demo API serves `/plan` for human review: `POST /plan/decision {"slug","decision":"approve"|"request_changes","note"}` records `evals/plans/<slug>.approval.json` (loopback origin check + optional `X-HackathonKit-Token`, same as `/routing`).
+
+## Quality gate
+
+`scripts/quality-gate.sh` runs gofmt, `go build ./...`, `go vet ./...`, `go test ./...`, the MCP selftest and the skill validator, then stores a report at `evals/quality/<git-sha>/gate.json` (per-check status, duration and bounded output). It exits non-zero when any check fails.
+
+- In the container path, use the Go-enabled image: `docker compose run --rm quality` (Dockerfile target `quality`, compose profile `quality`, Go module/build caches as named volumes).
+- `quality.gate` reads the latest evidence; `project-cost` and `judge` consume it instead of re-running checks.
+- The gate is read-only with respect to source: it never edits files.
+
+## Fly benchmark
+
+`cmd/fly-bench` measures the Fly router against the deterministic keyword baseline on `configs/fly-tasks.jsonl` (10 tasks with expected capabilities) and stores `evals/fly-ab/<sha>.json`:
+
+```sh
+go run ./cmd/fly-bench            # summary
+go run ./cmd/fly-bench --json     # full report
+```
+
+Metrics: recall@k against expected capabilities, top-1 agreement between baseline and full pipeline, determinism across two runs, and mean latency. With `OPENAI_API_KEY` the full pipeline uses real embeddings and the LLM classifier; without it, the hash encoder fallback is measured.
 
 ## MCP tools
 
@@ -218,6 +238,13 @@ Every tool returns the shared envelope: `status` (`ok` | `partial` | `error`), `
 | `plan.create` | `slug` (required), `task`, `mandatory_scenario`, `stages[]` (defaults S0-S6) | `slug`, `revision`, `path`, `stages`, `summary` |
 | `plan.update` | `slug`, `stage`, `status` (all required), `evidence[]`, `goal` | `revision`, `stage`, `status`, `summary` |
 | `plan.status` | `slug` (optional, defaults to latest) | `plan` with `current_stage` or partial when none exists |
+
+### Quality and security
+
+| Tool | Arguments | Returns |
+|---|---|---|
+| `quality.gate` | - | latest gate evidence: `sha`, `ok`, `summary`, `failed[]`, per-check status/duration/output |
+| `security.review` | `text` or `path` or `artifact_id` | `findings[]` (type, severity, line, redacted excerpt), `counts`, `clean` |
 
 ### Files and documents
 
@@ -407,6 +434,7 @@ Install profiles: `scripts/setup.sh --profile core` excludes the explicit-only e
 | `sync-skills.sh` / `sync-skills.ps1` | mirror `plugins/hackathonkit/skills/` to `.agents/skills/` and verify counts |
 | `plugin-check.sh` / `plugin-check.ps1` | spawn the installed plugin's MCP command from a temp cwd and validate the handshake (exit 0 ok, 1 failed, 2 skipped) |
 | `validate-skills.sh` | validate the skill catalog against `docs/SKILL-STANDARD.md` (exit 1 on violations) |
+| `quality-gate.sh` | run gofmt/build/vet/test/selftest/skills and store `evals/quality/<sha>/gate.json` (exit 1 on failures) |
 
 ## Repository layout
 
@@ -469,6 +497,8 @@ go run ./cmd/hackathonkit-ctl ingest            # replay logs into the control d
 go run ./cmd/hackathonkit-ctl sessions list
 go run ./cmd/hackathonkit-ctl daemon start      # background ingest + loopback API
 go run ./cmd/hackathonkit-ctl tui               # live dashboard
+go run ./cmd/fly-bench                      # Normal-vs-Fly A/B evidence
+sh scripts/quality-gate.sh                  # build/verify gate -> evals/quality/
 sh scripts/sync-harness.sh                  # regenerate mirrors, verify adapters
 sh scripts/repair.sh                        # regenerate missing generated artifacts
 ```
@@ -479,7 +509,7 @@ Sample dataset: `data/input/sample-telemetry.csv` (72 hourly readings with two p
 
 ## Testing
 
-`go test ./...` covers the JSON-RPC handshake, notification suppression, panic containment, live routing and evaluation config re-reads, path sanitization and backend fallback, observability append/tail, judge aggregation/calibration/decisions, the bundle freezer, the eval and plan tool handlers, learning confidence/recall/promotion, the context-budget estimator, control-plane ingest idempotency, deterministic risk scoring, handoff rendering, the daemon HTTP handlers and the skill-standard validator (including a catalog-wide regression test). Run `go run ./cmd/hackathonkit-mcp --selftest` for the end-to-end handshake and `scripts/smoke.sh` for the process-level check.
+`go test ./...` covers the JSON-RPC handshake, notification suppression, panic containment, live routing and evaluation config re-reads, path sanitization and backend fallback, observability append/tail, judge aggregation/calibration/decisions, the bundle freezer, the eval and plan tool handlers, learning confidence/recall/promotion, the context-budget estimator, control-plane ingest idempotency, deterministic risk scoring, handoff rendering, the daemon HTTP handlers, the quality-gate store/reader, the Fly benchmark metrics, the security scanner and the skill-standard validator (including a catalog-wide regression test). Run `go run ./cmd/hackathonkit-mcp --selftest` for the end-to-end handshake and `scripts/smoke.sh` for the process-level check.
 
 ## Known limitations
 
@@ -497,6 +527,8 @@ Sample dataset: `data/input/sample-telemetry.csv` (72 hourly readings with two p
 - Learning recall uses embeddings when `OPENAI_API_KEY` is set and keyword overlap otherwise; learnings never leave the local repository.
 - The control plane is optional: hooks and MCP work without it. `demo-api /control` reads SQLite read-only and shows a hint until `hackathonkit-ctl ingest` or the daemon has run.
 - `hackathonkit-ctl run` requires the Codex CLI on `PATH` and `git` for `--worktree`; the daemon binds loopback only and never proxies to the network.
+- The `quality` Docker image carries the Go toolchain (larger than the runtime images) and is only built when the `quality` profile is used.
+- Fly benchmark metrics are deterministic signals (recall, agreement, determinism, latency), not a full jury simulation; use them as judge evidence, not as a score.
 
 ## Troubleshooting
 

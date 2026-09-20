@@ -1,4 +1,4 @@
-﻿package fly
+package fly
 
 import (
 	"context"

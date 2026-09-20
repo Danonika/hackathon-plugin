@@ -37,6 +37,13 @@ Call the smallest set that finishes the task. Do not list or call tools "just in
 | `plan.update` | `slug`, `stage`, `status` (all required), `evidence[]`, `goal` | `revision`, `stage`, `status`, `summary` |
 | `plan.status` | `slug` (optional, defaults to the latest plan) | plan with `current_stage`, or `partial` when none exists |
 
+## Quality and security
+
+| Tool | Arguments | Returns |
+|---|---|---|
+| `quality.gate` | - | latest gate evidence (`sha`, `ok`, `summary`, `failed[]`, checks) |
+| `security.review` | `text` or `path` or `artifact_id` | `findings[]` (type, severity, line, redacted excerpt), `counts`, `clean` |
+
 ## Evaluation
 
 | Tool | Arguments | Returns |
