@@ -54,15 +54,16 @@ renderer.setSize(innerWidth, innerHeight);
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
 renderer.shadowMap.enabled = true;
 document.getElementById('scene').appendChild(renderer.domElement);
-scene.add(new THREE.HemisphereLight(0xcfe0ff, 0x0b1020, 1.1));
-const key = new THREE.DirectionalLight(0xfff2dd, 2.0); key.position.set(300, 500, 400); key.castShadow = true; scene.add(key);
+scene.add(new THREE.HemisphereLight(0xcfe0ff, 0x0b1020, 2.2));
+const key = new THREE.DirectionalLight(0xfff2dd, 2.6); key.position.set(300, 500, 400); key.castShadow = true; scene.add(key);
+const fill = new THREE.DirectionalLight(0x9db4ff, 1.2); fill.position.set(-400, 100, 300); scene.add(fill);
 const rim = new THREE.PointLight(0x8b5cf6, 800, 2000); rim.position.set(-400, 200, -400); scene.add(rim);
 const grid = new THREE.GridHelper(2000, 40, 0x1e293b, 0x111a2e); grid.position.y = -260; scene.add(grid);
 
 const brain = new THREE.Group();
 scene.add(brain);
-const matBrain = new THREE.MeshStandardMaterial({ color: 0xe8b7c6, roughness: .55, metalness: .12 });
-const matAccent = new THREE.MeshStandardMaterial({ color: 0xb98a54, roughness: .5, metalness: .2, emissive: 0x2a1608 });
+const matBrain = new THREE.MeshStandardMaterial({ color: 0xf3c9d6, roughness: .55, metalness: .1, side: THREE.DoubleSide });
+const matAccent = new THREE.MeshStandardMaterial({ color: 0xd9a066, roughness: .5, metalness: .18, emissive: 0x2a1608, side: THREE.DoubleSide });
 const loader = new OBJLoader();
 
 function normalize(obj) {
@@ -84,7 +85,13 @@ async function loadMeshes() {
   for (const it of items) {
     try {
       const obj = await loader.loadAsync('/vfb-mesh/' + it.file);
-      obj.traverse(n => { if (n.isMesh) { n.material = it.mat; n.castShadow = true; } });
+      obj.traverse(n => {
+        if (n.isMesh) {
+          if (n.geometry && !n.geometry.attributes.normal) n.geometry.computeVertexNormals();
+          n.material = it.mat;
+          n.castShadow = true;
+        }
+      });
       brain.add(normalize(obj));
       loaded++;
     } catch (e) { /* skip */ }
