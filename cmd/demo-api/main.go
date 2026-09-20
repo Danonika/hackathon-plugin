@@ -100,6 +100,23 @@ func main() {
 		}
 		http.StripPrefix("/fly-brain/", http.FileServer(http.Dir(base))).ServeHTTP(w, r)
 	})
+	mux.HandleFunc("/fly-body/", func(w http.ResponseWriter, r *http.Request) {
+		base := filepath.Join(root, "data", "fly-viz", "menagerie", "flybody")
+		if _, err := os.Stat(base); err != nil {
+			http.Error(w, "flybody assets are not vendored; run: git clone --depth 1 --filter=blob:none --sparse https://github.com/google-deepmind/mujoco_menagerie data/fly-viz/menagerie && cd data/fly-viz/menagerie && git sparse-checkout set flybody", http.StatusNotFound)
+			return
+		}
+		http.StripPrefix("/fly-body/", http.FileServer(http.Dir(base))).ServeHTTP(w, r)
+	})
+	mux.HandleFunc("/fly-body", func(w http.ResponseWriter, r *http.Request) {
+		page, err := staticFS.ReadFile("static/fly-body.html")
+		if err != nil {
+			http.Error(w, "static page missing", http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, _ = w.Write(page)
+	})
 	mux.HandleFunc("/fly-viz-3d", func(w http.ResponseWriter, r *http.Request) {
 		page, err := staticFS.ReadFile("static/fly-viz-3d.html")
 		if err != nil {

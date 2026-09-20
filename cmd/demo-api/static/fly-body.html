@@ -1,0 +1,186 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Fly Body — flybody (MJCF) в Three.js</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: #05070f; color: #e2e8f0; font-family: "Segoe UI", system-ui, sans-serif; overflow: hidden; }
+  #scene { position: fixed; inset: 0; }
+  .panel { position: fixed; z-index: 5; background: rgba(10,16,32,.82); border: 1px solid #24304d; border-radius: 10px; padding: 10px 14px; font-size: 12.5px; backdrop-filter: blur(6px); }
+  #top { top: 12px; left: 12px; max-width: 460px; }
+  #top h1 { margin: 0 0 4px; font-size: 15px; }
+  #top .muted { color: #8ea3c7; font-size: 11.5px; line-height: 1.5; }
+  #bottom { bottom: 12px; left: 12px; min-width: 360px; }
+  .row { display: flex; align-items: center; gap: 8px; margin: 4px 0; }
+  .bar { flex: 1; height: 9px; background: #0f172a; border-radius: 6px; overflow: hidden; }
+  .bar > span { display: block; height: 100%; transition: width .5s ease; }
+  .good { color: #22c55e; } .bad { color: #f87171; } .muted { color: #64748b; }
+</style>
+</head>
+<body>
+<div id="scene"></div>
+<div class="panel" id="top">
+  <h1>🪰 Fly Body — реалистичная модель</h1>
+  <div class="muted">flybody (Google DeepMind + Janelia, Apache-2.0): 67 сегментов, 86 мешей из MuJoCo MJCF, собрано в Three.js в реальном времени</div>
+  <div class="muted" id="status">загрузка модели…</div>
+</div>
+<div class="panel" id="bottom">
+  <div class="row"><span style="width:70px">Голод</span><div class="bar"><span id="hunger" style="width:40%;background:linear-gradient(90deg,#f97316,#ef4444)"></span></div><span id="hunger-val" class="muted">40%</span></div>
+  <div class="row"><span style="width:70px">Дофамин</span><div class="bar"><span id="dopa" style="width:0%;background:linear-gradient(90deg,#22c55e,#86efac)"></span></div><span id="dopa-val" class="muted">0</span></div>
+  <div id="verdict" class="muted">ожидание решения Codex (routing.fly_feedback)…</div>
+</div>
+<script type="importmap">
+{ "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js" } }
+</script>
+<script type="module">
+import * as THREE from 'three';
+import { OBJLoader } from 'https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/loaders/OBJLoader.js';
+
+const scene = new THREE.Scene();
+scene.fog = new THREE.FogExp2(0x05070f, 0.015);
+const camera = new THREE.PerspectiveCamera(45, innerWidth / innerHeight, 0.01, 200);
+camera.position.set(0, 2.2, 7.5);
+camera.lookAt(0, 0.4, 0);
+
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setSize(innerWidth, innerHeight);
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.shadowMap.enabled = true;
+document.getElementById('scene').appendChild(renderer.domElement);
+
+scene.add(new THREE.HemisphereLight(0xbfd4ff, 0x0b1020, 1.0));
+const key = new THREE.DirectionalLight(0xfff2dd, 2.2); key.position.set(5, 9, 6); key.castShadow = true; scene.add(key);
+const rim = new THREE.PointLight(0x8b5cf6, 40, 60); rim.position.set(-6, 4, -6); scene.add(rim);
+
+const grid = new THREE.GridHelper(60, 60, 0x1e293b, 0x111a2e); grid.position.y = -0.02; scene.add(grid);
+
+const flyMat = new THREE.MeshStandardMaterial({ color: 0xb98a54, roughness: .5, metalness: .18 });
+
+const fly = new THREE.Group();
+fly.rotation.x = -Math.PI / 2;   // MuJoCo Z-up -> Three.js Y-up
+scene.add(fly);
+const wingBodies = [];
+
+async function loadFly() {
+  const xml = await fetch('/fly-body/fruitfly.xml').then(r => r.text());
+  const doc = new DOMParser().parseFromString(xml, 'application/xml');
+  const meshFiles = {};
+  for (const m of doc.querySelectorAll('asset mesh')) {
+    meshFiles[m.getAttribute('name')] = m.getAttribute('file');
+  }
+  const loader = new OBJLoader();
+  const cache = {};
+  const loadMesh = async (file) => {
+    if (!cache[file]) cache[file] = await loader.loadAsync('/fly-body/assets/' + file);
+    return cache[file];
+  };
+
+  let meshCount = 0;
+  async function walk(node, parent) {
+    for (const body of node.children) {
+      if (body.tagName !== 'body') continue;
+      const g = new THREE.Group();
+      g.name = body.getAttribute('name') || '';
+      const pos = (body.getAttribute('pos') || '0 0 0').split(/\s+/).map(Number);
+      g.position.set(pos[0] || 0, pos[1] || 0, pos[2] || 0);
+      const quat = body.getAttribute('quat');
+      if (quat) {
+        const q = quat.split(/\s+/).map(Number);
+        g.quaternion.set(q[1], q[2], q[3], q[0]);
+      }
+      parent.add(g);
+      if (g.name.toLowerCase().includes('wing')) wingBodies.push(g);
+      for (const geom of body.children) {
+        if (geom.tagName !== 'geom') continue;
+        const meshName = geom.getAttribute('mesh');
+        if (!meshName || !meshFiles[meshName]) continue;
+        const src = await loadMesh(meshFiles[meshName]);
+        const mesh = src.clone(true);
+        mesh.traverse(n => { if (n.isMesh) { n.material = flyMat; n.castShadow = true; } });
+        const scaleAttr = geom.getAttribute('scale');
+        if (scaleAttr) {
+          const s = scaleAttr.split(/\s+/).map(Number);
+          mesh.scale.set(s[0], s[1], s[2]);
+        } else {
+          mesh.scale.setScalar(0.1);
+        }
+        g.add(mesh);
+        meshCount++;
+      }
+      await walk(body, g);
+    }
+  }
+  const worldbody = doc.querySelector('worldbody');
+  await walk(worldbody, fly);
+
+  const box = new THREE.Box3().setFromObject(fly);
+  const size = box.getSize(new THREE.Vector3());
+  const center = box.getCenter(new THREE.Vector3());
+  const scale = 3.2 / Math.max(size.x, size.y, size.z, 1e-6);
+  fly.scale.setScalar(scale);
+  fly.position.set(-center.x * scale, -center.y * scale, -center.z * scale);
+  document.getElementById('status').textContent = 'модель собрана: ' + meshCount + ' мешей, ' + wingBodies.length + ' групп крыльев';
+}
+loadFly().catch(e => { document.getElementById('status').textContent = 'ошибка загрузки: ' + e.message; });
+
+const state = { hunger: 40, dopamine: 0, lastTrace: null, lastFeedbackTs: null, mode: 'idle' };
+const $ = id => document.getElementById(id);
+
+async function poll() {
+  try {
+    const [feedback, neurons] = await Promise.all([
+      fetch('/fly-feedback?limit=10').then(r => r.json()),
+      fetch('/fly-neuron-events?limit=20').then(r => r.json())
+    ]);
+    const neuronEvents = neurons.events || [];
+    const lastNeuron = neuronEvents[neuronEvents.length - 1];
+    if (lastNeuron && lastNeuron.type === 'recommend' && lastNeuron.trace_id !== state.lastTrace) {
+      state.lastTrace = lastNeuron.trace_id;
+      $('status').textContent = 'encoder: ' + (lastNeuron.encoder || '?') + ' · route: ' + (lastNeuron.route || '?') + ' · max ' + (lastNeuron.max_score ?? '?');
+    }
+    const fb = (feedback.events || [])[(feedback.events || []).length - 1];
+    if (fb && fb.ts !== state.lastFeedbackTs) {
+      state.lastFeedbackTs = fb.ts;
+      const reward = fb.source === 'accepted' || fb.source === 'normal-teacher';
+      const feedbackNeuron = neuronEvents.filter(e => e.type === 'feedback').pop() || {};
+      if (reward) {
+        state.dopamine = Math.min(100, state.dopamine + 22);
+        state.hunger = Math.max(0, state.hunger - 18);
+        state.mode = 'reward';
+        $('verdict').innerHTML = '<span class="good">🍬 награда · PAM ' + (feedbackNeuron.pam ?? 0) + ' · дофамин растёт</span>';
+      } else {
+        state.dopamine = Math.max(0, state.dopamine - 10);
+        state.hunger = Math.min(100, state.hunger + 25);
+        state.mode = 'punish';
+        $('verdict').innerHTML = '<span class="bad">⚡ ошибка · PPL1 ' + (feedbackNeuron.ppl1 ?? 0) + ' · боль и голод</span>';
+      }
+      $('hunger').style.width = state.hunger + '%';
+      $('hunger-val').textContent = Math.round(state.hunger) + '%';
+      $('dopa').style.width = state.dopamine + '%';
+      $('dopa-val').textContent = Math.round(state.dopamine);
+    }
+  } catch (e) {
+    $('status').textContent = 'offline: ' + e.message;
+  }
+}
+poll(); setInterval(poll, 2500);
+
+const clock = new THREE.Clock();
+function animate() {
+  requestAnimationFrame(animate);
+  const t = clock.getElapsedTime();
+  wingBodies.forEach((w, i) => { w.rotation.z = Math.sin(t * (state.mode === 'reward' ? 55 : 18)) * 0.12 * (i ? 1 : -1); });
+  const hover = Math.sin(t * 1.8) * 0.06;
+  const shake = state.mode === 'punish' ? Math.sin(t * 60) * 0.02 : 0;
+  fly.position.y += (hover + shake - fly.position.y) * 0.08;
+  if (state.mode !== 'idle' && t % 3 < 0.02) state.mode = 'idle';
+  renderer.render(scene, camera);
+}
+animate();
+addEventListener('resize', () => { camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix(); renderer.setSize(innerWidth, innerHeight); });
+</script>
+</body>
+</html>
