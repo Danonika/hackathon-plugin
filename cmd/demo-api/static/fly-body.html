@@ -24,6 +24,9 @@
   #brain-corner .bar button.alt { background: #1d4ed8; }
   #brain-corner .bar span { color: #8ea3c7; font-size: 11px; }
   #brain-corner iframe { flex: 1; width: 100%; border: 0; }
+  #brain-corner iframe.hidden { display: none; }
+  #mb-canvas { flex: 1; width: 100%; height: 100%; display: block; background: #05070f; }
+  #mb-canvas.hidden { display: none; }
 </style>
 </head>
 <body>
@@ -41,11 +44,13 @@
 <div id="brain-corner">
   <div class="bar">
     <span>мозг 3D:</span>
-    <button onclick="setBrainCorner('flybrain')">flybrain (локально)</button>
-    <button class="alt" onclick="window.open(VFB_URL, '_blank')">VFB (новая вкладка)</button>
-    <span id="brain-src">flybrain · FlyWire v783 (MIT)</span>
+    <button onclick="setBrainCorner('mb')">MB (обученный)</button>
+    <button class="alt" onclick="setBrainCorner('flybrain')">flybrain</button>
+    <button class="alt" onclick="window.open(VFB_URL, '_blank')">VFB ↗</button>
+    <span id="brain-src">MB · 4133 KC · PAM/PPL1</span>
   </div>
-  <iframe id="brain-frame" src="/fly-brain/" title="Fly brain 3D"></iframe>
+  <canvas id="mb-canvas" width="1000" height="760"></canvas>
+  <iframe id="brain-frame" class="hidden" src="/fly-brain/" title="Fly brain 3D"></iframe>
 </div>
 <script type="importmap">
 { "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js" } }
@@ -150,13 +155,109 @@ async function loadFly() {
 }
 loadFly().catch(e => { document.getElementById('status').textContent = 'ошибка загрузки: ' + e.message; });
 
+const sugar = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.4, 0.4), new THREE.MeshStandardMaterial({ color: 0xfacc15, emissive: 0x6b5300, roughness: .4 }));
+sugar.position.set(2.4, 0.2, 1.9); sugar.castShadow = true; sugar.visible = false; scene.add(sugar);
+const flyTarget = new THREE.Vector3(0, 0.6, 0);
+
 const state = { hunger: 40, dopamine: 0, lastTrace: null, lastFeedbackTs: null, mode: 'idle' };
 const VFB_URL = 'https://v2.virtualflybrain.org/org.geppetto.frontend/geppetto?id=FBbt_00045048&i=VFB_00101567';
 function setBrainCorner(kind) {
-  document.getElementById('brain-frame').src = kind === 'vfb' ? VFB_URL : '/fly-brain/';
-  document.getElementById('brain-src').textContent = kind === 'vfb' ? 'VFB · FBbt_00045048' : 'flybrain · FlyWire v783 (MIT)';
+  const canvas = document.getElementById('mb-canvas');
+  const frame = document.getElementById('brain-frame');
+  canvas.classList.toggle('hidden', kind !== 'mb');
+  frame.classList.toggle('hidden', kind === 'mb');
+  if (kind === 'flybrain') frame.src = '/fly-brain/';
+  document.getElementById('brain-src').textContent = kind === 'mb'
+    ? 'MB · 4133 KC · PAM/PPL1'
+    : (kind === 'flybrain' ? 'flybrain · FlyWire v783 (MIT)' : 'VFB · FBbt_00045048');
 }
-setBrainCorner('flybrain');
+setBrainCorner('mb');
+
+const mbCanvas = document.getElementById('mb-canvas');
+const mbCtx = mbCanvas.getContext('2d');
+const KC_SHOW = 900;
+const kcPos = [];
+for (let i = 0; i < KC_SHOW; i++) {
+  const phi = Math.acos(1 - 2 * (i + 0.5) / KC_SHOW);
+  const theta = Math.PI * (1 + Math.sqrt(5)) * i;
+  kcPos.push({
+    x: 0.5 + 0.33 * Math.sin(phi) * Math.cos(theta),
+    y: 0.5 + 0.42 * Math.cos(phi),
+    z: Math.sin(phi) * Math.sin(theta)
+  });
+}
+const mb = { active: new Set(), mbon: {}, pam: 0, ppl1: 0, flashUntil: 0, reward: false, encoder: '' };
+
+async function mbPoll() {
+  try {
+    const [neurons, feedback] = await Promise.all([
+      fetch('/fly-neuron-events?limit=20').then(r => r.json()),
+      fetch('/fly-feedback?limit=10').then(r => r.json())
+    ]);
+    const events = neurons.events || [];
+    const rec = events.filter(e => e.type === 'recommend').pop();
+    if (rec) {
+      mb.encoder = rec.encoder || '';
+      mb.mbon = rec.mbon || {};
+      mb.active = new Set((rec.active_kc || []).map(s => s.index % KC_SHOW));
+    }
+    const fb = (feedback.events || [])[(feedback.events || []).length - 1];
+    const fbNeuron = events.filter(e => e.type === 'feedback').pop();
+    if (fbNeuron && fbNeuron.ts !== mb.lastTs) {
+      mb.lastTs = fbNeuron.ts;
+      mb.reward = !!fbNeuron.reward;
+      mb.pam = fbNeuron.pam || 0;
+      mb.ppl1 = fbNeuron.ppl1 || 0;
+      mb.flashUntil = performance.now() + 1800;
+    }
+  } catch (e) { /* keep last state */ }
+}
+mbPoll(); setInterval(mbPoll, 2500);
+
+function drawMB() {
+  requestAnimationFrame(drawMB);
+  const w = mbCanvas.width, h = mbCanvas.height;
+  mbCtx.fillStyle = '#05070f';
+  mbCtx.fillRect(0, 0, w, h);
+  const flashing = performance.now() < mb.flashUntil;
+  const color = mb.reward ? '#22c55e' : '#f87171';
+  for (let i = 0; i < KC_SHOW; i++) {
+    const p = kcPos[i];
+    const active = mb.active.has(i);
+    const px = p.x * w, py = p.y * h;
+    mbCtx.beginPath();
+    mbCtx.arc(px, py, active ? 3.2 : 1.4, 0, Math.PI * 2);
+    mbCtx.fillStyle = active && flashing ? color : (active ? '#a78bfa' : 'rgba(80,110,170,.55)');
+    mbCtx.fill();
+  }
+  const mbon = Object.entries(mb.mbon).sort((a, b) => b[1] - a[1]).slice(0, 6);
+  const max = Math.max(...mbon.map(m => m[1]), 0.001);
+  mbCtx.font = '20px "Segoe UI", sans-serif';
+  mbon.forEach(([cat, v], i) => {
+    const y = h - 150 + i * 24;
+    mbCtx.fillStyle = 'rgba(148,163,184,.9)';
+    mbCtx.fillText(cat, 18, y + 16);
+    mbCtx.fillStyle = '#7c3aed';
+    mbCtx.fillRect(160, y, Math.max(4, 320 * (v / max)), 16);
+    mbCtx.fillStyle = '#cbd5e1';
+    mbCtx.fillText(Math.round(v * 100) + '%', 500, y + 16);
+  });
+  const pulse = flashing ? 1 + 0.6 * Math.sin(performance.now() / 90) : 1;
+  mbCtx.beginPath();
+  mbCtx.arc(w - 260, h - 120, 26 * pulse, 0, Math.PI * 2);
+  mbCtx.fillStyle = 'rgba(56,189,248,.85)';
+  mbCtx.fill();
+  mbCtx.beginPath();
+  mbCtx.arc(w - 150, h - 120, 20 * pulse, 0, Math.PI * 2);
+  mbCtx.fillStyle = 'rgba(239,68,68,.85)';
+  mbCtx.fill();
+  mbCtx.fillStyle = '#e2e8f0';
+  mbCtx.fillText('PAM ' + mb.pam, w - 320, h - 112);
+  mbCtx.fillText('PPL1 ' + mb.ppl1, w - 190, h - 112);
+  mbCtx.fillStyle = 'rgba(148,163,184,.8)';
+  mbCtx.fillText(mb.encoder || '—', 18, 32);
+}
+drawMB();
 const $ = id => document.getElementById(id);
 
 async function poll() {
@@ -202,11 +303,28 @@ const clock = new THREE.Clock();
 function animate() {
   requestAnimationFrame(animate);
   const t = clock.getElapsedTime();
-  wingBodies.forEach((w, i) => { w.rotation.z = Math.sin(t * (state.mode === 'reward' ? 55 : 18)) * 0.12 * (i ? 1 : -1); });
-  const hover = Math.sin(t * 1.8) * 0.06;
-  const shake = state.mode === 'punish' ? Math.sin(t * 60) * 0.02 : 0;
-  fly.position.y += (hover + shake - fly.position.y) * 0.08;
-  if (state.mode !== 'idle' && t % 3 < 0.02) state.mode = 'idle';
+  wingBodies.forEach((w, i) => { w.rotation.z = Math.sin(t * (state.mode === 'reward' ? 60 : 20)) * 0.12 * (i ? 1 : -1); });
+
+  if (state.mode === 'reward') {
+    sugar.visible = true;
+    flyTarget.set(sugar.position.x, sugar.position.y + 0.35, sugar.position.z);
+    if (fly.position.distanceTo(flyTarget) < 0.35) {
+      sugar.scale.multiplyScalar(0.97);
+      if (sugar.scale.x < 0.25) { sugar.visible = false; sugar.scale.setScalar(1); state.mode = 'idle'; }
+    }
+  } else if (state.mode === 'punish') {
+    sugar.visible = false;
+    flyTarget.set(-2.6, 0.9, -2.2);
+  } else {
+    sugar.visible = false;
+    flyTarget.set(Math.cos(t * 0.35) * 1.6, 0.75 + Math.sin(t * 1.6) * 0.12, Math.sin(t * 0.35) * 1.6);
+  }
+
+  const jitter = state.mode === 'punish' ? 0.05 : 0;
+  fly.position.x += (flyTarget.x + (Math.random() - 0.5) * jitter - fly.position.x) * 0.04;
+  fly.position.y += (flyTarget.y + (Math.random() - 0.5) * jitter - fly.position.y) * 0.05;
+  fly.position.z += (flyTarget.z + (Math.random() - 0.5) * jitter - fly.position.z) * 0.04;
+  fly.rotation.z = state.mode === 'punish' ? Math.sin(t * 40) * 0.15 : Math.sin(t * 0.8) * 0.05;
   renderer.render(scene, camera);
 }
 animate();
