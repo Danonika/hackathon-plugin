@@ -1,9 +1,9 @@
-﻿<!doctype html>
+<!doctype html>
 <html lang="ru">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Fly Body тАФ flybody (MJCF) ╨▓ Three.js</title>
+<title>Fly Body — flybody (MJCF) в Three.js</title>
 <style>
   :root { color-scheme: dark; }
   * { box-sizing: border-box; }
@@ -32,22 +32,22 @@
 <body>
 <div id="scene"></div>
 <div class="panel" id="top">
-  <h1>ЁЯк░ Fly Body тАФ ╤А╨╡╨░╨╗╨╕╤Б╤В╨╕╤З╨╜╨░╤П ╨╝╨╛╨┤╨╡╨╗╤М</h1>
-  <div class="muted">flybody (Google DeepMind + Janelia, Apache-2.0): 67 ╤Б╨╡╨│╨╝╨╡╨╜╤В╨╛╨▓, 86 ╨╝╨╡╤И╨╡╨╣ ╨╕╨╖ MuJoCo MJCF, ╤Б╨╛╨▒╤А╨░╨╜╨╛ ╨▓ Three.js ╨▓ ╤А╨╡╨░╨╗╤М╨╜╨╛╨╝ ╨▓╤А╨╡╨╝╨╡╨╜╨╕</div>
-  <div class="muted" id="status">╨╖╨░╨│╤А╤Г╨╖╨║╨░ ╨╝╨╛╨┤╨╡╨╗╨╕тАж</div>
+  <h1>🪰 Fly Body — реалистичная модель</h1>
+  <div class="muted">flybody (Google DeepMind + Janelia, Apache-2.0): 67 сегментов, 86 мешей из MuJoCo MJCF, собрано в Three.js в реальном времени</div>
+  <div class="muted" id="status">загрузка модели…</div>
 </div>
 <div class="panel" id="bottom">
-  <div class="row"><span style="width:70px">╨У╨╛╨╗╨╛╨┤</span><div class="bar"><span id="hunger" style="width:40%;background:linear-gradient(90deg,#f97316,#ef4444)"></span></div><span id="hunger-val" class="muted">40%</span></div>
-  <div class="row"><span style="width:70px">╨Ф╨╛╤Д╨░╨╝╨╕╨╜</span><div class="bar"><span id="dopa" style="width:0%;background:linear-gradient(90deg,#22c55e,#86efac)"></span></div><span id="dopa-val" class="muted">0</span></div>
-  <div id="verdict" class="muted">╨╛╨╢╨╕╨┤╨░╨╜╨╕╨╡ ╤А╨╡╤И╨╡╨╜╨╕╤П Codex (routing.fly_feedback)тАж</div>
+  <div class="row"><span style="width:70px">Голод</span><div class="bar"><span id="hunger" style="width:40%;background:linear-gradient(90deg,#f97316,#ef4444)"></span></div><span id="hunger-val" class="muted">40%</span></div>
+  <div class="row"><span style="width:70px">Дофамин</span><div class="bar"><span id="dopa" style="width:0%;background:linear-gradient(90deg,#22c55e,#86efac)"></span></div><span id="dopa-val" class="muted">0</span></div>
+  <div id="verdict" class="muted">ожидание решения Codex (routing.fly_feedback)…</div>
 </div>
 <div id="brain-corner">
   <div class="bar">
-    <span>╨╝╨╛╨╖╨│ 3D:</span>
-    <button onclick="setBrainCorner('mb')">MB (╨╛╨▒╤Г╤З╨╡╨╜╨╜╤Л╨╣)</button>
+    <span>мозг 3D:</span>
+    <button onclick="setBrainCorner('mb')">MB (обученный)</button>
     <button class="alt" onclick="setBrainCorner('flybrain')">flybrain</button>
-    <button class="alt" onclick="window.open(VFB_URL, '_blank')">VFB тЖЧ</button>
-    <span id="brain-src">MB ┬╖ 4133 KC ┬╖ ╨┤╨▓╨░ ╨┐╨╛╨╗╤Г╤И╨░╤А╨╕╤П</span>
+    <button class="alt" onclick="window.open(VFB_URL, '_blank')">VFB ↗</button>
+    <span id="brain-src">MB · 4133 KC · два полушария</span>
   </div>
   <canvas id="mb-canvas" width="1000" height="760"></canvas>
   <iframe id="brain-frame" class="hidden" src="/fly-brain/" title="Fly brain 3D"></iframe>
@@ -151,9 +151,9 @@ async function loadFly() {
   const scale = 3.2 / Math.max(size.x, size.y, size.z, 1e-6);
   fly.scale.setScalar(scale);
   fly.position.set(-center.x * scale, -center.y * scale, -center.z * scale);
-  document.getElementById('status').textContent = '╨╝╨╛╨┤╨╡╨╗╤М ╤Б╨╛╨▒╤А╨░╨╜╨░: ' + meshCount + ' ╨╝╨╡╤И╨╡╨╣, ' + wingBodies.length + ' ╨│╤А╤Г╨┐╨┐ ╨║╤А╤Л╨╗╤М╨╡╨▓';
+  document.getElementById('status').textContent = 'модель собрана: ' + meshCount + ' мешей, ' + wingBodies.length + ' групп крыльев';
 }
-loadFly().catch(e => { document.getElementById('status').textContent = '╨╛╤И╨╕╨▒╨║╨░ ╨╖╨░╨│╤А╤Г╨╖╨║╨╕: ' + e.message; });
+loadFly().catch(e => { document.getElementById('status').textContent = 'ошибка загрузки: ' + e.message; });
 
 const sugar = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.4, 0.4), new THREE.MeshStandardMaterial({ color: 0xfacc15, emissive: 0x6b5300, roughness: .4 }));
 sugar.position.set(2.4, 0.2, 1.9); sugar.castShadow = true; sugar.visible = false; scene.add(sugar);
@@ -168,8 +168,8 @@ function setBrainCorner(kind) {
   frame.classList.toggle('hidden', kind === 'mb');
   if (kind === 'flybrain') frame.src = '/fly-brain/';
   document.getElementById('brain-src').textContent = kind === 'mb'
-    ? 'MB ┬╖ 4133 KC ┬╖ PAM/PPL1'
-    : (kind === 'flybrain' ? 'flybrain ┬╖ FlyWire v783 (MIT)' : 'VFB ┬╖ FBbt_00045048');
+    ? 'MB · 4133 KC · PAM/PPL1'
+    : (kind === 'flybrain' ? 'flybrain · FlyWire v783 (MIT)' : 'VFB · FBbt_00045048');
 }
 setBrainCorner('mb');
 
@@ -256,7 +256,7 @@ function drawMB() {
   mbCtx.fillText('PAM ' + mb.pam, w - 320, h - 112);
   mbCtx.fillText('PPL1 ' + mb.ppl1, w - 190, h - 112);
   mbCtx.fillStyle = 'rgba(148,163,184,.8)';
-  mbCtx.fillText(mb.encoder || 'тАФ', 18, 32);
+  mbCtx.fillText(mb.encoder || '—', 18, 32);
 }
 drawMB();
 const $ = id => document.getElementById(id);
@@ -271,7 +271,7 @@ async function poll() {
     const lastNeuron = neuronEvents[neuronEvents.length - 1];
     if (lastNeuron && lastNeuron.type === 'recommend' && lastNeuron.trace_id !== state.lastTrace) {
       state.lastTrace = lastNeuron.trace_id;
-      $('status').textContent = 'encoder: ' + (lastNeuron.encoder || '?') + ' ┬╖ route: ' + (lastNeuron.route || '?') + ' ┬╖ max ' + (lastNeuron.max_score ?? '?');
+      $('status').textContent = 'encoder: ' + (lastNeuron.encoder || '?') + ' · route: ' + (lastNeuron.route || '?') + ' · max ' + (lastNeuron.max_score ?? '?');
     }
     const fb = (feedback.events || [])[(feedback.events || []).length - 1];
     if (fb && fb.ts !== state.lastFeedbackTs) {
@@ -282,12 +282,12 @@ async function poll() {
         state.dopamine = Math.min(100, state.dopamine + 22);
         state.hunger = Math.max(0, state.hunger - 18);
         state.mode = 'reward';
-        $('verdict').innerHTML = '<span class="good">ЁЯНм ╨╜╨░╨│╤А╨░╨┤╨░ ┬╖ PAM ' + (feedbackNeuron.pam ?? 0) + ' ┬╖ ╨┤╨╛╤Д╨░╨╝╨╕╨╜ ╤А╨░╤Б╤В╤С╤В</span>';
+        $('verdict').innerHTML = '<span class="good">🍬 награда · PAM ' + (feedbackNeuron.pam ?? 0) + ' · дофамин растёт</span>';
       } else {
         state.dopamine = Math.max(0, state.dopamine - 10);
         state.hunger = Math.min(100, state.hunger + 25);
         state.mode = 'punish';
-        $('verdict').innerHTML = '<span class="bad">тЪб ╨╛╤И╨╕╨▒╨║╨░ ┬╖ PPL1 ' + (feedbackNeuron.ppl1 ?? 0) + ' ┬╖ ╨▒╨╛╨╗╤М ╨╕ ╨│╨╛╨╗╨╛╨┤</span>';
+        $('verdict').innerHTML = '<span class="bad">⚡ ошибка · PPL1 ' + (feedbackNeuron.ppl1 ?? 0) + ' · боль и голод</span>';
       }
       $('hunger').style.width = state.hunger + '%';
       $('hunger-val').textContent = Math.round(state.hunger) + '%';
