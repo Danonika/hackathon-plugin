@@ -132,6 +132,15 @@ func main() {
 		}
 		http.StripPrefix("/vfb-mesh/", http.FileServer(http.Dir(base))).ServeHTTP(w, r)
 	})
+	mux.HandleFunc("/brain-demo", func(w http.ResponseWriter, r *http.Request) {
+		page, err := staticFS.ReadFile("static/brain-demo.html")
+		if err != nil {
+			http.Error(w, "static page missing", http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, _ = w.Write(page)
+	})
 	mux.HandleFunc("/vfb-brain", func(w http.ResponseWriter, r *http.Request) {
 		page, err := staticFS.ReadFile("static/vfb-brain.html")
 		if err != nil {
