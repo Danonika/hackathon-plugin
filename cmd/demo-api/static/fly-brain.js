@@ -158,7 +158,7 @@ export async function createBrainView(container) {
         vec4 viewPosition = modelViewMatrix * vec4(position, 1.0);
         gl_Position = projectionMatrix * viewPosition;
         float distanceScale = clamp(5.5 / -viewPosition.z, 0.65, 1.4);
-        gl_PointSize = (1.65 + 4.0 * sqrt(intensity)) * pixelRatio * distanceScale;
+        gl_PointSize = (2.4 + 6.0 * sqrt(intensity)) * pixelRatio * distanceScale;
       }
     `,
     fragmentShader: `
@@ -291,6 +291,23 @@ export async function createBrainView(container) {
     if (disposed) return;
     status.fresh = isFresh();
     if (!status.fresh) clearActivity();
+    if (points && neuronCount > 0) {
+      const sparkSeed = Math.floor(time * 6);
+      for (let i = 0; i < neuronCount; i++) {
+        intensity[i] *= 0.94;
+        if (intensity[i] < 0.02) intensity[i] = 0;
+        const hash = ((i * 2654435761) ^ (sparkSeed * 40503)) >>> 0;
+        if (hash % 997 < 5) intensity[i] = Math.max(intensity[i], 0.55);
+      }
+      for (let i = 0; i < neuronCount; i++) {
+        const s = Math.sqrt(intensity[i]);
+        colors[i * 3] = 0.19 + s * 0.9;
+        colors[i * 3 + 1] = 0.14 + s * 0.65;
+        colors[i * 3 + 2] = 0.32 + s * 0.85;
+      }
+      points.geometry.attributes.intensity.needsUpdate = true;
+      points.geometry.attributes.color.needsUpdate = true;
+    }
     const pulse = clamp(finite(shared.pulse), -1, 1);
     // The shared feedback pulse is visible in the anatomy only. KC points are
     // driven solely by the current recommendation's activation vector.

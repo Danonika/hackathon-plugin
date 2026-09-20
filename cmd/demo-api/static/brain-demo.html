@@ -264,6 +264,7 @@ function loop(now) {
     mode: state.mode,
     activity: state.activity,
     pulse: state.pulse,
+    clap: state.mode === 'reward' ? Math.max(0, state.pulse) : 0,
     speed: 0.05 + state.activity * 0.35 + (state.mode === 'reward' ? 0.25 : 0),
     turn: flyModel.group.rotation.y,
     flight: state.mode === 'reward' ? 0.9 : state.mode === 'correction' ? 0.55 : 0
