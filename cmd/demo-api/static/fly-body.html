@@ -47,7 +47,7 @@
     <button onclick="setBrainCorner('mb')">MB (обученный)</button>
     <button class="alt" onclick="setBrainCorner('flybrain')">flybrain</button>
     <button class="alt" onclick="window.open(VFB_URL, '_blank')">VFB ↗</button>
-    <span id="brain-src">MB · 4133 KC · PAM/PPL1</span>
+    <span id="brain-src">MB · 4133 KC · два полушария</span>
   </div>
   <canvas id="mb-canvas" width="1000" height="760"></canvas>
   <iframe id="brain-frame" class="hidden" src="/fly-brain/" title="Fly brain 3D"></iframe>
@@ -178,12 +178,13 @@ const mbCtx = mbCanvas.getContext('2d');
 const KC_SHOW = 900;
 const kcPos = [];
 for (let i = 0; i < KC_SHOW; i++) {
+  const side = i % 2 === 0 ? -1 : 1;
   const phi = Math.acos(1 - 2 * (i + 0.5) / KC_SHOW);
   const theta = Math.PI * (1 + Math.sqrt(5)) * i;
   kcPos.push({
-    x: 0.5 + 0.33 * Math.sin(phi) * Math.cos(theta),
-    y: 0.5 + 0.42 * Math.cos(phi),
-    z: Math.sin(phi) * Math.sin(theta)
+    x: 0.5 + side * 0.17 + 0.20 * Math.sin(phi) * Math.cos(theta),
+    y: 0.5 + 0.30 * Math.cos(phi),
+    z: 0.22 * Math.sin(phi) * Math.sin(theta)
   });
 }
 const mb = { active: new Set(), mbon: {}, pam: 0, ppl1: 0, flashUntil: 0, reward: false, encoder: '' };
