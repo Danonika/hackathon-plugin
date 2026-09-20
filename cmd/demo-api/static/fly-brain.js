@@ -294,10 +294,10 @@ export async function createBrainView(container) {
     if (points && neuronCount > 0) {
       const sparkSeed = Math.floor(time * 6);
       for (let i = 0; i < neuronCount; i++) {
-        intensity[i] *= 0.94;
+        intensity[i] *= 0.96;
         if (intensity[i] < 0.02) intensity[i] = 0;
         const hash = ((i * 2654435761) ^ (sparkSeed * 40503)) >>> 0;
-        if (hash % 997 < 5) intensity[i] = Math.max(intensity[i], 0.55);
+        if (hash % 997 < 9) intensity[i] = Math.max(intensity[i], 0.7);
       }
       for (let i = 0; i < neuronCount; i++) {
         const s = Math.sqrt(intensity[i]);

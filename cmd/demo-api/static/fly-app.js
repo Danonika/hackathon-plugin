@@ -143,6 +143,7 @@ function animate(frameTime) {
   const reduced=motionReduced.matches;
   const energy=reduced?0:live.activity;
   const shared={mode:live.mode,activity:energy,pulse:reduced?0:live.pulse,speed:.05+energy*.35,turn:0,flight:0};
+  shared.clap=live.mode==='reward'?Math.max(0,live.pulse):0;
   if(view && model){
     const y=model.groundOffset||.75;
     const amplitude=reduced?0:(live.mode==='idle'?.9:1.15);
