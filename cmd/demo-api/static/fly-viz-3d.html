@@ -65,6 +65,7 @@ function flyModel() {
   const headMat = new THREE.MeshStandardMaterial({ color: 0x2f4f4f, roughness: .5, metalness: .1 });
   const eyeMat = new THREE.MeshStandardMaterial({ color: 0xff2d2d, roughness: .25, metalness: .5 });
   const wingMat = new THREE.MeshStandardMaterial({ color: 0xe0ffff, transparent: true, opacity: .6, roughness: .15, side: THREE.DoubleSide });
+  const legMat = new THREE.MeshStandardMaterial({ color: 0x4a4a4a, roughness: .6 });
 
   const body = new THREE.Mesh(new THREE.SphereGeometry(10, 48, 32), bodyMat);
   body.scale.set(1.2, 2, 1); g.add(body);
@@ -80,11 +81,24 @@ function flyModel() {
   const wings = [];
   for (const s of [-1, 1]) {
     const wing = new THREE.Mesh(new THREE.SphereGeometry(5, 32, 20), wingMat);
-    wing.position.set(6 * s, -2, 6);
+    wing.position.set(8 * s, -2, 9);
     wing.rotation.set(THREE.MathUtils.degToRad(10), THREE.MathUtils.degToRad(20 * s), THREE.MathUtils.degToRad(-35 * s));
-    wing.scale.set(2, 4, 0.1);
+    wing.scale.set(1.5, 4, 0.05);
     g.add(wing); wings.push(wing);
   }
+
+  const legs = [
+    [-4, 6, -6, 20], [4, 6, -6, -20],
+    [-4, 0, -7, 15], [4, 0, -7, -15],
+    [-4, -6, -6, 10], [4, -6, -6, -10],
+  ];
+  for (const [x, y, z, angle] of legs) {
+    const leg = new THREE.Mesh(new THREE.CylinderGeometry(0.6, 0.6, 10, 8), legMat);
+    leg.position.set(x, y, z);
+    leg.rotation.z = THREE.MathUtils.degToRad(angle);
+    g.add(leg);
+  }
+
   g.traverse(n => { if (n.isMesh) n.castShadow = true; });
   return { group: g, wings };
 }
@@ -95,13 +109,16 @@ function brainHalf() {
   const core = new THREE.Mesh(new THREE.SphereGeometry(15, 40, 28), mat);
   core.scale.set(0.7, 1.4, 1); half.add(core);
   const bumpGeo = new THREE.SphereGeometry(1, 14, 10);
-  for (let x = -10; x <= 10; x += 4) {
-    for (let y = -18; y <= 18; y += 4) {
+  for (let x = -10; x <= 10; x += 2) {
+    for (let y = -18; y <= 18; y += 2) {
       if (x * x + y * y < 250) {
+        const ox = Math.sin(y * 0.7) * 1.5;
+        const oy = Math.cos(x * 0.7) * 1.5;
+        const oz = Math.sin(x * y * 0.05) * 1.0;
         const z = Math.sqrt(Math.max(0, 225 - (x * x + y * y * 0.5)));
-        const r = 2.5 + Math.sin(x * 5) * 0.5;
+        const r = 1.2 + Math.sin(x * 5 + y * 0.3) * 0.3;
         const bump = new THREE.Mesh(bumpGeo, mat);
-        bump.position.set(x * 0.8, y, z * 0.9);
+        bump.position.set(x * 0.8 + ox, y + oy, z * 0.9 + oz);
         bump.scale.setScalar(r);
         bump.castShadow = true;
         half.add(bump);
@@ -119,7 +136,7 @@ function brainModel() {
   return { group: g, mat: left.mat };
 }
 
-const fly = flyModel(); fly.group.scale.setScalar(0.16); fly.group.position.set(-5.5, 3.4, 0); fly.group.rotation.y = Math.PI / 2;
+const fly = flyModel(); fly.group.scale.setScalar(0.16); fly.group.position.set(-5.5, 3.4, 0); fly.group.rotation.set(-Math.PI / 2, 0, 0);
 scene.add(fly.group);
 
 const brain = brainModel(); brain.group.scale.setScalar(0.16); brain.group.position.set(5.5, 5.2, 0);
@@ -127,7 +144,7 @@ scene.add(brain.group);
 const brainLight = new THREE.PointLight(0x22c55e, 0, 30); brainLight.position.set(5.5, 5.2, 0); scene.add(brainLight);
 
 const sugar = new THREE.Mesh(new THREE.BoxGeometry(1.4, 1.4, 1.4), new THREE.MeshStandardMaterial({ color: 0xfacc15, emissive: 0x6b5300, roughness: .4 }));
-sugar.position.set(3.4, 0.7, 3.4); sugar.castShadow = true; scene.add(sugar);
+sugar.position.set(3.4, 0.7, 3.4); sugar.castShadow = true; sugar.visible = false; scene.add(sugar);
 
 const state = { hunger: 40, dopamine: 0, mode: 'idle', lastTrace: null, lastFeedbackTs: null };
 const target = new THREE.Vector3(-5.5, 3.4, 0);
@@ -163,6 +180,7 @@ async function poll() {
         state.hunger = Math.max(0, state.hunger - 18);
         state.mode = 'reward';
         target.set(3.4, 1.6, 3.4);
+        sugar.visible = true;
         setBrainGlow(0x22c55e, 0.9);
         $('verdict').innerHTML = '<span class="good">🍬 награда · PAM ' + (feedbackNeuron.pam ?? 0) + ' · муха ест сахар</span>';
       } else {
@@ -200,6 +218,7 @@ function animate() {
   } else {
     target.set(-5.5, 3.4 + hover, 0);
     fly.group.position.lerp(target, .02);
+    sugar.visible = false;
   }
   if (state.mode === 'idle') setBrainGlow(0x7c3aed, 0.15 + 0.1 * Math.sin(t * 2));
   sugar.scale.setScalar(state.mode === 'reward' && fly.group.position.distanceTo(sugar.position) < 2.4 ? .55 : 1);
