@@ -159,6 +159,34 @@ const sugar = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.4, 0.4), new THREE.Mes
 sugar.position.set(2.4, 0.2, 1.9); sugar.castShadow = true; sugar.visible = false; scene.add(sugar);
 const flyTarget = new THREE.Vector3(0, 0.6, 0);
 
+const brainGroup = new THREE.Group();
+brainGroup.position.set(3.1, 1.5, -0.6);
+scene.add(brainGroup);
+const brainMats = [];
+async function loadVfbBrain() {
+  const brainLoader = new OBJLoader();
+  const items = [
+    { file: 'saddle_FBbt_00045048.obj', color: 0xd9a066 },
+    { file: 'medulla.obj', color: 0xf3c9d6 }
+  ];
+  for (const it of items) {
+    try {
+      const obj = await brainLoader.loadAsync('/vfb-mesh/' + it.file);
+      const mat = new THREE.MeshStandardMaterial({ color: it.color, roughness: .55, metalness: .12, side: THREE.DoubleSide });
+      brainMats.push(mat);
+      obj.traverse(n => { if (n.isMesh) { if (n.geometry) n.geometry.computeVertexNormals(); n.material = mat; } });
+      const box = new THREE.Box3().setFromObject(obj);
+      const size = box.getSize(new THREE.Vector3());
+      const center = box.getCenter(new THREE.Vector3());
+      const s = 1.6 / Math.max(size.x, size.y, size.z, 1e-6);
+      obj.scale.setScalar(s);
+      obj.position.set(-center.x * s, -center.y * s, -center.z * s);
+      brainGroup.add(obj);
+    } catch (e) { /* skip */ }
+  }
+}
+loadVfbBrain();
+
 const state = { hunger: 40, dopamine: 0, lastTrace: null, lastFeedbackTs: null, mode: 'idle' };
 const VFB_URL = 'https://v2.virtualflybrain.org/org.geppetto.frontend/geppetto?id=FBbt_00045048&i=VFB_00101567';
 function setBrainCorner(kind) {
@@ -326,6 +354,14 @@ function animate() {
   fly.position.y += (flyTarget.y + (Math.random() - 0.5) * jitter - fly.position.y) * 0.05;
   fly.position.z += (flyTarget.z + (Math.random() - 0.5) * jitter - fly.position.z) * 0.04;
   fly.rotation.z = state.mode === 'punish' ? Math.sin(t * 40) * 0.15 : Math.sin(t * 0.8) * 0.05;
+
+  brainGroup.rotation.y = t * 0.25;
+  const glow = state.mode !== 'idle' ? 0.9 : 0.08;
+  brainMats.forEach((m, i) => {
+    m.emissive.set(state.mode === 'punish' ? 0xef4444 : 0x22c55e);
+    m.emissiveIntensity = glow * (0.6 + 0.4 * Math.sin(t * 6 + i));
+  });
+
   renderer.render(scene, camera);
 }
 animate();
