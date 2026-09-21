@@ -13,6 +13,7 @@ git-ignored; this README is the committed description of the layout.
 | `evals/rankings/ranking-<ts>.json` | `eval.rank` | regulation 9.6 ranking and any recorded commission vote |
 | `evals/project-cost/<sha>.json` | project-cost skill | technical readiness score with evidence |
 | `evals/roast/<sha>/`, `evals/snapshots/` | roast / freeze skills | critic findings and frozen inputs |
+| `evals/rehearsal/<sha>/rehearsal-<ts>.json` | `cmd/hackathonkit-rehearse` | clean-checkout end-to-end rehearsal: per-step status, duration and artifacts |
 
 Rules:
 

@@ -2,7 +2,7 @@
 
 Local Codex plugin backed by a typed MCP capability layer. Codex is the main reasoning engine, Skills define domain workflows, the local MCP server exposes deterministic and AI-powered capabilities, and the experimental Fly router recommends capability routes while Codex keeps the final decision.
 
-Status: v0.12.4. MCP runtime (37 tools), 29 standard-compliant skills (validator-enforced), 92% Go test coverage with an 80% gate, session hooks, durable learnings, Codex subagents, four harness adapters, a full control plane (SQLite store, daemon, TUI, worktrees, agent runs, risk scoring, session handoff), staged build plans, PDF/XLSX processing, Fly v2 (keyword + embeddings + kNN memory + mushroom-body learning + LLM classifier), Postgres/MinIO backends, demo dashboard, install profiles/repair, a quality gate with a Go-enabled Docker target, a Fly A/B benchmark, plan review, security review, a Telegram integration capability for built projects and the evaluation subsystem (deterministic aggregation, calibration, loop decisions and bundle freezing) are in place.
+Status: v0.13.0. MCP runtime (37 tools), 29 standard-compliant skills (validator-enforced), 88% Go test coverage with an 80% gate, session hooks, durable learnings, Codex subagents, four harness adapters, a full control plane (SQLite store, daemon, TUI, worktrees, agent runs, risk scoring, session handoff), staged build plans, PDF/XLSX processing, Fly v2 (keyword + embeddings + kNN memory + mushroom-body learning + LLM classifier), Postgres/MinIO backends, demo dashboard, install profiles/repair, a quality gate with a Go-enabled Docker target, a Fly A/B benchmark, plan review, security review, a clean-checkout rehearsal command, a Telegram integration capability for built projects and the evaluation subsystem (deterministic aggregation, calibration, loop decisions and bundle freezing) are in place.
 
 ## Contents
 
@@ -538,6 +538,7 @@ go run ./cmd/hackathonkit-ctl sessions list
 go run ./cmd/hackathonkit-ctl daemon start      # background ingest + loopback API
 go run ./cmd/hackathonkit-ctl tui               # live dashboard
 go run ./cmd/fly-bench                      # Normal-vs-Fly A/B evidence
+go run ./cmd/hackathonkit-rehearse              # clean-checkout end-to-end rehearsal -> evals/rehearsal/
 sh scripts/quality-gate.sh                  # build/verify gate -> evals/quality/
 sh scripts/sync-harness.sh                  # regenerate mirrors, verify adapters
 sh scripts/repair.sh                        # regenerate missing generated artifacts
@@ -549,13 +550,15 @@ Sample dataset: `data/input/sample-telemetry.csv` (72 hourly readings with two p
 
 ## Testing
 
-`go test ./...` covers the JSON-RPC handshake, notification suppression, panic containment, live routing and evaluation config re-reads, path sanitization and backend fallback, observability append/tail, judge aggregation/calibration/decisions, the bundle freezer, the eval and plan tool handlers, learning confidence/recall/promotion, the context-budget estimator, control-plane ingest idempotency, deterministic risk scoring, handoff rendering, the daemon HTTP handlers, the quality-gate store/reader, the Fly benchmark metrics, the security scanner, the Telegram client and tools (fake Bot API; no live calls in CI) and the skill-standard validator (including a catalog-wide regression test). Total coverage is 92% of statements (enforced at 80% by `scripts/coverage-check.sh`; override with `HACKATHONKIT_COVERAGE_TARGET`). Run `go run ./cmd/hackathonkit-mcp --selftest` for the end-to-end handshake and `scripts/smoke.sh` for the process-level check.
+`go test ./...` covers the JSON-RPC handshake, notification suppression, panic containment, live routing and evaluation config re-reads, path sanitization and backend fallback, observability append/tail, judge aggregation/calibration/decisions, the bundle freezer, the eval and plan tool handlers, learning confidence/recall/promotion, the context-budget estimator, control-plane ingest idempotency, deterministic risk scoring, handoff rendering, the daemon HTTP handlers, the quality-gate store/reader, the Fly benchmark metrics, the security scanner, the Telegram client and tools (fake Bot API; no live calls in CI), the rehearsal driver and the skill-standard validator (including a catalog-wide regression test). Total coverage is 88% of statements (enforced at 80% by `scripts/coverage-check.sh`; override with `HACKATHONKIT_COVERAGE_TARGET`). Run `go run ./cmd/hackathonkit-mcp --selftest` for the end-to-end handshake and `scripts/smoke.sh` for the process-level check.
+
+`go run ./cmd/hackathonkit-rehearse` is the clean-checkout rehearsal: it clones the repository into a temporary directory, builds the MCP server there, drives the mandatory telemetry scenario (describe, analyze, detect anomalies, chart, report, index/search, plan, learning, eval, security, context budget, gate and Telegram preconditions) over stdio JSON-RPC and stores a per-step report with durations at `evals/rehearsal/<sha>/rehearsal-<timestamp>.json`. It exits non-zero on the first failed step; `--keep` keeps the checkout, `--json` prints the report only.
 
 ## Continuous integration
 
 `.github/workflows/ci.yml` runs on every push and pull request:
 
-- **quality (linux)** - hooks behavior test plus `scripts/quality-gate.sh` (gofmt, build, vet, tests, selftest, skill validator).
+- **quality (linux)** - hooks behavior test, shell regression tests, `scripts/quality-gate.sh` (gofmt, build, vet, tests, selftest, skill validator) and the clean-checkout rehearsal.
 - **docker (linux)** - `docker compose config`, image builds, `--selftest` inside the container, the quality gate in the Go-enabled image, infrastructure bring-up and `scripts/smoke.sh`.
 - **windows** - `go test ./...`, the hooks behavior test against the real `bin/hackathonkit-mcp.exe`, selftest and skill validation.
 

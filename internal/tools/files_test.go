@@ -128,6 +128,9 @@ func TestTimestampHeaderKeywords(t *testing.T) {
 		"event_date":        true,
 		"Timestamp":         true,
 		"ts_value":          true,
+		"ts":                true,
+		"ts_utc":            true,
+		"event_ts":          true,
 		"Дата":              true,
 		"Время события":     true,
 		"период":            true,
@@ -135,6 +138,8 @@ func TestTimestampHeaderKeywords(t *testing.T) {
 		"name":              false,
 		"batch_counter":     false,
 		"temperature_readi": false,
+		"cats_x":            false,
+		"results":           false,
 	}
 	for header, want := range cases {
 		if got := timestampHeader(header); got != want {

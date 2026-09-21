@@ -60,8 +60,11 @@ func parseTimeValue(s string) (time.Time, bool) {
 }
 
 func timestampHeader(name string) bool {
-	n := strings.ToLower(name)
-	for _, kw := range []string{"time", "date", "timestamp", "datetime", "ts_", "дата", "время", "период"} {
+	n := strings.ToLower(strings.TrimSpace(name))
+	if n == "ts" || strings.HasPrefix(n, "ts_") || strings.HasSuffix(n, "_ts") {
+		return true
+	}
+	for _, kw := range []string{"time", "date", "timestamp", "datetime", "дата", "время", "период"} {
 		if strings.Contains(n, kw) {
 			return true
 		}

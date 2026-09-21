@@ -27,6 +27,8 @@ jobs:
           sh scripts/smoke.test.sh
       - name: quality gate
         run: ./scripts/quality-gate.sh
+      - name: clean-checkout rehearsal
+        run: go run ./cmd/hackathonkit-rehearse --json > /dev/null
 
   docker:
     name: docker stack (linux)
