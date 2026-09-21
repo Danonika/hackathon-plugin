@@ -66,7 +66,7 @@ export async function createBrainView(container) {
   const camera = new THREE.PerspectiveCamera(33, 1, 0.01, 40);
   const composer = new EffectComposer(renderer);
   composer.addPass(new RenderPass(scene, camera));
-  const bloomPass = new UnrealBloomPass(new THREE.Vector2(1, 1), 1.35, 0.75, 0.62);
+  const bloomPass = new UnrealBloomPass(new THREE.Vector2(1, 1), 1.5, 0.8, 0.35);
   composer.addPass(bloomPass);
 
   const brain = new THREE.Group();
@@ -166,7 +166,7 @@ export async function createBrainView(container) {
         vec4 viewPosition = modelViewMatrix * vec4(position, 1.0);
         gl_Position = projectionMatrix * viewPosition;
         float distanceScale = clamp(5.5 / -viewPosition.z, 0.65, 1.4);
-        gl_PointSize = (2.4 + 6.0 * sqrt(intensity)) * pixelRatio * distanceScale;
+        gl_PointSize = (3.2 + 7.5 * sqrt(intensity)) * pixelRatio * distanceScale;
       }
     `,
     fragmentShader: `
@@ -176,8 +176,8 @@ export async function createBrainView(container) {
         float radius = length(gl_PointCoord - vec2(0.5)) * 2.0;
         if (radius > 1.0) discard;
         float core = exp(-6.0 * radius * radius);
-        float halo = pow(1.0 - radius, 1.8) * 0.30 * neuronIntensity;
-        float alpha = core * (0.48 + 0.52 * neuronIntensity) + halo;
+        float halo = pow(1.0 - radius, 1.8) * 0.55 * neuronIntensity;
+        float alpha = core * (0.85 + 0.6 * neuronIntensity) + halo * 1.6;
         gl_FragColor = vec4(neuronColor, alpha);
         #include <tonemapping_fragment>
         #include <colorspace_fragment>
@@ -310,9 +310,9 @@ export async function createBrainView(container) {
       }
       for (let i = 0; i < neuronCount; i++) {
         const s = Math.sqrt(intensity[i]);
-        colors[i * 3] = 0.19 + s * 0.9;
-        colors[i * 3 + 1] = 0.14 + s * 0.65;
-        colors[i * 3 + 2] = 0.32 + s * 0.85;
+        colors[i * 3] = 0.42 + s * 0.58;
+        colors[i * 3 + 1] = 0.32 + s * 0.5;
+        colors[i * 3 + 2] = 0.78 + s * 0.22;
       }
       points.geometry.attributes.intensity.needsUpdate = true;
       points.geometry.attributes.color.needsUpdate = true;
