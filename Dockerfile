@@ -3,8 +3,8 @@ WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-RUN CGO_ENABLED=0 go build -trimpath -o /out/hackathonkit-mcp ./cmd/hackathonkit-mcp
-RUN CGO_ENABLED=0 go build -trimpath -o /out/hackathonkit-demo-api ./cmd/demo-api
+RUN CGO_ENABLED=0 go build -buildvcs=false -trimpath -o /out/hackathonkit-mcp ./cmd/hackathonkit-mcp
+RUN CGO_ENABLED=0 go build -buildvcs=false -trimpath -o /out/hackathonkit-demo-api ./cmd/demo-api
 
 FROM alpine:3.24.2 AS runtime-base
 RUN apk add --no-cache ca-certificates && adduser -D -u 1000 hackathonkit

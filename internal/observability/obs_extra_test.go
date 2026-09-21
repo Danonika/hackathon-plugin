@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -102,6 +103,9 @@ func TestTailJSONLLimitClamp(t *testing.T) {
 }
 
 func TestTailJSONLOpenError(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("opening a directory succeeds on Windows")
+	}
 	if _, err := TailJSONL(t.TempDir(), 5); err == nil {
 		t.Fatal("expected error when the path is a directory")
 	}

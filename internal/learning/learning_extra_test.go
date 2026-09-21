@@ -360,6 +360,9 @@ func TestSimilarityAndNormalizeEdges(t *testing.T) {
 }
 
 func TestProjectKeyDeletedCwd(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("cannot remove the current working directory on Windows")
+	}
 	root := t.TempDir()
 	t.Chdir(root)
 	if err := os.Remove(root); err != nil {

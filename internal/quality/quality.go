@@ -77,6 +77,7 @@ func runCheck(ctx context.Context, root string, spec checkSpec) Check {
 	start := time.Now()
 	cmd := exec.CommandContext(runCtx, spec.command[0], spec.command[1:]...)
 	cmd.Dir = root
+	cmd.Env = buildEnv()
 	output, err := cmd.CombinedOutput()
 	check.DurationMS = time.Since(start).Milliseconds()
 	check.Output = tail(string(output), 2000)
@@ -91,6 +92,26 @@ func runCheck(ctx context.Context, root string, spec checkSpec) Check {
 		check.Status = "ok"
 	}
 	return check
+}
+
+// buildEnv returns the current environment with -buildvcs=false appended to
+// GOFLAGS. The gate runs inside containers as root over bind-mounted repos
+// whose .git is owned by another user; git then refuses to operate and Go's
+// VCS stamping fails with exit status 128.
+func buildEnv() []string {
+	base := []string{}
+	existing := ""
+	for _, kv := range os.Environ() {
+		if strings.HasPrefix(kv, "GOFLAGS=") {
+			existing = strings.TrimPrefix(kv, "GOFLAGS=")
+			continue
+		}
+		base = append(base, kv)
+	}
+	if !strings.Contains(existing, "-buildvcs") {
+		existing = strings.TrimSpace(existing + " -buildvcs=false")
+	}
+	return append(base, "GOFLAGS="+existing)
 }
 
 func tail(text string, limit int) string {

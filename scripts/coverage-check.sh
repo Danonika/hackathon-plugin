@@ -8,6 +8,15 @@ PROFILE="${TMPDIR:-/tmp}/hackathonkit-coverage.$$"
 trap 'rm -f "$PROFILE"' EXIT INT TERM
 cd "$ROOT"
 
+# Containers may run as root over a repo owned by another user; disable VCS
+# stamping so git's dubious-ownership check cannot fail the build.
+case "${GOFLAGS:-}" in
+  *-buildvcs*) ;;
+  "") GOFLAGS="-buildvcs=false" ;;
+  *) GOFLAGS="$GOFLAGS -buildvcs=false" ;;
+esac
+export GOFLAGS
+
 if ! go test ./... -count=1 -coverprofile="$PROFILE" >/dev/null 2>&1; then
   echo "[coverage] test suite failed" >&2
   go test ./... -count=1 2>&1 | grep -E 'FAIL|--- FAIL' | head -20 >&2

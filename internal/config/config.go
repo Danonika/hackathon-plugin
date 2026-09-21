@@ -7,7 +7,6 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
-	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -122,11 +121,9 @@ type Manager struct {
 	mu           sync.Mutex
 	cfg          File
 	routingCache RoutingState
-	routingMtime time.Time
 	routingInit  bool
 
 	evaluationCache EvaluationSettings
-	evaluationMtime time.Time
 	evaluationInit  bool
 }
 
@@ -319,32 +316,24 @@ func (m *Manager) Routing() RoutingState {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	path := m.RoutingPath()
-	st, err := os.Stat(path)
-	if err == nil && m.routingInit && st.ModTime().Equal(m.routingMtime) {
-		return m.routingCache
-	}
-	if err == nil {
-		if data, readErr := os.ReadFile(path); readErr == nil {
-			var doc routingDoc
-			if yaml.Unmarshal(data, &doc) == nil && doc.Routing.Mode != "" {
-				mode := normalizeMode(doc.Routing.Mode)
-				if mode == "" {
-					log.Printf("config: ignoring invalid routing mode %q in %s (expected normal or fly)", doc.Routing.Mode, path)
-					fallback := RoutingState{Mode: "normal", Version: doc.Routing.Version}
-					if fallback.Version <= 0 {
-						fallback.Version = 1
-					}
-					m.routingCache = fallback
-					m.routingMtime = st.ModTime()
-					m.routingInit = true
-					return fallback
+	if data, err := os.ReadFile(path); err == nil {
+		var doc routingDoc
+		if yaml.Unmarshal(data, &doc) == nil && doc.Routing.Mode != "" {
+			mode := normalizeMode(doc.Routing.Mode)
+			if mode == "" {
+				log.Printf("config: ignoring invalid routing mode %q in %s (expected normal or fly)", doc.Routing.Mode, path)
+				fallback := RoutingState{Mode: "normal", Version: doc.Routing.Version}
+				if fallback.Version <= 0 {
+					fallback.Version = 1
 				}
-				doc.Routing.Mode = mode
-				m.routingCache = doc.Routing
-				m.routingMtime = st.ModTime()
+				m.routingCache = fallback
 				m.routingInit = true
-				return m.routingCache
+				return fallback
 			}
+			doc.Routing.Mode = mode
+			m.routingCache = doc.Routing
+			m.routingInit = true
+			return m.routingCache
 		}
 	}
 	if m.routingInit {
@@ -416,9 +405,6 @@ func (m *Manager) SetRoutingMode(mode string) (RoutingState, error) {
 	}
 	m.routingCache = next
 	m.routingInit = true
-	if st, err := os.Stat(m.RoutingPath()); err == nil {
-		m.routingMtime = st.ModTime()
-	}
 	return next, nil
 }
 
@@ -432,23 +418,16 @@ func (m *Manager) Evaluation() EvaluationSettings {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	path := m.EvaluationPath()
-	st, err := os.Stat(path)
-	if err == nil && m.evaluationInit && st.ModTime().Equal(m.evaluationMtime) {
-		return m.evaluationCache
-	}
-	if err == nil {
-		if data, readErr := os.ReadFile(path); readErr == nil {
-			settings := defaultsEvaluation()
-			var patch evaluationPatch
-			if yaml.Unmarshal(data, &patch) == nil {
-				applyEvaluationPatch(&settings, patch)
-				m.evaluationCache = settings
-				m.evaluationMtime = st.ModTime()
-				m.evaluationInit = true
-				return settings
-			}
-			log.Printf("config: cannot parse %s (using defaults)", path)
+	if data, err := os.ReadFile(path); err == nil {
+		settings := defaultsEvaluation()
+		var patch evaluationPatch
+		if yaml.Unmarshal(data, &patch) == nil {
+			applyEvaluationPatch(&settings, patch)
+			m.evaluationCache = settings
+			m.evaluationInit = true
+			return settings
 		}
+		log.Printf("config: cannot parse %s (using defaults)", path)
 	}
 	if m.evaluationInit {
 		return m.evaluationCache

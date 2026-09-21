@@ -2,7 +2,7 @@
 
 Local Codex plugin backed by a typed MCP capability layer. Codex is the main reasoning engine, Skills define domain workflows, the local MCP server exposes deterministic and AI-powered capabilities, and the experimental Fly router recommends capability routes while Codex keeps the final decision.
 
-Status: v0.12.2. MCP runtime (37 tools), 29 standard-compliant skills (validator-enforced), 92% Go test coverage with an 80% gate, session hooks, durable learnings, Codex subagents, four harness adapters, a full control plane (SQLite store, daemon, TUI, worktrees, agent runs, risk scoring, session handoff), staged build plans, PDF/XLSX processing, Fly v2 (keyword + embeddings + kNN memory + mushroom-body learning + LLM classifier), Postgres/MinIO backends, demo dashboard, install profiles/repair, a quality gate with a Go-enabled Docker target, a Fly A/B benchmark, plan review, security review, a Telegram integration capability for built projects and the evaluation subsystem (deterministic aggregation, calibration, loop decisions and bundle freezing) are in place.
+Status: v0.12.3. MCP runtime (37 tools), 29 standard-compliant skills (validator-enforced), 92% Go test coverage with an 80% gate, session hooks, durable learnings, Codex subagents, four harness adapters, a full control plane (SQLite store, daemon, TUI, worktrees, agent runs, risk scoring, session handoff), staged build plans, PDF/XLSX processing, Fly v2 (keyword + embeddings + kNN memory + mushroom-body learning + LLM classifier), Postgres/MinIO backends, demo dashboard, install profiles/repair, a quality gate with a Go-enabled Docker target, a Fly A/B benchmark, plan review, security review, a Telegram integration capability for built projects and the evaluation subsystem (deterministic aggregation, calibration, loop decisions and bundle freezing) are in place.
 
 ## Contents
 
@@ -199,7 +199,7 @@ Plans (`plan.create` / `plan.update` / `plan.status`) are stored under `evals/pl
 
 `scripts/docker-check.sh` verifies the container stack end to end (config, builds, readiness, selftest, quality image, handshake) and aligns `HACKATHONKIT_UID`/`HACKATHONKIT_GID` with the current user first.
 
-`scripts/quality-gate.sh` runs gofmt, `go build ./...`, `go vet ./...`, `go test ./...`, `scripts/coverage-check.sh` (total coverage >= `HACKATHONKIT_COVERAGE_TARGET`, default 80%), the MCP selftest and the skill validator, then stores a report at `evals/quality/<git-sha>/gate.json` (per-check status, duration and bounded output). It exits non-zero when any check fails.
+`scripts/quality-gate.sh` runs gofmt, `go build ./...`, `go vet ./...`, `go test ./...`, `scripts/coverage-check.sh` (total coverage >= `HACKATHONKIT_COVERAGE_TARGET`, default 80%), the MCP selftest and the skill validator, then stores a report. Go VCS stamping is disabled (`-buildvcs=false`) so the gate also works in containers running as root over a bind-mounted repository, then stores a report at `evals/quality/<git-sha>/gate.json` (per-check status, duration and bounded output). It exits non-zero when any check fails.
 
 - In the container path, use the Go-enabled image: `docker compose run --rm quality` (Dockerfile target `quality`, compose profile `quality`, Go module/build caches as named volumes).
 - `quality.gate` reads the latest evidence; `project-cost` and `judge` consume it instead of re-running checks.

@@ -2,6 +2,7 @@ package control
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -80,8 +81,16 @@ func TestIngestIsIdempotent(t *testing.T) {
 	store := testStore(t)
 	ctx := context.Background()
 
-	write(t, filepath.Join(root, "logs", "sessions.jsonl"),
-		`{"ts":"2026-09-21T10:00:00Z","type":"session_start","session_id":"s-1","root":"`+root+`"}`+"\n")
+	sessionStart, err := json.Marshal(map[string]any{
+		"ts":         "2026-09-21T10:00:00Z",
+		"type":       "session_start",
+		"session_id": "s-1",
+		"root":       root,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	write(t, filepath.Join(root, "logs", "sessions.jsonl"), string(sessionStart)+"\n")
 	write(t, filepath.Join(root, "logs", "session-events.jsonl"),
 		`{"ts":"2026-09-21T10:00:01Z","type":"tool_use","session_id":"s-1","tool":"system.context"}`+"\n")
 	write(t, filepath.Join(root, "logs", "mcp-calls.jsonl"),

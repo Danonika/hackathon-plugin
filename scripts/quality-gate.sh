@@ -11,7 +11,7 @@ if command -v go >/dev/null 2>&1; then
   TMP_BIN="${TMPDIR:-/tmp}/hackathonkit-mcp-quality.$$"
   trap 'rm -f "$TMP_BIN"' EXIT INT TERM
   cd "$ROOT"
-  go build -o "$TMP_BIN" ./cmd/hackathonkit-mcp
+  go build -buildvcs=false -o "$TMP_BIN" ./cmd/hackathonkit-mcp
   exec "$TMP_BIN" --repo-root "$ROOT" --quality-gate
 fi
 

@@ -235,3 +235,34 @@ func TestGitSHAPackedRefs(t *testing.T) {
 		t.Fatalf("unmatched packed ref = %q", got)
 	}
 }
+
+func TestBuildEnvDisablesVCSStamping(t *testing.T) {
+	// The gate runs in containers as root over bind-mounted repos whose .git is
+	// owned by another user; git refuses and Go's VCS stamping fails with exit
+	// status 128 unless -buildvcs=false is set.
+	t.Setenv("GOFLAGS", "-mod=mod")
+	flags := ""
+	count := 0
+	for _, kv := range buildEnv() {
+		if strings.HasPrefix(kv, "GOFLAGS=") {
+			flags = strings.TrimPrefix(kv, "GOFLAGS=")
+			count++
+		}
+	}
+	if count != 1 {
+		t.Fatalf("GOFLAGS entries = %d, want 1", count)
+	}
+	if !strings.Contains(flags, "-buildvcs=false") || !strings.Contains(flags, "-mod=mod") {
+		t.Fatalf("GOFLAGS = %q, want merged flags with -buildvcs=false", flags)
+	}
+
+	t.Setenv("GOFLAGS", "-buildvcs=true")
+	for _, kv := range buildEnv() {
+		if strings.HasPrefix(kv, "GOFLAGS=") {
+			flags = strings.TrimPrefix(kv, "GOFLAGS=")
+		}
+	}
+	if flags != "-buildvcs=true" {
+		t.Fatalf("explicit GOFLAGS must be preserved, got %q", flags)
+	}
+}

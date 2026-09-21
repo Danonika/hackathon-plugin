@@ -191,7 +191,7 @@ func TestCmdIngestJSON(t *testing.T) {
 		t.Fatal(err)
 	}
 	files := map[string]string{
-		"sessions.jsonl":       `{"session_id":"s-1","ts":"2026-01-01T00:00:00Z","type":"session_start","root":"` + root + `"}` + "\n" + `{"session_id":"s-2","ts":"2026-01-01T00:10:00Z","type":"session_end"}` + "\n",
+		"sessions.jsonl":       sessionStartLine(t, root) + `{"session_id":"s-2","ts":"2026-01-01T00:10:00Z","type":"session_end"}` + "\n",
 		"session-events.jsonl": `{"session_id":"s-1","ts":"2026-01-01T00:01:00Z","tool":"system.context"}` + "\n",
 		"mcp-calls.jsonl":      `{"ts":"2026-01-01T00:02:00Z","tool":"files.describe","status":"ok","duration_ms":3}` + "\n",
 		"fly-feedback.jsonl":   `{"ts":"2026-01-01T00:03:00Z","task":"x","chosen":["data.inspect"]}` + "\n",
@@ -702,4 +702,18 @@ func TestWorktreeSlugMatchesRunSlug(t *testing.T) {
 	if fmt.Sprint(slugify("A B")) != "a-b" {
 		t.Fatal("slugify drift for spaces")
 	}
+}
+
+func sessionStartLine(t *testing.T, root string) string {
+	t.Helper()
+	line, err := json.Marshal(map[string]any{
+		"session_id": "s-1",
+		"ts":         "2026-01-01T00:00:00Z",
+		"type":       "session_start",
+		"root":       root,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(line) + "\n"
 }
