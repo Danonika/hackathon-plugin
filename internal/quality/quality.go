@@ -42,6 +42,7 @@ var defaultChecks = []checkSpec{
 	{"build", []string{"go", "build", "./..."}, 5 * time.Minute},
 	{"vet", []string{"go", "vet", "./..."}, 5 * time.Minute},
 	{"test", []string{"go", "test", "./..."}, 10 * time.Minute},
+	{"coverage", []string{"sh", "scripts/coverage-check.sh"}, 10 * time.Minute},
 	{"selftest", []string{"go", "run", "./cmd/hackathonkit-mcp", "--selftest"}, 5 * time.Minute},
 	{"skills", []string{"go", "run", "./cmd/hackathonkit-mcp", "--validate-skills"}, 5 * time.Minute},
 }

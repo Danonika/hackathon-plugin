@@ -7,8 +7,19 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+type pgExecutor interface {
+	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
+	Close()
+}
+
+type pgPool interface {
+	pgExecutor
+	Ping(ctx context.Context) error
+}
 
 type ArtifactRecord struct {
 	ArtifactID string
@@ -102,10 +113,16 @@ CREATE TABLE IF NOT EXISTS eval_runs (
 `
 
 type Postgres struct {
-	pool *pgxpool.Pool
+	pool pgExecutor
 }
 
 func OpenPostgres(ctx context.Context, dsn string) (*Postgres, error) {
+	return openPostgres(ctx, dsn, func(ctx context.Context, cfg *pgxpool.Config) (pgPool, error) {
+		return pgxpool.NewWithConfig(ctx, cfg)
+	})
+}
+
+func openPostgres(ctx context.Context, dsn string, newPool func(context.Context, *pgxpool.Config) (pgPool, error)) (*Postgres, error) {
 	if strings.TrimSpace(dsn) == "" {
 		return nil, fmt.Errorf("metadata: empty postgres dsn")
 	}
@@ -113,7 +130,7 @@ func OpenPostgres(ctx context.Context, dsn string) (*Postgres, error) {
 	if err != nil {
 		return nil, err
 	}
-	pool, err := pgxpool.NewWithConfig(ctx, cfg)
+	pool, err := newPool(ctx, cfg)
 	if err != nil {
 		return nil, err
 	}

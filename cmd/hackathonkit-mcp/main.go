@@ -6,6 +6,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -28,17 +29,28 @@ import (
 	"hackathonkit.local/agentkit/internal/tools"
 )
 
-const version = "0.12.0"
+const version = "0.12.1"
 
 func main() {
-	selftest := flag.Bool("selftest", false, "run an in-process MCP handshake and exit")
-	listTools := flag.Bool("list-tools", false, "print tool descriptors as JSON and exit")
-	repoRoot := flag.String("repo-root", "", "repository root (defaults to auto-discovery)")
-	setMode := flag.String("set-routing-mode", "", "set routing mode (normal|fly) and exit")
-	sessionContext := flag.Bool("session-context", false, "print a compact session context block for hooks and exit")
-	validateSkills := flag.Bool("validate-skills", false, "validate the skill catalog against docs/SKILL-STANDARD.md and exit")
-	qualityGate := flag.Bool("quality-gate", false, "run the build/verify gate, store evidence under evals/quality/ and exit")
-	flag.Parse()
+	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
+}
+
+func run(args []string, stdout, stderr io.Writer) int {
+	fs := flag.NewFlagSet("hackathonkit-mcp", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	selftest := fs.Bool("selftest", false, "run an in-process MCP handshake and exit")
+	listTools := fs.Bool("list-tools", false, "print tool descriptors as JSON and exit")
+	repoRoot := fs.String("repo-root", "", "repository root (defaults to auto-discovery)")
+	setMode := fs.String("set-routing-mode", "", "set routing mode (normal|fly) and exit")
+	sessionContext := fs.Bool("session-context", false, "print a compact session context block for hooks and exit")
+	validateSkills := fs.Bool("validate-skills", false, "validate the skill catalog against docs/SKILL-STANDARD.md and exit")
+	qualityGate := fs.Bool("quality-gate", false, "run the build/verify gate, store evidence under evals/quality/ and exit")
+	if err := fs.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return 0
+		}
+		return 2
+	}
 
 	root := *repoRoot
 	if root == "" {
@@ -50,58 +62,58 @@ func main() {
 	if *setMode != "" {
 		state, err := mgr.SetRoutingMode(*setMode)
 		if err != nil {
-			fmt.Fprintln(os.Stderr, "error:", err)
-			os.Exit(1)
+			fmt.Fprintln(stderr, "error:", err)
+			return 1
 		}
-		fmt.Printf("routing mode set to %s (version %d)\n", state.Mode, state.Version)
-		return
+		fmt.Fprintf(stdout, "routing mode set to %s (version %d)\n", state.Mode, state.Version)
+		return 0
 	}
 
 	if *sessionContext {
-		printSessionContext(root, mgr)
-		return
+		printSessionContext(root, mgr, stdout)
+		return 0
 	}
 
 	if *validateSkills {
 		report, err := skills.Validate(root)
 		if err != nil {
-			fmt.Fprintln(os.Stderr, "error:", err)
-			os.Exit(1)
+			fmt.Fprintln(stderr, "error:", err)
+			return 1
 		}
-		enc := json.NewEncoder(os.Stdout)
+		enc := json.NewEncoder(stdout)
 		enc.SetIndent("", "  ")
 		if err := enc.Encode(report); err != nil {
-			fmt.Fprintln(os.Stderr, "error:", err)
-			os.Exit(1)
+			fmt.Fprintln(stderr, "error:", err)
+			return 1
 		}
 		if !report.OK {
-			os.Exit(1)
+			return 1
 		}
-		return
+		return 0
 	}
 
 	if *qualityGate {
 		report := quality.Run(context.Background(), root)
 		path, err := quality.Save(root, report)
 		if err != nil {
-			fmt.Fprintln(os.Stderr, "error:", err)
-			os.Exit(1)
+			fmt.Fprintln(stderr, "error:", err)
+			return 1
 		}
-		enc := json.NewEncoder(os.Stdout)
+		enc := json.NewEncoder(stdout)
 		enc.SetIndent("", "  ")
 		if err := enc.Encode(map[string]any{"report": report, "path": path}); err != nil {
-			fmt.Fprintln(os.Stderr, "error:", err)
-			os.Exit(1)
+			fmt.Fprintln(stderr, "error:", err)
+			return 1
 		}
 		if !report.OK {
-			os.Exit(1)
+			return 1
 		}
-		return
+		return 0
 	}
 
 	cfg := mgr.Config()
 	metrics := observability.NewMetrics()
-	logger := observability.NewLogger(os.Stderr)
+	logger := observability.NewLogger(stderr)
 	store := storage.New(root, cfg.Storage)
 	oa := openai.New(cfg.OpenAI)
 	tg := telegram.New(telegram.SettingsFromEnv())
@@ -164,21 +176,21 @@ func main() {
 	})
 
 	if *listTools {
-		enc := json.NewEncoder(os.Stdout)
+		enc := json.NewEncoder(stdout)
 		enc.SetIndent("", "  ")
 		if err := enc.Encode(srv.ToolDescriptors()); err != nil {
-			fmt.Fprintln(os.Stderr, "error:", err)
-			os.Exit(1)
+			fmt.Fprintln(stderr, "error:", err)
+			return 1
 		}
-		return
+		return 0
 	}
 
 	if *selftest {
-		if err := srv.SelfTest(context.Background(), os.Stdout); err != nil {
-			fmt.Fprintln(os.Stderr, "selftest error:", err)
-			os.Exit(1)
+		if err := srv.SelfTest(context.Background(), stdout); err != nil {
+			fmt.Fprintln(stderr, "selftest error:", err)
+			return 1
 		}
-		return
+		return 0
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -192,35 +204,36 @@ func main() {
 	if err := srv.Serve(ctx); err != nil {
 		if errors.Is(err, context.Canceled) {
 			observability.Log(logger, "info", "server_stop", map[string]any{"reason": "signal"})
-			return
+			return 0
 		}
 		observability.Log(logger, "error", "server_stop", map[string]any{"error": err.Error()})
-		os.Exit(1)
+		return 1
 	}
+	return 0
 }
 
 // printSessionContext emits a compact context block for SessionStart hooks:
 // routing mode, top learnings, current plan stage and pending eval decisions.
-func printSessionContext(root string, mgr *config.Manager) {
+func printSessionContext(root string, mgr *config.Manager, out io.Writer) {
 	state := mgr.Routing()
-	fmt.Println("Hackathon Agent Kit session context")
-	fmt.Printf("routing: %s (config v%d)\n", state.Mode, state.Version)
+	fmt.Fprintln(out, "Hackathon Agent Kit session context")
+	fmt.Fprintf(out, "routing: %s (config v%d)\n", state.Mode, state.Version)
 
 	settings := mgr.Config().Learning
 	if settings.Enabled {
 		store := learning.NewStore(filepath.Join(root, "data", "index", "learnings.json"), learning.ProjectKey(root))
 		if items, err := store.Top(settings.MaxInject, settings.InjectMinConfidence); err == nil && len(items) > 0 {
-			fmt.Println("learnings:")
+			fmt.Fprintln(out, "learnings:")
 			for _, item := range items {
-				fmt.Printf("- [%.2f] when %s -> %s\n", item.Confidence, clip(item.Trigger, 80), clip(item.Insight, 160))
+				fmt.Fprintf(out, "- [%.2f] when %s -> %s\n", item.Confidence, clip(item.Trigger, 80), clip(item.Insight, 160))
 			}
 		}
 	}
 	if plan, ok := plans.Latest(root); ok {
-		fmt.Println(plans.Summary(plan))
+		fmt.Fprintln(out, plans.Summary(plan))
 	}
 	if count := countFiles(filepath.Join(root, "evals", "decisions")); count > 0 {
-		fmt.Printf("pending eval decisions: %d\n", count)
+		fmt.Fprintf(out, "pending eval decisions: %d\n", count)
 	}
 }
 

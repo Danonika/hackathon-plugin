@@ -4,8 +4,10 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"math"
 	"os"
 	"path/filepath"
@@ -24,13 +26,24 @@ type datasetRow struct {
 }
 
 func main() {
-	dataset := flag.String("dataset", "", "training dataset JSONL with task/category/domain")
-	evalPath := flag.String("eval", "", "optional held-out dataset JSONL")
-	model := flag.String("model", "mb", "mb (mushroom body readout) or knn (feedback memory)")
-	kc := flag.Int("kc", fly.MBKenyonCells, "number of Kenyon cells")
-	sparsity := flag.Float64("sparsity", fly.MBDefaultSparse, "KC sparsity fraction")
-	epochs := flag.Int("epochs", 30, "training epochs")
-	flag.Parse()
+	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
+}
+
+func run(args []string, stdout, stderr io.Writer) int {
+	fs := flag.NewFlagSet("fly-train", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	dataset := fs.String("dataset", "", "training dataset JSONL with task/category/domain")
+	evalPath := fs.String("eval", "", "optional held-out dataset JSONL")
+	model := fs.String("model", "mb", "mb (mushroom body readout) or knn (feedback memory)")
+	kc := fs.Int("kc", fly.MBKenyonCells, "number of Kenyon cells")
+	sparsity := fs.Float64("sparsity", fly.MBDefaultSparse, "KC sparsity fraction")
+	epochs := fs.Int("epochs", 30, "training epochs")
+	if err := fs.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return 0
+		}
+		return 2
+	}
 
 	root := config.DiscoverRoot()
 	config.LoadDotEnv(root)
@@ -38,27 +51,30 @@ func main() {
 
 	client := openai.New(cfg.OpenAI)
 	if !client.Available() {
-		fmt.Fprintln(os.Stderr, "fly-train: OPENAI_API_KEY is required to compute embeddings")
-		os.Exit(1)
+		fmt.Fprintln(stderr, "fly-train: OPENAI_API_KEY is required to compute embeddings")
+		return 1
 	}
 
 	if *dataset == "" && *model == "knn" {
-		rebuildFromFeedback(root, cfg, client)
-		return
+		if err := rebuildFromFeedback(root, cfg, client, stdout); err != nil {
+			fmt.Fprintln(stderr, "fly-train:", err)
+			return 1
+		}
+		return 0
 	}
 	if *dataset == "" {
-		fmt.Fprintln(os.Stderr, "fly-train: --dataset is required for --model mb")
-		os.Exit(1)
+		fmt.Fprintln(stderr, "fly-train: --dataset is required for --model mb")
+		return 1
 	}
 
 	rows, err := readDataset(*dataset)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "fly-train:", err)
-		os.Exit(1)
+		fmt.Fprintln(stderr, "fly-train:", err)
+		return 1
 	}
 	if len(rows) == 0 {
-		fmt.Fprintln(os.Stderr, "fly-train: dataset is empty")
-		os.Exit(1)
+		fmt.Fprintln(stderr, "fly-train: dataset is empty")
+		return 1
 	}
 
 	categories := []string{}
@@ -78,8 +94,8 @@ func main() {
 	}
 	vectors, err := client.Embed(context.Background(), texts)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "fly-train: embeddings failed:", err)
-		os.Exit(1)
+		fmt.Fprintln(stderr, "fly-train: embeddings failed:", err)
+		return 1
 	}
 
 	brain := fly.NewMBrain(*kc, *sparsity, categories, 42)
@@ -94,28 +110,28 @@ func main() {
 	}
 	brainPath := filepath.Join(root, "data", "index", "fly-brain.json")
 	if err := brain.SaveTo(brainPath); err != nil {
-		fmt.Fprintln(os.Stderr, "fly-train:", err)
-		os.Exit(1)
+		fmt.Fprintln(stderr, "fly-train:", err)
+		return 1
 	}
-	fmt.Printf("fly-train: trained %d examples, %d categories, KC=%d sparsity=%.2f -> %s\n",
+	fmt.Fprintf(stdout, "fly-train: trained %d examples, %d categories, KC=%d sparsity=%.2f -> %s\n",
 		len(rows), len(categories), *kc, *sparsity, brainPath)
 
 	if *evalPath != "" {
 		evalRows, err := readDataset(*evalPath)
 		if err != nil {
-			fmt.Fprintln(os.Stderr, "fly-train: eval:", err)
-			os.Exit(1)
+			fmt.Fprintln(stderr, "fly-train: eval:", err)
+			return 1
 		}
-		runEval(client, brain, evalRows)
+		runEval(client, brain, evalRows, stdout, stderr)
 	}
+	return 0
 }
 
-func rebuildFromFeedback(root string, cfg config.File, client *openai.Client) {
+func rebuildFromFeedback(root string, cfg config.File, client *openai.Client, stdout io.Writer) error {
 	feedbackPath := filepath.Join(root, "logs", "fly-feedback.jsonl")
 	f, err := os.Open(feedbackPath)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "fly-train: no feedback collected yet:", err)
-		os.Exit(1)
+		return fmt.Errorf("no feedback collected yet: %w", err)
 	}
 	defer f.Close()
 	seen := map[string]bool{}
@@ -143,23 +159,23 @@ func rebuildFromFeedback(root string, cfg config.File, client *openai.Client) {
 		if _, err := router.AddFeedback(context.Background(), fly.FeedbackEvent{
 			Task: line.Task, Chosen: line.Chosen, Source: line.Source,
 		}); err != nil {
-			fmt.Fprintln(os.Stderr, "fly-train:", err)
-			os.Exit(1)
+			return err
 		}
 		count++
 	}
-	fmt.Printf("fly-train: processed %d feedback tasks, memory=%d, dopamine=%+v\n",
+	fmt.Fprintf(stdout, "fly-train: processed %d feedback tasks, memory=%d, dopamine=%+v\n",
 		count, router.MemorySize(), router.Dopamine())
+	return nil
 }
 
-func runEval(client *openai.Client, brain *fly.MBrain, rows []datasetRow) {
+func runEval(client *openai.Client, brain *fly.MBrain, rows []datasetRow, stdout, stderr io.Writer) {
 	texts := make([]string, 0, len(rows))
 	for _, row := range rows {
 		texts = append(texts, row.Task)
 	}
 	vectors, err := client.Embed(context.Background(), texts)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "fly-train: eval embeddings failed:", err)
+		fmt.Fprintln(stderr, "fly-train: eval embeddings failed:", err)
 		return
 	}
 	top1, top3 := 0, 0
@@ -184,14 +200,14 @@ func runEval(client *openai.Client, brain *fly.MBrain, rows []datasetRow) {
 		confusion[row.Category][ranking[0]]++
 	}
 	n := float64(len(rows))
-	fmt.Printf("fly-train eval: top-1 %.1f%%, top-3 %.1f%% (n=%d)\n", 100*float64(top1)/n, 100*float64(top3)/n, len(rows))
+	fmt.Fprintf(stdout, "fly-train eval: top-1 %.1f%%, top-3 %.1f%% (n=%d)\n", 100*float64(top1)/n, 100*float64(top3)/n, len(rows))
 	keys := make([]string, 0, len(confusion))
 	for key := range confusion {
 		keys = append(keys, key)
 	}
 	sort.Strings(keys)
 	for _, key := range keys {
-		fmt.Printf("  %-16s -> %v\n", key, confusion[key])
+		fmt.Fprintf(stdout, "  %-16s -> %v\n", key, confusion[key])
 	}
 }
 

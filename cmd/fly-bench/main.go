@@ -6,8 +6,10 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"math"
 	"os"
 	"path/filepath"
@@ -60,10 +62,21 @@ type report struct {
 }
 
 func main() {
-	suite := flag.String("suite", "configs/fly-tasks.jsonl", "task suite JSONL")
-	repoRoot := flag.String("root", "", "repository root")
-	jsonOnly := flag.Bool("json", false, "print the report JSON only")
-	flag.Parse()
+	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
+}
+
+func run(args []string, stdout, stderr io.Writer) int {
+	fs := flag.NewFlagSet("fly-bench", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	suite := fs.String("suite", "configs/fly-tasks.jsonl", "task suite JSONL")
+	repoRoot := fs.String("root", "", "repository root")
+	jsonOnly := fs.Bool("json", false, "print the report JSON only")
+	if err := fs.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return 0
+		}
+		return 2
+	}
 
 	root := *repoRoot
 	if root == "" {
@@ -75,12 +88,12 @@ func main() {
 
 	rows, err := loadSuite(filepath.Join(root, filepath.FromSlash(*suite)))
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "error:", err)
-		os.Exit(1)
+		fmt.Fprintln(stderr, "error:", err)
+		return 1
 	}
 	if len(rows) == 0 {
-		fmt.Fprintln(os.Stderr, "error: suite has no tasks")
-		os.Exit(1)
+		fmt.Fprintln(stderr, "error: suite has no tasks")
+		return 1
 	}
 
 	ctx := context.Background()
@@ -131,20 +144,21 @@ func main() {
 	}
 	path, err := save(root, rep)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "error:", err)
-		os.Exit(1)
+		fmt.Fprintln(stderr, "error:", err)
+		return 1
 	}
 	if *jsonOnly {
-		enc := json.NewEncoder(os.Stdout)
+		enc := json.NewEncoder(stdout)
 		enc.SetIndent("", "  ")
 		_ = enc.Encode(rep)
-		return
+		return 0
 	}
-	fmt.Printf("fly-bench: %d tasks (top_k=%d)\n", rep.Summary.Tasks, rep.Summary.TopK)
-	fmt.Printf("  baseline recall@k: %.2f  fly recall@k: %.2f\n", rep.Summary.BaselineRecallAtK, rep.Summary.FlyRecallAtK)
-	fmt.Printf("  top-1 agreement: %.0f%%  determinism: %.0f%%\n", rep.Summary.AgreementRate*100, rep.Summary.DeterminismRate*100)
-	fmt.Printf("  latency: baseline %.1fms  fly %.1fms\n", rep.Summary.BaselineLatencyMS, rep.Summary.FlyLatencyMS)
-	fmt.Printf("  evidence: %s\n", path)
+	fmt.Fprintf(stdout, "fly-bench: %d tasks (top_k=%d)\n", rep.Summary.Tasks, rep.Summary.TopK)
+	fmt.Fprintf(stdout, "  baseline recall@k: %.2f  fly recall@k: %.2f\n", rep.Summary.BaselineRecallAtK, rep.Summary.FlyRecallAtK)
+	fmt.Fprintf(stdout, "  top-1 agreement: %.0f%%  determinism: %.0f%%\n", rep.Summary.AgreementRate*100, rep.Summary.DeterminismRate*100)
+	fmt.Fprintf(stdout, "  latency: baseline %.1fms  fly %.1fms\n", rep.Summary.BaselineLatencyMS, rep.Summary.FlyLatencyMS)
+	fmt.Fprintf(stdout, "  evidence: %s\n", path)
+	return 0
 }
 
 func loadSuite(path string) ([]taskRow, error) {

@@ -52,6 +52,20 @@ func main() {
 	}
 	token := os.Getenv("HACKATHONKIT_DEMO_TOKEN")
 
+	addr := net.JoinHostPort(host, port)
+	server := &http.Server{
+		Addr:              addr,
+		Handler:           newHandler(root, mgr, meta, token, logger),
+		ReadHeaderTimeout: 5 * time.Second,
+	}
+	observability.Log(logger, "info", "demo_api_start", map[string]any{"addr": addr, "root": root})
+	if err := server.ListenAndServe(); err != nil {
+		fmt.Fprintln(os.Stderr, "demo-api error:", err)
+		os.Exit(1)
+	}
+}
+
+func newHandler(root string, mgr *config.Manager, meta metadata.Recorder, token string, logger *log.Logger) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/" {
@@ -305,17 +319,7 @@ func main() {
 		fmt.Fprintf(w, "hackathonkit_routing_mode{mode=%q} 1\n", mgr.Routing().Mode)
 	})
 
-	addr := net.JoinHostPort(host, port)
-	server := &http.Server{
-		Addr:              addr,
-		Handler:           withCORS(mux),
-		ReadHeaderTimeout: 5 * time.Second,
-	}
-	observability.Log(logger, "info", "demo_api_start", map[string]any{"addr": addr, "root": root})
-	if err := server.ListenAndServe(); err != nil {
-		fmt.Fprintln(os.Stderr, "demo-api error:", err)
-		os.Exit(1)
-	}
+	return withCORS(mux)
 }
 
 type planApproval struct {

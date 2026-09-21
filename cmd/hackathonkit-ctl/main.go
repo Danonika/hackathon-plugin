@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -19,42 +20,47 @@ import (
 const version = "0.7.0"
 
 func main() {
-	if len(os.Args) < 2 {
-		usage()
-		os.Exit(1)
-	}
-	var err error
-	switch os.Args[1] {
-	case "ingest":
-		err = cmdIngest(os.Args[2:])
-	case "sessions":
-		err = cmdSessions(os.Args[2:])
-	case "daemon":
-		err = cmdDaemon(os.Args[2:])
-	case "worktree":
-		err = cmdWorktree(os.Args[2:])
-	case "run":
-		err = cmdRun(os.Args[2:])
-	case "tui":
-		err = cmdTUI(os.Args[2:])
-	case "version", "--version", "-v":
-		fmt.Println("hackathonkit-ctl " + version)
-		return
-	case "help", "--help", "-h":
-		usage()
-		return
-	default:
-		usage()
-		os.Exit(1)
-	}
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "error:", err)
-		os.Exit(1)
-	}
+	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
 }
 
-func usage() {
-	fmt.Print(`hackathonkit-ctl - Hackathon Agent Kit control plane
+func run(args []string, stdout, stderr io.Writer) int {
+	if len(args) < 1 {
+		usage(stdout)
+		return 1
+	}
+	var err error
+	switch args[0] {
+	case "ingest":
+		err = cmdIngest(args[1:])
+	case "sessions":
+		err = cmdSessions(args[1:])
+	case "daemon":
+		err = cmdDaemon(args[1:])
+	case "worktree":
+		err = cmdWorktree(args[1:])
+	case "run":
+		err = cmdRun(args[1:])
+	case "tui":
+		err = cmdTUI(args[1:])
+	case "version", "--version", "-v":
+		fmt.Fprintln(stdout, "hackathonkit-ctl "+version)
+		return 0
+	case "help", "--help", "-h":
+		usage(stdout)
+		return 0
+	default:
+		usage(stdout)
+		return 1
+	}
+	if err != nil {
+		fmt.Fprintln(stderr, "error:", err)
+		return 1
+	}
+	return 0
+}
+
+func usage(w io.Writer) {
+	fmt.Fprint(w, `hackathonkit-ctl - Hackathon Agent Kit control plane
 
 Usage:
   hackathonkit-ctl ingest [--root DIR]              replay JSONL logs into SQLite
