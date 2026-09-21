@@ -3,6 +3,7 @@ package plans
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -60,7 +61,7 @@ func TestSaveErrors(t *testing.T) {
 		t.Fatal("expected rename error when the plan path is a non-empty directory")
 	}
 
-	if os.Geteuid() != 0 {
+	if os.Geteuid() != 0 && runtime.GOOS != "windows" {
 		root3 := t.TempDir()
 		dir := Dir(root3)
 		if err := os.MkdirAll(dir, 0o755); err != nil {

@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -310,8 +311,8 @@ func TestSetRoutingModeInvalidExistingMode(t *testing.T) {
 }
 
 func TestSetRoutingModeReadOnlyDir(t *testing.T) {
-	if os.Geteuid() == 0 {
-		t.Skip("permission checks do not apply to root")
+	if os.Geteuid() == 0 || runtime.GOOS == "windows" {
+		t.Skip("permission checks do not apply to root or Windows")
 	}
 	root := t.TempDir()
 	dir := filepath.Join(root, "configs")

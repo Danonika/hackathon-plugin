@@ -4,12 +4,16 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
 )
 
 func TestRunCheckStatuses(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("test uses POSIX utilities (true/false/sleep)")
+	}
 	root := t.TempDir()
 	cases := []struct {
 		name string
@@ -101,8 +105,8 @@ func TestSaveRenameError(t *testing.T) {
 }
 
 func TestSaveCreateTempError(t *testing.T) {
-	if os.Geteuid() == 0 {
-		t.Skip("permission checks do not apply to root")
+	if os.Geteuid() == 0 || runtime.GOOS == "windows" {
+		t.Skip("permission checks do not apply to root or Windows")
 	}
 	root := t.TempDir()
 	dir := filepath.Dir(Path(root, "abc"))

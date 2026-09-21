@@ -14,6 +14,15 @@ Run top to bottom; each item is either proven by a command or reported as a gap.
 - [ ] Shell scripts are executable: `git ls-files -s scripts/*.sh` shows mode `100755`.
 - [ ] Telegram (optional): `TELEGRAM_*` values are passed only as environment variables, never baked into images; the stack can reach `api.telegram.org` when the built project needs it.
 
+## One-Shot Check
+
+```sh
+sh scripts/docker-check.sh --full   # config, builds, readiness, selftest, quality image, smoke
+```
+
+Exit codes: 0 ok, 1 failed (diagnostics dumped), 2 Docker unavailable. The script
+aligns `HACKATHONKIT_UID`/`HACKATHONKIT_GID` with the current user before starting.
+
 ## Static Validation
 
 ```sh

@@ -3,6 +3,7 @@ package evaluation
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -64,7 +65,7 @@ func TestFreezeBundleExcludesRuntimeState(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info.Mode().Perm()&0o200 != 0 {
+	if runtime.GOOS != "windows" && info.Mode().Perm()&0o200 != 0 {
 		t.Fatalf("bundle files must be read-only, got mode %v", info.Mode().Perm())
 	}
 	head, err := os.ReadFile(filepath.Join(bundle.Dir, "bundle-hash.txt"))

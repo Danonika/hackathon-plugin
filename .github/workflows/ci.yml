@@ -29,20 +29,17 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: prepare env
-        run: cp .env.example .env
-      - name: compose config
-        run: docker compose config --quiet
-      - name: build images
-        run: docker compose build hackathonkit-mcp demo-api
-      - name: MCP selftest in the container
-        run: docker compose run --rm -T hackathonkit-mcp --selftest
-      - name: quality gate in the Go-enabled image
-        run: docker compose --profile quality run --rm quality
-      - name: start infrastructure
-        run: docker compose up -d postgres redis minio
-      - name: MCP handshake over compose
-        run: sh scripts/smoke.sh
+      # One staged check: compose config, builds, infra readiness, MCP selftest,
+      # quality image and the compose handshake. Aligns HACKATHONKIT_UID/GID with the
+      # runner so bind mounts stay writable, and dumps diagnostics on failure.
+      - name: docker stack check
+        run: sh scripts/docker-check.sh --full
+      - name: docker diagnostics on failure
+        if: failure()
+        run: |
+          docker compose ps -a || true
+          docker compose logs --no-color --tail=200 || true
+          docker compose --profile quality logs --no-color --tail=100 || true
 
   windows:
     name: windows (hooks + tests)

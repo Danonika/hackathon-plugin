@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -407,8 +408,8 @@ func TestListFilesStopsAtLimit(t *testing.T) {
 }
 
 func TestInputsPermissionError(t *testing.T) {
-	if os.Geteuid() == 0 {
-		t.Skip("running as root: chmod cannot make a directory unreadable")
+	if os.Geteuid() == 0 || runtime.GOOS == "windows" {
+		t.Skip("chmod cannot make a directory unreadable for root or on Windows")
 	}
 	root := t.TempDir()
 	dir := filepath.Join(root, "data", "input")

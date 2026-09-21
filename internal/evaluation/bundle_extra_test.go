@@ -3,6 +3,7 @@ package evaluation
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -105,7 +106,7 @@ func TestFileSHA256AndCopyFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info.Mode().Perm() != 0o644 {
+	if runtime.GOOS != "windows" && info.Mode().Perm() != 0o644 {
 		t.Fatalf("mode = %v, want 0644", info.Mode().Perm())
 	}
 	sum, err := fileSHA256(dst)

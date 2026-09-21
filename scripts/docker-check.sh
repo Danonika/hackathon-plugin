@@ -1,0 +1,122 @@
+#!/usr/bin/env sh
+# Staged Docker verification for the Hackathon Agent Kit stack.
+#
+#   scripts/docker-check.sh          # config, build, selftest, infra, smoke
+#   scripts/docker-check.sh --full   # also build and run the Go-enabled quality image
+#
+# Exit codes: 0 ok, 1 failed, 2 docker unavailable.
+set -e
+ROOT="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
+cd "$ROOT"
+
+MODE="fast"
+for arg in "$@"; do
+  case "$arg" in
+    --full) MODE="full" ;;
+    --fast) MODE="fast" ;;
+    -h|--help)
+      echo "usage: scripts/docker-check.sh [--full]"
+      exit 0
+      ;;
+    *)
+      echo "[docker-check] unknown argument: $arg" >&2
+      exit 2
+      ;;
+  esac
+done
+
+if ! command -v docker >/dev/null 2>&1; then
+  echo "[docker-check] docker CLI not found" >&2
+  exit 2
+fi
+if ! docker info >/dev/null 2>&1; then
+  echo "[docker-check] docker engine not reachable" >&2
+  exit 2
+fi
+
+if [ ! -f .env ]; then
+  cp .env.example .env
+  echo "[docker-check] created .env from .env.example"
+fi
+
+# Containers run as HACKATHONKIT_UID:HACKATHONKIT_GID; align them with the current user
+# so bind-mounted data/, logs/, evals/ and configs/ stay writable.
+set_env() {
+  key="$1"
+  value="$2"
+  awk -v k="$key" -v v="$value" 'BEGIN { done = 0 }
+    $0 ~ "^" k "=" { print k "=" v; done = 1; next }
+    { print }
+    END { if (!done) print k "=" v }' .env > .env.tmp
+  mv .env.tmp .env
+}
+set_env HACKATHONKIT_UID "$(id -u)"
+set_env HACKATHONKIT_GID "$(id -g)"
+
+mkdir -p logs evals data/artifacts data/index data/control data/judge-bundles
+
+diagnostics() {
+  status=$?
+  if [ "$status" -ne 0 ]; then
+    echo "[docker-check] FAILED (exit $status); diagnostics:" >&2
+    docker compose ps -a >&2 || true
+    docker compose logs --no-color --tail=120 >&2 || true
+    if [ "$MODE" = "full" ]; then
+      docker compose --profile quality logs --no-color --tail=80 >&2 || true
+    fi
+  fi
+  exit "$status"
+}
+trap diagnostics EXIT
+
+echo "[docker-check] compose config"
+docker compose config --quiet
+
+echo "[docker-check] build hackathonkit-mcp and demo-api"
+docker compose build hackathonkit-mcp demo-api
+
+if [ "$MODE" = "full" ]; then
+  echo "[docker-check] build quality image"
+  docker compose --profile quality build quality
+fi
+
+echo "[docker-check] start infrastructure (postgres, redis, minio)"
+docker compose up -d postgres redis minio
+
+echo "[docker-check] wait for postgres and minio"
+tries=0
+until docker compose exec -T postgres pg_isready -U hackathonkit -d hackathonkit >/dev/null 2>&1; do
+  tries=$((tries + 1))
+  if [ "$tries" -ge 30 ]; then
+    echo "[docker-check] postgres did not become ready" >&2
+    exit 1
+  fi
+  sleep 2
+done
+if command -v curl >/dev/null 2>&1; then
+  tries=0
+  until curl -fsS http://127.0.0.1:9000/minio/health/live >/dev/null 2>&1; do
+    tries=$((tries + 1))
+    if [ "$tries" -ge 30 ]; then
+      echo "[docker-check] minio did not become ready" >&2
+      exit 1
+    fi
+    sleep 2
+  done
+else
+  echo "[docker-check] curl not found; skipping the minio readiness probe"
+fi
+
+echo "[docker-check] MCP selftest in the container"
+docker compose run --rm -T hackathonkit-mcp --selftest >/dev/null
+
+if [ "$MODE" = "full" ]; then
+  echo "[docker-check] quality gate in the Go-enabled image"
+  docker compose --profile quality run --rm quality
+fi
+
+echo "[docker-check] MCP handshake over compose"
+sh scripts/smoke.sh
+
+trap - EXIT
+echo "[docker-check] ok (mode: $MODE)"

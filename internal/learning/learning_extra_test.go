@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -82,7 +83,7 @@ func TestRecordLoadAndSaveErrors(t *testing.T) {
 		t.Fatal("expected load error when the store path is a directory")
 	}
 
-	if os.Geteuid() == 0 {
+	if os.Geteuid() == 0 || runtime.GOOS == "windows" {
 		return
 	}
 	readOnly := t.TempDir()
@@ -188,7 +189,7 @@ func TestPromoteEdges(t *testing.T) {
 		t.Fatalf("promotion = %+v promoted=%v", item, promoted)
 	}
 
-	if os.Geteuid() == 0 {
+	if os.Geteuid() == 0 || runtime.GOOS == "windows" {
 		return
 	}
 	readOnly := t.TempDir()
@@ -231,7 +232,7 @@ func TestLoadEdgeCases(t *testing.T) {
 		t.Fatal("nil learnings must be normalized to an empty slice")
 	}
 
-	if os.Geteuid() != 0 {
+	if os.Geteuid() != 0 && runtime.GOOS != "windows" {
 		locked := filepath.Join(dir, "locked.json")
 		if err := os.WriteFile(locked, []byte("{}"), 0o000); err != nil {
 			t.Fatal(err)

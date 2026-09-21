@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"sort"
 	"strings"
 	"testing"
@@ -86,7 +87,7 @@ func TestInputPathSymlinkEscape(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := os.Symlink(outside, link); err != nil {
-		t.Fatal(err)
+		t.Skipf("symlinks not supported: %v", err)
 	}
 	if _, err := store.InputPath("link/secret.txt"); err == nil || !strings.Contains(err.Error(), "escapes repository root") {
 		t.Fatalf("expected escape error, got %v", err)
@@ -142,7 +143,7 @@ func TestArtifactPathSymlinkEscape(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := os.Symlink(outside, link); err != nil {
-		t.Fatal(err)
+		t.Skipf("symlinks not supported: %v", err)
 	}
 	if _, err := store.ArtifactPath("link/a.md", true); err == nil {
 		t.Fatal("expected escape error")
@@ -231,8 +232,8 @@ func TestReadArtifactRemoteFallbackError(t *testing.T) {
 }
 
 func TestReadArtifactRehydrateFailureStillReturnsRemote(t *testing.T) {
-	if os.Geteuid() == 0 {
-		t.Skip("permission checks do not apply to root")
+	if os.Geteuid() == 0 || runtime.GOOS == "windows" {
+		t.Skip("permission checks do not apply to root or Windows")
 	}
 	store, root := newTestStore(t)
 	artifacts := filepath.Join(root, "data", "artifacts")
@@ -310,8 +311,8 @@ func TestListIndexes(t *testing.T) {
 }
 
 func TestListIndexesBaseIsFile(t *testing.T) {
-	if os.Geteuid() == 0 {
-		t.Skip("permission checks do not apply to root")
+	if os.Geteuid() == 0 || runtime.GOOS == "windows" {
+		t.Skip("permission checks do not apply to root or Windows")
 	}
 	store, root := newTestStore(t)
 	base := filepath.Join(root, "data", "index")
@@ -328,8 +329,8 @@ func TestListIndexesBaseIsFile(t *testing.T) {
 }
 
 func TestListIndexesSkipsUnreadableSubdir(t *testing.T) {
-	if os.Geteuid() == 0 {
-		t.Skip("permission checks do not apply to root")
+	if os.Geteuid() == 0 || runtime.GOOS == "windows" {
+		t.Skip("permission checks do not apply to root or Windows")
 	}
 	store, root := newTestStore(t)
 	base := filepath.Join(root, "data", "index")
@@ -373,8 +374,8 @@ func TestListInputs(t *testing.T) {
 }
 
 func TestListInputsBaseIsFile(t *testing.T) {
-	if os.Geteuid() == 0 {
-		t.Skip("permission checks do not apply to root")
+	if os.Geteuid() == 0 || runtime.GOOS == "windows" {
+		t.Skip("permission checks do not apply to root or Windows")
 	}
 	store, root := newTestStore(t)
 	base := filepath.Join(root, "data", "input")

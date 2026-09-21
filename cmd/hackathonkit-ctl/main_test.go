@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -492,6 +493,9 @@ func TestCmdRunWithoutCodex(t *testing.T) {
 }
 
 func TestCmdRunSuccess(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell-script stub requires a POSIX shell")
+	}
 	root := tempRoot(t)
 	withPath(t, fakeCodex(t, 0))
 	out := captureStdout(t, func() {
@@ -519,6 +523,9 @@ func TestCmdRunSuccess(t *testing.T) {
 }
 
 func TestCmdRunCodexFailure(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell-script stub requires a POSIX shell")
+	}
 	tempRoot(t)
 	withPath(t, fakeCodex(t, 3))
 	out := captureStdout(t, func() {
@@ -535,6 +542,9 @@ func TestCmdRunCodexFailure(t *testing.T) {
 }
 
 func TestCmdRunWorktree(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell-script stub requires a POSIX shell")
+	}
 	root := tempRoot(t)
 	initGitRepo(t, root)
 	withPath(t, fakeCodex(t, 0))
@@ -565,6 +575,9 @@ func TestCmdRunWorktree(t *testing.T) {
 }
 
 func TestCmdRunWorktreeFailure(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell-script stub requires a POSIX shell")
+	}
 	tempRoot(t)
 	withPath(t, fakeCodex(t, 0))
 	if err := cmdRun([]string{"--task", "no git here", "--worktree"}); err == nil {

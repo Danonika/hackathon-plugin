@@ -2,7 +2,7 @@
 
 Local Codex plugin backed by a typed MCP capability layer. Codex is the main reasoning engine, Skills define domain workflows, the local MCP server exposes deterministic and AI-powered capabilities, and the experimental Fly router recommends capability routes while Codex keeps the final decision.
 
-Status: v0.12.1. MCP runtime (37 tools), 29 standard-compliant skills (validator-enforced), 92% Go test coverage with an 80% gate, session hooks, durable learnings, Codex subagents, four harness adapters, a full control plane (SQLite store, daemon, TUI, worktrees, agent runs, risk scoring, session handoff), staged build plans, PDF/XLSX processing, Fly v2 (keyword + embeddings + kNN memory + mushroom-body learning + LLM classifier), Postgres/MinIO backends, demo dashboard, install profiles/repair, a quality gate with a Go-enabled Docker target, a Fly A/B benchmark, plan review, security review, a Telegram integration capability for built projects and the evaluation subsystem (deterministic aggregation, calibration, loop decisions and bundle freezing) are in place.
+Status: v0.12.2. MCP runtime (37 tools), 29 standard-compliant skills (validator-enforced), 92% Go test coverage with an 80% gate, session hooks, durable learnings, Codex subagents, four harness adapters, a full control plane (SQLite store, daemon, TUI, worktrees, agent runs, risk scoring, session handoff), staged build plans, PDF/XLSX processing, Fly v2 (keyword + embeddings + kNN memory + mushroom-body learning + LLM classifier), Postgres/MinIO backends, demo dashboard, install profiles/repair, a quality gate with a Go-enabled Docker target, a Fly A/B benchmark, plan review, security review, a Telegram integration capability for built projects and the evaluation subsystem (deterministic aggregation, calibration, loop decisions and bundle freezing) are in place.
 
 ## Contents
 
@@ -196,6 +196,8 @@ hackathonkit-ctl run --task "..." [--worktree]   # codex exec in a recorded sess
 Plans (`plan.create` / `plan.update` / `plan.status`) are stored under `evals/plans/<slug>.json` with stages S0-S6, statuses `todo|doing|done|failed|cut` and evidence references; `plan.update` bumps the revision. The demo API serves `/plan` for human review: `POST /plan/decision {"slug","decision":"approve"|"request_changes","note"}` records `evals/plans/<slug>.approval.json` (loopback origin check + optional `X-HackathonKit-Token`, same as `/routing`).
 
 ## Quality gate
+
+`scripts/docker-check.sh` verifies the container stack end to end (config, builds, readiness, selftest, quality image, handshake) and aligns `HACKATHONKIT_UID`/`HACKATHONKIT_GID` with the current user first.
 
 `scripts/quality-gate.sh` runs gofmt, `go build ./...`, `go vet ./...`, `go test ./...`, `scripts/coverage-check.sh` (total coverage >= `HACKATHONKIT_COVERAGE_TARGET`, default 80%), the MCP selftest and the skill validator, then stores a report at `evals/quality/<git-sha>/gate.json` (per-check status, duration and bounded output). It exits non-zero when any check fails.
 
@@ -468,6 +470,7 @@ Install profiles: `scripts/setup.sh --profile core` excludes the explicit-only e
 | `plugin-check.sh` / `plugin-check.ps1` | spawn the installed plugin's MCP command from a temp cwd and validate the handshake (exit 0 ok, 1 failed, 2 skipped) |
 | `validate-skills.sh` | validate the skill catalog against `docs/SKILL-STANDARD.md` (exit 1 on violations) |
 | `quality-gate.sh` | run gofmt/build/vet/test/coverage/selftest/skills and store `evals/quality/<sha>/gate.json` (exit 1 on failures) |
+| `docker-check.sh` | staged Docker verification: compose config, builds, infra readiness, MCP selftest, quality image, compose handshake; `--full` includes the quality gate; dumps diagnostics on failure (exit 2 when Docker is unavailable) |
 | `coverage-check.sh` | run the Go suite with a coverage profile and enforce `HACKATHONKIT_COVERAGE_TARGET` (default 80%) |
 
 ## Repository layout
@@ -572,7 +575,7 @@ This is the verification path for the Docker stack and native Windows hooks, whi
 - Learning recall uses embeddings when `OPENAI_API_KEY` is set and keyword overlap otherwise; learnings never leave the local repository.
 - The control plane is optional: hooks and MCP work without it. `demo-api /control` reads SQLite read-only and shows a hint until `hackathonkit-ctl ingest` or the daemon has run.
 - `hackathonkit-ctl run` requires the Codex CLI on `PATH` and `git` for `--worktree`; the daemon binds loopback only and never proxies to the network.
-- Docker and native Windows paths are verified by CI; sandboxes without Docker or Windows can still run the Go tests, hooks test and quality gate.
+- Docker and native Windows paths are verified by CI (`scripts/docker-check.sh --full` and the windows job); sandboxes without Docker or Windows can still run the Go tests, hooks test and quality gate.
 - Coverage is measured across all packages (92% at v0.12.1). Long-running paths — daemon start/foreground, the TUI, live OpenAI/Telegram calls — are exercised through their error and offline paths rather than live runs.
 - `telegram.*` tools need outbound HTTPS to `api.telegram.org`; all tests use a fake Bot API, so CI never calls Telegram. The Go/Node recipes in the skill are documentation and drift-prone: verify the current library APIs before shipping.
 - Telegram is a capability for the project being built; Hackathon Agent Kit itself does not send harness alerts to Telegram.
