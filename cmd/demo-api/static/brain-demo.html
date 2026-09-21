@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Fly Brain — активность мозга и события</title>
+<link rel="icon" href="data:,">
 <style>
   :root {
     color-scheme: dark;
@@ -52,7 +53,7 @@
   .switch input:focus-visible + .track { outline: 2px solid #6fe3b055; outline-offset: 2px; }
 
   /* ── основная сетка: сцена 68% / мозг 32% ───────────────────── */
-  .grid { display: grid; grid-template-columns: minmax(0, 1fr) clamp(300px, 32%, 430px); gap: 10px; min-height: 0; }
+  .grid { display: grid; grid-template-columns: minmax(0, 1fr) clamp(320px, 32%, 520px); gap: 10px; min-height: 0; }
   .scene-card, .brain-card { display: flex; flex-direction: column; min-height: 0; }
   .card-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; padding: 9px 12px 7px; }
   .card-head h2 { font-size: 12.5px; font-weight: 500; margin: 0; letter-spacing: 0.2px; }
@@ -89,9 +90,9 @@
   .tune b { color: #dfe6f2; font-weight: 500; font-variant-numeric: tabular-nums; min-width: 42px; }
 
   /* ── мозг ───────────────────────────────────────────────────── */
-  #brain-view { flex: 1; min-height: 0; margin: 0 8px; }
+  #brain-view { flex: 1 1 auto; min-height: 220px; max-height: 46vh; margin: 0 8px; }
   #brain-view canvas { display: block; width: 100%; height: 100%; }
-  .brain-stats { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; padding: 8px; }
+  .brain-stats { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; padding: 8px; margin-top: auto; }
   .bstat { border: 1px solid var(--line); border-radius: 10px; padding: 6px 9px; background: #0e111a; }
   .bstat small { display: block; color: var(--muted); font-size: 10px; margin-bottom: 3px; }
   .bstat b { font-size: 14px; font-weight: 500; font-variant-numeric: tabular-nums; }
@@ -156,8 +157,8 @@
         <div id="fly-speech"></div>
         <div id="event-toast"></div>
         <div class="tune">
-          <label title="Наклон (pitch) — наклон тела вперёд/назад при награде">Наклон (pitch) <input type="range" id="t-pitch" min="0" max="1.5" step="0.05" value="0.9"><b id="v-pitch">+0.90</b></label>
-          <label title="Подъём (lift) — насколько высоко привстаёт на задних лапках">Подъём (lift) <input type="range" id="t-lift" min="0" max="0.8" step="0.02" value="0.38"><b id="v-lift">+0.38</b></label>
+          <label title="Наклон (pitch) — наклон тела вперёд/назад при награде">Наклон (pitch) <input type="range" id="t-pitch" min="0" max="1.5" step="0.05" value="0.55"><b id="v-pitch">+0.55</b></label>
+          <label title="Подъём (lift) — насколько высоко привстаёт на задних лапках">Подъём (lift) <input type="range" id="t-lift" min="0" max="0.8" step="0.02" value="0.28"><b id="v-lift">+0.28</b></label>
           <label title="Взмах (flap) — амплитуда хлопка передними лапками">Взмах (flap) <input type="range" id="t-clap" min="0" max="3" step="0.1" value="1"><b id="v-clap">×1.0</b></label>
         </div>
       </div>
@@ -225,8 +226,8 @@ const view = await createBrainView($('brain-view'));
 const stageEl = $('fly-stage');
 const flyScene = new THREE.Scene();
 const flyCamera = new THREE.PerspectiveCamera(38, 1, 0.01, 40);
-flyCamera.position.set(2.7, 1.7, 4.0);
-flyCamera.lookAt(0, 0.55, 0);
+flyCamera.position.set(3.2, 2.0, 4.8);
+flyCamera.lookAt(0, 0.7, 0);
 const flyRenderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
 flyRenderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
 flyRenderer.setClearColor(0x000000, 0);
@@ -302,7 +303,7 @@ function flashButton(id) {
 }
 
 /* ── ползунки управления мухой ─────────────────────────────────── */
-const tune = { pitch: 0.9, lift: 0.38, clapAmp: 1 };
+const tune = { pitch: 0.55, lift: 0.28, clapAmp: 1 };
 function bindTune() {
   const pitch = $('t-pitch'), lift = $('t-lift'), clap = $('t-clap');
   const sync = () => {
@@ -522,7 +523,7 @@ function drawChart() {
     cctx.lineWidth = 1.6;
     cctx.beginPath();
     for (let i = 0; i < data.length; i++) {
-      const x = (i / (CHART_MAX - 1)) * chartW;
+      const x = chartW - ((data.length - 1 - i) / (CHART_MAX - 1)) * chartW;
       const y = chartH - Math.min(1, data[i] * scale) * (chartH - 6) - 3;
       if (i === 0) cctx.moveTo(x, y); else cctx.lineTo(x, y);
     }
@@ -552,7 +553,7 @@ function loop(now) {
   let tx = Math.sin(t * 0.42 + wander) * amp;
   let tz = Math.cos(t * 0.31 + wander * 0.7) * amp * 0.78;
   let ty = y;
-  if (state.mode === 'reward') { tx = 1.5; tz = 1.5; ty = y + 0.35; }
+  if (state.mode === 'reward') { tx = 0.8; tz = 0.8; ty = y + 0.22; }
   if (state.mode === 'correction') { tx = -1.6 + Math.sin(t * 42) * 0.07; tz = -1.2; ty = y - 0.1; }
   const rear = state.mode === 'reward' ? Math.max(0, state.pulse) : 0;
   ty += tune.lift * rear;
@@ -570,7 +571,7 @@ function loop(now) {
     clapAmp: tune.clapAmp,
     speed: state.mode === 'reward' ? 0 : 0.05 + state.activity * 0.35,
     turn: flyModel.group.rotation.y,
-    flight: state.mode === 'reward' ? 0.9 : state.mode === 'correction' ? 0.55 : 0
+    flight: state.mode === 'reward' ? 0.55 : state.mode === 'correction' ? 0.5 : 0
   });
   flyRenderer.render(flyScene, flyCamera);
 

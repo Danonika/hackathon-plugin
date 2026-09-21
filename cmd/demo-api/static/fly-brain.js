@@ -56,7 +56,7 @@ export async function createBrainView(container) {
   renderer.setClearColor(0x090916, 0);
   renderer.outputColorSpace = THREE.SRGBColorSpace;
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
-  renderer.toneMappingExposure = 1.2;
+  renderer.toneMappingExposure = 1.0;
   renderer.domElement.style.cssText = 'display:block;width:100%;height:100%;touch-action:none;outline:none';
   renderer.domElement.setAttribute('role', 'img');
   renderer.domElement.setAttribute('aria-label', 'Регионы мозга VFB и схема активности KC-нейронов');
@@ -76,7 +76,7 @@ export async function createBrainView(container) {
   const anatomy = new THREE.Group();
   brain.add(anatomy);
   const pulseShell = new THREE.Mesh(
-    new THREE.SphereGeometry(2.7, 32, 24),
+    new THREE.SphereGeometry(1.55, 32, 24),
     new THREE.MeshBasicMaterial({ color: 0x2bff9e, transparent: true, opacity: 0, depthWrite: false, blending: THREE.AdditiveBlending })
   );
   brain.add(pulseShell);
@@ -90,26 +90,28 @@ export async function createBrainView(container) {
   controls.minPolarAngle = 0.25;
   controls.maxPolarAngle = Math.PI - 0.25;
 
-  scene.add(new THREE.HemisphereLight(0xe8ddff, 0x221329, 2.1));
-  const key = new THREE.DirectionalLight(0xffd3e9, 2.7);
+  scene.add(new THREE.HemisphereLight(0xe8ddff, 0x221329, 1.15));
+  const key = new THREE.DirectionalLight(0xffd3e9, 1.5);
   key.position.set(-2, 3, 5);
   scene.add(key);
-  const rim = new THREE.DirectionalLight(0x9f8bff, 2.3);
+  const rim = new THREE.DirectionalLight(0x9f8bff, 1.2);
   rim.position.set(4, 1, -3);
   scene.add(rim);
 
+  // Тёмная базовая модель: структура читается как серая анатомия, а не как
+  // источник свечения. Яркими остаются только активные KC-нейроны и пульс.
   const regionMaterials = [
     new THREE.MeshPhysicalMaterial({
-      color: 0xdcb7dd, emissive: 0x4e245c, emissiveIntensity: 0.12,
-      roughness: 0.35, metalness: 0.05, transparent: true, opacity: 0.27,
+      color: 0x8a8398, emissive: 0x241a33, emissiveIntensity: 0.1,
+      roughness: 0.45, metalness: 0.05, transparent: true, opacity: 0.5,
       side: THREE.DoubleSide, depthWrite: false,
-      clearcoat: 0.55, clearcoatRoughness: 0.28,
+      clearcoat: 0.35, clearcoatRoughness: 0.35,
     }),
     new THREE.MeshPhysicalMaterial({
-      color: 0xb8a1f6, emissive: 0x47205e, emissiveIntensity: 0.14,
-      roughness: 0.38, metalness: 0.03, transparent: true, opacity: 0.46,
+      color: 0x9a90ae, emissive: 0x2a1f3d, emissiveIntensity: 0.12,
+      roughness: 0.48, metalness: 0.03, transparent: true, opacity: 0.62,
       side: THREE.DoubleSide, depthWrite: false,
-      clearcoat: 0.4, clearcoatRoughness: 0.3,
+      clearcoat: 0.3, clearcoatRoughness: 0.38,
     }),
   ];
 
@@ -177,7 +179,7 @@ export async function createBrainView(container) {
         if (radius > 1.0) discard;
         float core = exp(-6.0 * radius * radius);
         float halo = pow(1.0 - radius, 1.8) * 0.55 * neuronIntensity;
-        float alpha = core * (0.55 + 0.55 * neuronIntensity) + halo * 0.9;
+        float alpha = core * (0.12 + 1.05 * neuronIntensity) + halo * 0.9;
         gl_FragColor = vec4(neuronColor, alpha);
         #include <tonemapping_fragment>
         #include <colorspace_fragment>
@@ -325,17 +327,18 @@ export async function createBrainView(container) {
     const pulseColor = pulse < 0 ? 0xff3b5c : 0x2bff9e;
     regionMaterials[0].emissive.setHex(pulseColor);
     regionMaterials[1].emissive.setHex(pulseColor);
-    regionMaterials[0].emissiveIntensity = 0.12 + magnitude * 1.2;
-    regionMaterials[1].emissiveIntensity = 0.14 + magnitude * 1.8;
+    regionMaterials[0].emissiveIntensity = 0.1 + magnitude * 0.18;
+    regionMaterials[1].emissiveIntensity = 0.12 + magnitude * 0.26;
     pulseShell.material.color.setHex(pulseColor);
-    pulseShell.material.opacity = magnitude * 0.3;
-    pulseShell.scale.setScalar(0.85 + magnitude * 0.5);
+    // Оболочка — только тонкая подсветка по краям, а не заливка кадра.
+    pulseShell.material.opacity = magnitude * 0.025;
+    pulseShell.scale.setScalar(0.9 + magnitude * 0.3);
     if (colors && points) {
       if (magnitude > 0.02) {
         const targetR = pulse < 0 ? 0.98 : 0.16;
         const targetG = pulse < 0 ? 0.24 : 0.98;
         const targetB = pulse < 0 ? 0.36 : 0.66;
-        const k = Math.min(1, magnitude * 0.95);
+        const k = Math.min(1, magnitude * 0.35);
         for (let i = 0; i < neuronCount; i++) {
           colors[i * 3] += (targetR - colors[i * 3]) * k;
           colors[i * 3 + 1] += (targetG - colors[i * 3 + 1]) * k;
@@ -363,9 +366,9 @@ export async function createBrainView(container) {
           const strength = Math.max(intensity[i], 1 - offset / band);
           intensity[i] = strength;
           const s = Math.sqrt(strength);
-          colors[i * 3] = 0.19 + s * (pulse < 0 ? 0.79 : 0.05);
-          colors[i * 3 + 1] = 0.14 + s * (pulse < 0 ? 0.16 : 0.84);
-          colors[i * 3 + 2] = 0.32 + s * (pulse < 0 ? 0.22 : 0.36);
+          colors[i * 3] = 0.19 + s * (pulse < 0 ? 0.62 : 0.05);
+          colors[i * 3 + 1] = 0.14 + s * (pulse < 0 ? 0.14 : 0.66);
+          colors[i * 3 + 2] = 0.32 + s * (pulse < 0 ? 0.18 : 0.3);
         }
       }
       points.geometry.attributes.intensity.needsUpdate = true;
