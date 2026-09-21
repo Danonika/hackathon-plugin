@@ -124,3 +124,44 @@ func TestFreezeBundleRejectsEscape(t *testing.T) {
 		t.Fatal("expected an error for an output directory outside the root")
 	}
 }
+
+func TestFreezeBundleDemoProfile(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "TASK.md"), "# Task\n")
+	writeFile(t, filepath.Join(root, "README.md"), "# Demo\n")
+	writeFile(t, filepath.Join(root, "architecture.md"), "# Architecture\n")
+	writeFile(t, filepath.Join(root, "known-limitations.md"), "none\n")
+	writeFile(t, filepath.Join(root, "demo-artifacts", "run.json"), "{}\n")
+	writeFile(t, filepath.Join(root, "selected-source", "main.go"), "package main\n")
+	writeFile(t, filepath.Join(root, "test-results.json"), "{}\n")
+	writeFile(t, filepath.Join(root, "smoke-results.json"), "{}\n")
+
+	bundle, err := FreezeBundle(BundleOptions{Root: root, Profile: "demo"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bundle.Profile != "demo" {
+		t.Fatalf("profile = %q, want demo", bundle.Profile)
+	}
+	for _, present := range []string{"TASK.md", "README.md", "architecture.md", "known-limitations.md", filepath.Join("demo-artifacts", "run.json")} {
+		if _, err := os.Stat(filepath.Join(bundle.Dir, present)); err != nil {
+			t.Fatalf("demo bundle must contain %s: %v", present, err)
+		}
+	}
+	for _, absent := range []string{"selected-source", "test-results.json", "smoke-results.json"} {
+		if _, err := os.Stat(filepath.Join(bundle.Dir, absent)); !os.IsNotExist(err) {
+			t.Fatalf("demo bundle must not contain %s (regulation 9.4: no code re-check)", absent)
+		}
+	}
+
+	full, err := FreezeBundle(BundleOptions{Root: root, Profile: "technical"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if full.Profile != "full" {
+		t.Fatalf("technical must normalize to full, got %q", full.Profile)
+	}
+	if _, err := os.Stat(filepath.Join(full.Dir, "selected-source", "main.go")); err != nil {
+		t.Fatalf("technical bundle must contain source: %v", err)
+	}
+}

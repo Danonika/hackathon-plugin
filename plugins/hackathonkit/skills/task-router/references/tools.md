@@ -48,12 +48,13 @@ Call the smallest set that finishes the task. Do not list or call tools "just in
 
 | Tool | Arguments | Returns |
 |---|---|---|
-| `eval.aggregate` | `reports[]` or `reports_json[]`, `snapshot_sha`, `kind` (default `judges`), `persist` (default true) | `valid_judges`, `inconclusive`, `mean_total`, `criterion_means`, `score_variance`, `high_disagreement[]`, `common_deductions[]`, `likely_questions[]`, `dropped_invalid[]`, `dropped_conflict[]`, `aggregate_path` |
+| `eval.aggregate` | `reports[]` or `reports_json[]`, `snapshot_sha`, `kind` (default `judges`), `persist` (default true) | `valid_judges`, `min_valid_judges`, `inconclusive`, unrounded `mean_total` + `mean_total_rounded`, `criterion_means`, `score_variance`, `high_disagreement[]`, `common_deductions[]`, `likely_questions[]`, `dropped_invalid[]`, `dropped_conflict[]`, `aggregate_path` |
 | `eval.calibrate` | `run1[]`/`run2[]` or `run1_json[]`/`run2_json[]`, `snapshot_sha`, `min_delta`, `persist` (default true) | `calibration.retest_delta`, `calibration.noise_floor`, `calibration_path` |
 | `eval.compare` | `mode` (`technical`/`judge`), `candidate` (required), `best`, `target`, `noise_floor`, `mandatory_scenario_failed`, `persist` (default false) | `decision` (`target_reached`/`accept`/`rollback`/`stop`), `reason`, `improvement` |
-| `eval.freeze_bundle` | `out` (default `judge-bundle`), `exclude[]`, `read_only` (default true), `model` | `bundle_path`, `bundle_hash`, `git_sha`, `files`, `excluded[]` |
+| `eval.rank` | `aggregates[]` or `aggregates_json[]`, optional `commission {members, votes, grounds}`, `persist` (default true) | ordered `ranking` (regulation 9.6 tie-breaks, `tie_unresolved`, `commission`), `ranking_path` |
+| `eval.freeze_bundle` | `out` (default `judge-bundle`), `profile` (`full`/`technical`/`demo`), `exclude[]`, `read_only` (default true), `model` | `bundle_path`, `bundle_hash`, `git_sha`, `profile`, `files`, `excluded[]` |
 
-Evaluation scores stay with the explicit-only judge and project-cost skills; these tools own validation, arithmetic and stop conditions. Never call them implicitly.
+Evaluation scores stay with the explicit-only judge and project-cost skills; these tools own validation, arithmetic, substitute passes, ranking and stop conditions. Never call them implicitly. A dropped judge report is never zero: run a substitute pass until `min_valid_judges` (default 3) is met.
 
 ## Files and documents
 

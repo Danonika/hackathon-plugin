@@ -40,6 +40,41 @@ type BundleOptions struct {
 	ReadOnly      bool
 	Model         string
 	RubricVersion string
+	// Profile selects what the bundle contains: "full" (default) keeps the
+	// repository minus runtime state, "technical" is an alias for full, and
+	// "demo" keeps only presentation evidence (regulation 9.4: Demo Day judges
+	// do not re-check code or tests).
+	Profile string
+}
+
+// demoIncludes are the only entries copied for the demo profile.
+var demoIncludes = []string{
+	"TASK.md",
+	"README.md",
+	"architecture.md",
+	"known-limitations.md",
+	"demo-artifacts",
+	"demo",
+	"demo-script.md",
+	"presentation.md",
+}
+
+func normalizeProfile(profile string) string {
+	switch strings.ToLower(strings.TrimSpace(profile)) {
+	case "demo":
+		return "demo"
+	default:
+		return "full"
+	}
+}
+
+func demoIncluded(rel string) bool {
+	for _, include := range demoIncludes {
+		if rel == include || strings.HasPrefix(rel, include+"/") {
+			return true
+		}
+	}
+	return false
 }
 
 type BundleFile struct {
@@ -54,6 +89,7 @@ type Bundle struct {
 	GitSHA        string   `json:"git_sha"`
 	Model         string   `json:"model,omitempty"`
 	RubricVersion string   `json:"rubric_version"`
+	Profile       string   `json:"profile"`
 	Files         int      `json:"files"`
 	Bytes         int64    `json:"bytes"`
 	Excluded      []string `json:"excluded"`
@@ -108,6 +144,7 @@ func FreezeBundle(opts BundleOptions) (Bundle, error) {
 	if rubricVersion == "" {
 		rubricVersion = RubricVersion
 	}
+	profile := normalizeProfile(opts.Profile)
 
 	var copied int
 	var copiedBytes int64
@@ -136,6 +173,9 @@ func FreezeBundle(opts BundleOptions) (Bundle, error) {
 			return nil
 		}
 		if !d.Type().IsRegular() {
+			return nil
+		}
+		if profile == "demo" && !demoIncluded(relSlash) {
 			return nil
 		}
 		dst := filepath.Join(outAbs, filepath.FromSlash(relSlash))
@@ -174,6 +214,7 @@ func FreezeBundle(opts BundleOptions) (Bundle, error) {
 		"git_sha":        gitSHA,
 		"model":          opts.Model,
 		"rubric_version": rubricVersion,
+		"profile":        profile,
 		"bundle_hash":    bundleHash,
 		"files":          entries,
 		"excludes":       excludes,
@@ -194,6 +235,7 @@ func FreezeBundle(opts BundleOptions) (Bundle, error) {
 		GitSHA:        gitSHA,
 		Model:         opts.Model,
 		RubricVersion: rubricVersion,
+		Profile:       profile,
 		Files:         len(entries),
 		Bytes:         hashedBytes,
 		Excluded:      excludes,

@@ -178,3 +178,114 @@ func TestEvalFreezeBundle(t *testing.T) {
 		t.Fatal("missing git sha should warn")
 	}
 }
+
+func aggregateFixture(sha string, resultQuality, value, presentation float64) map[string]any {
+	return map[string]any{
+		"snapshot_sha":       sha,
+		"rubric_version":     evaluation.RubricVersion,
+		"min_valid_judges":   3,
+		"valid_judges":       3,
+		"mean_total":         80.0,
+		"mean_total_rounded": 80.0,
+		"criterion_means": map[string]any{
+			"value":                value,
+			"result_quality":       resultQuality,
+			"innovation":           12.0,
+			"scalability":          16.0,
+			"presentation_demo_qa": presentation,
+		},
+	}
+}
+
+func TestEvalRankAndCommission(t *testing.T) {
+	reg, root := testRegistry(t)
+
+	env := call(t, reg, "eval.rank", map[string]any{
+		"aggregates_json": []any{
+			aggregateFixture("a", 16, 20, 16),
+			aggregateFixture("b", 17, 19, 16),
+		},
+		"persist": true,
+	})
+	if env.Status != "ok" {
+		t.Fatalf("rank: %s %+v", env.Status, env.Warnings)
+	}
+	data := env.Data.(map[string]any)
+	ranking := data["ranking"].(evaluation.Ranking)
+	if ranking.Entries[0].SnapshotSHA != "b" || ranking.Entries[1].SnapshotSHA != "a" {
+		t.Fatalf("order = %+v", ranking.Entries)
+	}
+	if ranking.Entries[1].TieBreak != "result_quality" {
+		t.Fatalf("tie-break = %q", ranking.Entries[1].TieBreak)
+	}
+	path := data["ranking_path"].(string)
+	if _, err := os.Stat(filepath.Join(root, filepath.FromSlash(path))); err != nil {
+		t.Fatalf("ranking artifact missing: %v", err)
+	}
+
+	tie := call(t, reg, "eval.rank", map[string]any{
+		"aggregates_json": []any{
+			aggregateFixture("a", 16, 20, 16),
+			aggregateFixture("b", 16, 20, 16),
+		},
+		"persist": false,
+	})
+	if len(tie.Warnings) == 0 {
+		t.Fatal("unresolved tie must warn")
+	}
+	decided := call(t, reg, "eval.rank", map[string]any{
+		"aggregates_json": []any{
+			aggregateFixture("a", 16, 20, 16),
+			aggregateFixture("b", 16, 20, 16),
+		},
+		"commission": map[string]any{
+			"members": []any{"judge-05", "judge-06", "judge-07"},
+			"votes":   map[string]any{"a": 2.0, "b": 1.0},
+			"grounds": "a demonstrates the mandatory scenario end to end",
+		},
+		"persist": false,
+	})
+	if decided.Status != "ok" {
+		t.Fatalf("commission: %s %+v", decided.Status, decided.Warnings)
+	}
+	final := decided.Data.(map[string]any)["ranking"].(evaluation.Ranking)
+	if final.Entries[0].SnapshotSHA != "a" || final.Commission == nil {
+		t.Fatalf("commission result = %+v", final)
+	}
+	if len(decided.Warnings) != 0 {
+		t.Fatalf("resolved tie must not warn: %v", decided.Warnings)
+	}
+
+	single := call(t, reg, "eval.rank", map[string]any{
+		"aggregates_json": []any{aggregateFixture("a", 16, 20, 16)},
+		"persist":         false,
+	})
+	if single.Status != "ok" {
+		t.Fatalf("a single aggregate ranks trivially: %+v", single)
+	}
+	empty := call(t, reg, "eval.rank", map[string]any{})
+	if empty.Status != "error" {
+		t.Fatalf("ranking without aggregates must fail: %+v", empty)
+	}
+}
+
+func TestEvalFreezeBundleDemoProfile(t *testing.T) {
+	reg, root := testRegistry(t)
+	mustWrite(t, filepath.Join(root, "TASK.md"), "# Task\n")
+	mustWrite(t, filepath.Join(root, "selected-source", "main.go"), "package main\n")
+
+	env := call(t, reg, "eval.freeze_bundle", map[string]any{"profile": "demo", "out": "judge-bundle"})
+	if env.Status != "ok" {
+		t.Fatalf("freeze: %s %+v", env.Status, env.Warnings)
+	}
+	data := env.Data.(map[string]any)
+	if data["profile"] != "demo" {
+		t.Fatalf("profile = %v", data["profile"])
+	}
+	if _, err := os.Stat(filepath.Join(root, "judge-bundle", "TASK.md")); err != nil {
+		t.Fatalf("demo bundle missing TASK.md: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "judge-bundle", "selected-source")); !os.IsNotExist(err) {
+		t.Fatal("demo bundle must exclude source")
+	}
+}

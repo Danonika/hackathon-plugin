@@ -49,6 +49,7 @@ type EvaluationSettings struct {
 	MaxTechnicalIterations     int     `yaml:"max_technical_iterations"`
 	MaxJudgeRounds             int     `yaml:"max_judge_rounds"`
 	Judges                     int     `yaml:"judges"`
+	MinValidJudges             int     `yaml:"min_valid_judges"`
 	RoastAgents                int     `yaml:"roast_agents"`
 	ParallelJudges             bool    `yaml:"parallel_judges"`
 	ParallelRoast              bool    `yaml:"parallel_roast"`
@@ -104,6 +105,7 @@ type evaluationPatch struct {
 		MaxTechnicalIterations     *int     `yaml:"max_technical_iterations"`
 		MaxJudgeRounds             *int     `yaml:"max_judge_rounds"`
 		Judges                     *int     `yaml:"judges"`
+		MinValidJudges             *int     `yaml:"min_valid_judges"`
 		RoastAgents                *int     `yaml:"roast_agents"`
 		ParallelJudges             *bool    `yaml:"parallel_judges"`
 		ParallelRoast              *bool    `yaml:"parallel_roast"`
@@ -166,6 +168,7 @@ func defaultsEvaluation() EvaluationSettings {
 		MaxTechnicalIterations:     2,
 		MaxJudgeRounds:             2,
 		Judges:                     3,
+		MinValidJudges:             3,
 		RoastAgents:                3,
 		ParallelJudges:             true,
 		ParallelRoast:              true,
@@ -469,6 +472,9 @@ func applyEvaluationPatch(dst *EvaluationSettings, src evaluationPatch) {
 	}
 	if p.Judges != nil && *p.Judges >= 1 {
 		dst.Judges = *p.Judges
+	}
+	if p.MinValidJudges != nil && *p.MinValidJudges >= 1 {
+		dst.MinValidJudges = *p.MinValidJudges
 	}
 	if p.RoastAgents != nil && *p.RoastAgents >= 1 {
 		dst.RoastAgents = *p.RoastAgents

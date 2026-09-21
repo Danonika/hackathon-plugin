@@ -13,12 +13,14 @@ import (
 
 // RubricVersion identifies the aggregation rules. Every stored result must
 // carry it so scores from different rubric versions are never compared.
-const RubricVersion = "1.0.0"
+// 2.0.0: regulation 9.5 requires at least three valid non-conflicted scores
+// (missing scores are never zero) and ranking follows the 9.6 tie-break order.
+const RubricVersion = "2.0.0"
 
-// MinValidJudges is the number of valid judge reports required before a run
-// may be used as a stop condition: a majority of the three parallel judges, so
-// one invalid or conflicted report does not void the run.
-const MinValidJudges = 2
+// DefaultMinValidJudges is the fallback minimum number of valid judge reports
+// when the caller passes no configured value (configs/evaluation.yaml
+// min_valid_judges defaults to 3, matching regulation 9.5).
+const DefaultMinValidJudges = 3
 
 type Criterion struct {
 	Key string  `json:"key"`
@@ -96,20 +98,27 @@ type Counted struct {
 	Count int    `json:"count"`
 }
 
-// Aggregate is the deterministic result of one judge run.
+// Aggregate is the deterministic result of one judge run. MeanTotal and
+// CriterionMeans stay unrounded for ranking and comparisons; the *Rounded
+// fields are for publication (regulation 9.5 allows two decimals in the
+// published ranking only).
 type Aggregate struct {
-	SnapshotSHA      string             `json:"snapshot_sha,omitempty"`
-	ValidJudges      int                `json:"valid_judges"`
-	Inconclusive     bool               `json:"inconclusive"`
-	MeanTotal        float64            `json:"mean_total"`
-	CriterionMeans   map[string]float64 `json:"criterion_means"`
-	ScoreVariance    float64            `json:"score_variance"`
-	HighDisagreement []string           `json:"high_disagreement"`
-	CommonDeductions []DeductionGroup   `json:"common_deductions"`
-	LikelyQuestions  []Counted          `json:"likely_questions"`
-	TopImprovements  []Counted          `json:"top_improvements"`
-	DroppedInvalid   []InvalidReport    `json:"dropped_invalid"`
-	DroppedConflict  []string           `json:"dropped_conflict"`
+	SnapshotSHA           string             `json:"snapshot_sha,omitempty"`
+	RubricVersion         string             `json:"rubric_version"`
+	MinValid              int                `json:"min_valid_judges"`
+	ValidJudges           int                `json:"valid_judges"`
+	Inconclusive          bool               `json:"inconclusive"`
+	MeanTotal             float64            `json:"mean_total"`
+	MeanTotalRounded      float64            `json:"mean_total_rounded"`
+	CriterionMeans        map[string]float64 `json:"criterion_means"`
+	CriterionMeansRounded map[string]float64 `json:"criterion_means_rounded"`
+	ScoreVariance         float64            `json:"score_variance"`
+	HighDisagreement      []string           `json:"high_disagreement"`
+	CommonDeductions      []DeductionGroup   `json:"common_deductions"`
+	LikelyQuestions       []Counted          `json:"likely_questions"`
+	TopImprovements       []Counted          `json:"top_improvements"`
+	DroppedInvalid        []InvalidReport    `json:"dropped_invalid"`
+	DroppedConflict       []string           `json:"dropped_conflict"`
 }
 
 // ValidateJudgeReport checks one report against the fixed rubric. It returns
@@ -169,18 +178,25 @@ func ValidateJudgeReport(r JudgeReport, snapshotSHA string) []string {
 
 // AggregateReports validates, filters and aggregates judge reports. Reports
 // with a different snapshot sha, a malformed schema or a conflict of interest
-// are dropped. Fewer than MinValidJudges valid reports marks the run
-// inconclusive instead of guessing.
-func AggregateReports(reports []JudgeReport, snapshotSHA string) Aggregate {
+// are dropped; a missing report is never counted as zero. Fewer than minValid
+// valid reports marks the run inconclusive and requires substitute passes
+// (regulation 9.5).
+func AggregateReports(reports []JudgeReport, snapshotSHA string, minValid int) Aggregate {
+	if minValid < 1 {
+		minValid = DefaultMinValidJudges
+	}
 	agg := Aggregate{
-		SnapshotSHA:      snapshotSHA,
-		CriterionMeans:   map[string]float64{},
-		HighDisagreement: []string{},
-		CommonDeductions: []DeductionGroup{},
-		LikelyQuestions:  []Counted{},
-		TopImprovements:  []Counted{},
-		DroppedInvalid:   []InvalidReport{},
-		DroppedConflict:  []string{},
+		SnapshotSHA:           snapshotSHA,
+		RubricVersion:         RubricVersion,
+		MinValid:              minValid,
+		CriterionMeans:        map[string]float64{},
+		CriterionMeansRounded: map[string]float64{},
+		HighDisagreement:      []string{},
+		CommonDeductions:      []DeductionGroup{},
+		LikelyQuestions:       []Counted{},
+		TopImprovements:       []Counted{},
+		DroppedInvalid:        []InvalidReport{},
+		DroppedConflict:       []string{},
 	}
 	valid := make([]JudgeReport, 0, len(reports))
 	for i, r := range reports {
@@ -199,7 +215,7 @@ func AggregateReports(reports []JudgeReport, snapshotSHA string) Aggregate {
 		valid = append(valid, r)
 	}
 	agg.ValidJudges = len(valid)
-	if len(valid) < MinValidJudges {
+	if len(valid) < minValid {
 		agg.Inconclusive = true
 	}
 	if len(valid) == 0 {
@@ -210,14 +226,17 @@ func AggregateReports(reports []JudgeReport, snapshotSHA string) Aggregate {
 	for i, r := range valid {
 		totals[i] = reportTotal(r)
 	}
-	agg.MeanTotal = round2(average(totals))
+	agg.MeanTotal = round6(average(totals))
+	agg.MeanTotalRounded = round2(agg.MeanTotal)
 	agg.ScoreVariance = round4(sampleVariance(totals))
 	for _, c := range JudgeCriteria {
 		values := make([]float64, len(valid))
 		for i, r := range valid {
 			values[i] = r.Scores[c.Key]
 		}
-		agg.CriterionMeans[c.Key] = round2(average(values))
+		mean := round6(average(values))
+		agg.CriterionMeans[c.Key] = mean
+		agg.CriterionMeansRounded[c.Key] = round2(mean)
 	}
 	agg.HighDisagreement = highDisagreement(valid)
 	agg.CommonDeductions = groupDeductions(valid)
@@ -370,22 +389,27 @@ func countItems(items []string) []Counted {
 // Calibration is the test-retest result that turns a score delta into a
 // meaningful stop condition.
 type Calibration struct {
-	SnapshotSHA string  `json:"snapshot_sha,omitempty"`
-	Run1Judges  int     `json:"run1_judges"`
-	Run2Judges  int     `json:"run2_judges"`
-	Run1Mean    float64 `json:"run1_mean"`
-	Run2Mean    float64 `json:"run2_mean"`
-	RetestDelta float64 `json:"retest_delta"`
-	MinDelta    float64 `json:"min_delta"`
-	NoiseFloor  float64 `json:"noise_floor"`
+	SnapshotSHA   string  `json:"snapshot_sha,omitempty"`
+	RubricVersion string  `json:"rubric_version"`
+	MinValid      int     `json:"min_valid_judges"`
+	Run1Judges    int     `json:"run1_judges"`
+	Run2Judges    int     `json:"run2_judges"`
+	Run1Mean      float64 `json:"run1_mean"`
+	Run2Mean      float64 `json:"run2_mean"`
+	RetestDelta   float64 `json:"retest_delta"`
+	MinDelta      float64 `json:"min_delta"`
+	NoiseFloor    float64 `json:"noise_floor"`
 }
 
 // Calibrate computes retest_delta and noise_floor from two runs over the same
 // frozen snapshot: noise_floor = max(min_delta, 2 * retest_delta).
-func Calibrate(run1, run2 Aggregate, minDelta float64) (Calibration, error) {
-	if run1.Inconclusive || run2.Inconclusive || run1.ValidJudges < MinValidJudges || run2.ValidJudges < MinValidJudges {
-		return Calibration{}, fmt.Errorf("calibration needs at least %d valid reports per run (run1=%d, run2=%d)",
-			MinValidJudges, run1.ValidJudges, run2.ValidJudges)
+func Calibrate(run1, run2 Aggregate, minDelta float64, minValid int) (Calibration, error) {
+	if minValid < 1 {
+		minValid = DefaultMinValidJudges
+	}
+	if run1.Inconclusive || run2.Inconclusive || run1.ValidJudges < minValid || run2.ValidJudges < minValid {
+		return Calibration{}, fmt.Errorf("calibration needs at least %d valid reports per run (run1=%d, run2=%d); assign substitute judges",
+			minValid, run1.ValidJudges, run2.ValidJudges)
 	}
 	if minDelta < 0 || math.IsNaN(minDelta) {
 		return Calibration{}, fmt.Errorf("min_delta must be >= 0, got %v", minDelta)
@@ -395,14 +419,16 @@ func Calibrate(run1, run2 Aggregate, minDelta float64) (Calibration, error) {
 	}
 	delta := math.Abs(run1.MeanTotal - run2.MeanTotal)
 	return Calibration{
-		SnapshotSHA: run1.SnapshotSHA,
-		Run1Judges:  run1.ValidJudges,
-		Run2Judges:  run2.ValidJudges,
-		Run1Mean:    run1.MeanTotal,
-		Run2Mean:    run2.MeanTotal,
-		RetestDelta: round2(delta),
-		MinDelta:    minDelta,
-		NoiseFloor:  round2(math.Max(minDelta, 2*delta)),
+		SnapshotSHA:   run1.SnapshotSHA,
+		RubricVersion: RubricVersion,
+		MinValid:      minValid,
+		Run1Judges:    run1.ValidJudges,
+		Run2Judges:    run2.ValidJudges,
+		Run1Mean:      run1.MeanTotal,
+		Run2Mean:      run2.MeanTotal,
+		RetestDelta:   round2(delta),
+		MinDelta:      minDelta,
+		NoiseFloor:    round2(math.Max(minDelta, 2*delta)),
 	}, nil
 }
 
@@ -458,14 +484,16 @@ func Compare(in CompareInput) Comparison {
 	if mode != ModeJudge {
 		mode = ModeTechnical
 	}
-	improvement := round2(in.Candidate - in.Best)
+	// Decisions use unrounded values (regulation 9.5: the unrounded mean
+	// determines the place); rounding is display-only.
+	improvement := in.Candidate - in.Best
 	out := Comparison{
 		Mode:            mode,
 		Candidate:       round2(in.Candidate),
 		Best:            round2(in.Best),
 		Target:          round2(in.Target),
 		NoiseFloor:      round2(in.NoiseFloor),
-		Improvement:     improvement,
+		Improvement:     round2(improvement),
 		MandatoryFailed: in.MandatoryScenarioFailed,
 	}
 	if in.MandatoryScenarioFailed {
@@ -494,12 +522,213 @@ func Compare(in CompareInput) Comparison {
 	}
 	if improvement < in.NoiseFloor-epsilon {
 		out.Decision = DecisionStop
-		out.Reason = fmt.Sprintf("improvement %v below noise floor %v; stop iterating on this axis", improvement, out.NoiseFloor)
+		out.Reason = fmt.Sprintf("improvement %v below noise floor %v; stop iterating on this axis", round2(improvement), out.NoiseFloor)
 		return out
 	}
 	out.Decision = DecisionAccept
-	out.Reason = fmt.Sprintf("accepted with improvement %v above noise floor %v", improvement, out.NoiseFloor)
+	out.Reason = fmt.Sprintf("accepted with improvement %v above noise floor %v", round2(improvement), out.NoiseFloor)
 	return out
+}
+
+// TieBreakOrder is the regulation 9.6 order applied when total scores are
+// equal: result quality, then value, then presentation/demo/Q&A.
+var TieBreakOrder = []string{"result_quality", "value", "presentation_demo_qa"}
+
+type RankEntry struct {
+	SnapshotSHA        string             `json:"snapshot_sha"`
+	Rank               int                `json:"rank"`
+	MeanTotal          float64            `json:"mean_total"`
+	MeanTotalPublished float64            `json:"mean_total_published"`
+	CriterionMeans     map[string]float64 `json:"criterion_means,omitempty"`
+	ValidJudges        int                `json:"valid_judges"`
+	TieBreak           string             `json:"tie_break,omitempty"`
+}
+
+// Commission records the regulation 9.6 vote of three non-conflicted jury
+// members when the published criteria still leave a tie.
+type Commission struct {
+	Members []string       `json:"members"`
+	Votes   map[string]int `json:"votes"`
+	Grounds string         `json:"grounds"`
+}
+
+type Ranking struct {
+	Entries       []RankEntry `json:"entries"`
+	TieBreakOrder []string    `json:"tie_break_order"`
+	Unresolved    []string    `json:"tie_unresolved,omitempty"`
+	Commission    *Commission `json:"commission,omitempty"`
+}
+
+// Rank orders aggregates by the regulation 9.6 rules: the unrounded mean total
+// first, then the criterion averages in TieBreakOrder; a remaining tie is
+// flagged as unresolved until ApplyCommission records the jury vote.
+func Rank(aggregates []Aggregate) (Ranking, error) {
+	if len(aggregates) == 0 {
+		return Ranking{}, fmt.Errorf("rank needs at least one aggregate")
+	}
+	for _, agg := range aggregates {
+		if agg.Inconclusive {
+			minValid := agg.MinValid
+			if minValid < 1 {
+				minValid = DefaultMinValidJudges
+			}
+			return Ranking{}, fmt.Errorf("aggregate %s is inconclusive (%d of %d valid judges); assign substitute judges before ranking",
+				agg.SnapshotSHA, agg.ValidJudges, minValid)
+		}
+		if agg.RubricVersion != "" && agg.RubricVersion != RubricVersion {
+			return Ranking{}, fmt.Errorf("aggregate %s uses rubric version %s, expected %s", agg.SnapshotSHA, agg.RubricVersion, RubricVersion)
+		}
+	}
+
+	entries := make([]RankEntry, 0, len(aggregates))
+	for _, agg := range aggregates {
+		entries = append(entries, RankEntry{
+			SnapshotSHA:        agg.SnapshotSHA,
+			MeanTotal:          agg.MeanTotal,
+			MeanTotalPublished: agg.MeanTotalRounded,
+			CriterionMeans:     agg.CriterionMeans,
+			ValidJudges:        agg.ValidJudges,
+		})
+	}
+	sort.SliceStable(entries, func(i, j int) bool {
+		order, _ := compareEntries(entries[i], entries[j])
+		if order != 0 {
+			return order < 0
+		}
+		return entries[i].SnapshotSHA < entries[j].SnapshotSHA
+	})
+
+	ranking := Ranking{Entries: entries, TieBreakOrder: append([]string{}, TieBreakOrder...)}
+	for i := 1; i < len(entries); i++ {
+		order, level := compareEntries(entries[i-1], entries[i])
+		if order == 0 {
+			if !containsString(ranking.Unresolved, entries[i-1].SnapshotSHA) {
+				ranking.Unresolved = append(ranking.Unresolved, entries[i-1].SnapshotSHA)
+			}
+			if !containsString(ranking.Unresolved, entries[i].SnapshotSHA) {
+				ranking.Unresolved = append(ranking.Unresolved, entries[i].SnapshotSHA)
+			}
+			continue
+		}
+		if level != "" {
+			entries[i].TieBreak = level
+		}
+	}
+	for i := range entries {
+		entries[i].Rank = i + 1
+	}
+	sort.Strings(ranking.Unresolved)
+	return ranking, nil
+}
+
+// ApplyCommission validates and records the 9.6 tie-break vote: at least three
+// non-conflicted members, one vote each, a strict majority for the winner.
+func ApplyCommission(ranking Ranking, commission Commission) (Ranking, error) {
+	if len(ranking.Unresolved) == 0 {
+		return Ranking{}, fmt.Errorf("no unresolved tie to decide")
+	}
+	if len(commission.Members) < 3 {
+		return Ranking{}, fmt.Errorf("commission needs at least 3 non-conflicted members")
+	}
+	seen := map[string]bool{}
+	for _, member := range commission.Members {
+		if strings.TrimSpace(member) == "" {
+			return Ranking{}, fmt.Errorf("commission members must be non-empty")
+		}
+		if seen[member] {
+			return Ranking{}, fmt.Errorf("duplicate commission member %s", member)
+		}
+		seen[member] = true
+	}
+	total := 0
+	for sha, votes := range commission.Votes {
+		if !containsString(ranking.Unresolved, sha) {
+			return Ranking{}, fmt.Errorf("vote for %s which is not part of the unresolved tie", sha)
+		}
+		if votes < 0 {
+			return Ranking{}, fmt.Errorf("negative votes for %s", sha)
+		}
+		total += votes
+	}
+	for _, sha := range ranking.Unresolved {
+		if _, ok := commission.Votes[sha]; !ok {
+			return Ranking{}, fmt.Errorf("missing vote count for %s", sha)
+		}
+	}
+	if total != len(commission.Members) {
+		return Ranking{}, fmt.Errorf("votes (%d) must equal the number of commission members (%d)", total, len(commission.Members))
+	}
+	winner, max := "", 0
+	for sha, votes := range commission.Votes {
+		if votes > max {
+			winner, max = sha, votes
+		}
+	}
+	if winner == "" || max*2 <= len(commission.Members) {
+		return Ranking{}, fmt.Errorf("no strict majority in commission votes %v", commission.Votes)
+	}
+
+	unresolvedSet := map[string]bool{}
+	for _, sha := range ranking.Unresolved {
+		unresolvedSet[sha] = true
+	}
+	rest := make([]RankEntry, 0, len(ranking.Entries))
+	group := map[string]RankEntry{}
+	for _, entry := range ranking.Entries {
+		if unresolvedSet[entry.SnapshotSHA] {
+			group[entry.SnapshotSHA] = entry
+			continue
+		}
+		rest = append(rest, entry)
+	}
+	ordered := append([]string{}, ranking.Unresolved...)
+	sort.SliceStable(ordered, func(i, j int) bool {
+		if commission.Votes[ordered[i]] != commission.Votes[ordered[j]] {
+			return commission.Votes[ordered[i]] > commission.Votes[ordered[j]]
+		}
+		return ordered[i] < ordered[j]
+	})
+	for _, sha := range ordered {
+		entry := group[sha]
+		entry.TieBreak = "commission"
+		rest = append(rest, entry)
+	}
+	for i := range rest {
+		rest[i].Rank = i + 1
+	}
+	ranking.Entries = rest
+	ranking.Unresolved = nil
+	ranking.Commission = &commission
+	return ranking, nil
+}
+
+// compareEntries returns -1/0/1 and the tie-break level that decided the order.
+func compareEntries(a, b RankEntry) (int, string) {
+	if math.Abs(a.MeanTotal-b.MeanTotal) > epsilon {
+		if a.MeanTotal > b.MeanTotal {
+			return -1, ""
+		}
+		return 1, ""
+	}
+	for _, key := range TieBreakOrder {
+		av, bv := a.CriterionMeans[key], b.CriterionMeans[key]
+		if math.Abs(av-bv) > epsilon {
+			if av > bv {
+				return -1, key
+			}
+			return 1, key
+		}
+	}
+	return 0, ""
+}
+
+func containsString(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
 }
 
 func average(values []float64) float64 {
@@ -532,6 +761,10 @@ func normalizeText(s string) string {
 
 func round2(v float64) float64 {
 	return math.Round(v*100) / 100
+}
+
+func round6(v float64) float64 {
+	return math.Round(v*1e6) / 1e6
 }
 
 func round4(v float64) float64 {

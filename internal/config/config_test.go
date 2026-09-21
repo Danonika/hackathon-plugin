@@ -148,3 +148,29 @@ func TestEvaluationInvalidValuesIgnored(t *testing.T) {
 		t.Fatalf("invalid values must be ignored, got %+v", settings)
 	}
 }
+
+func TestEvaluationMinValidJudges(t *testing.T) {
+	root := t.TempDir()
+	mgr := NewManager(root)
+	if got := mgr.Evaluation().MinValidJudges; got != 3 {
+		t.Fatalf("default min_valid_judges = %d, want 3", got)
+	}
+
+	dir := filepath.Join(root, "configs")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "evaluation.yaml"), []byte("evaluation:\n  min_valid_judges: 4\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := mgr.Evaluation().MinValidJudges; got != 4 {
+		t.Fatalf("min_valid_judges = %d, want 4", got)
+	}
+
+	if err := os.WriteFile(filepath.Join(dir, "evaluation.yaml"), []byte("evaluation:\n  min_valid_judges: 0\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := mgr.Evaluation().MinValidJudges; got != 3 {
+		t.Fatalf("invalid min_valid_judges must fall back to the default 3, got %d", got)
+	}
+}

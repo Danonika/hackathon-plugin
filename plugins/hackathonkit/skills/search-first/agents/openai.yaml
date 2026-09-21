@@ -1,0 +1,4 @@
+interface:
+  display_name: "Search First"
+  short_description: "Sweep repo, capabilities and registries before writing code."
+  default_prompt: "Use $search-first to decide whether to reuse or build before writing code."

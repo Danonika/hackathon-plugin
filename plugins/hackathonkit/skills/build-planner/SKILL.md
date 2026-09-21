@@ -71,7 +71,7 @@ Plan the build in stages before writing anything. The plan under `evals/plans/<s
     - technical mode rolls back on any score decrease;
     - judge mode rolls back only on a regression above the calibrated noise floor;
     - `target_reached` accepts and exits; an improvement below the floor is `stop` on that axis;
-    - three isolated judge runs, majority >= 2 valid reports, `eval.calibrate` gives `noise_floor = max(min_delta, 2 * retest_delta)`.
+    - at least three valid non-conflicted judge runs (substitute passes replace dropped reports), `eval.calibrate` gives `noise_floor = max(min_delta, 2 * retest_delta)`; ranking follows regulation 9.6 via `eval.rank`.
 11. At S6 the freeze flow owns `eval.freeze_bundle` (read-only bundle + hash) and the clean-room gate; the final `plan.update` records the bundle hash as evidence.
 12. Close with `learning.record`: trigger "when planning a multi-step build", insight, outcome, evidence (plan path, artifact ids, decisions).
 

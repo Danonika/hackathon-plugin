@@ -29,7 +29,7 @@ Every improvement round leaves one record that a later session can replay withou
   "candidate_bundle_hash": "sha256:9f2c...",
   "git_sha": "abc1234",
   "model": "<model id>",
-  "rubric_version": "1.0.0",
+  "rubric_version": "2.0.0",
   "decision": "accept",
   "reason": "accepted with improvement 3.5 above noise floor 0.5",
   "improvement": 3.5,

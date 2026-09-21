@@ -1,0 +1,4 @@
+interface:
+  display_name: "Hackathon Agent Kit Git Workflow"
+  short_description: "Prepare small evidenced commits; keep secrets and shared history safe."
+  default_prompt: "Use $git-workflow to prepare a checkpoint commit with evidence."

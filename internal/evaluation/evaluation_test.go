@@ -41,7 +41,7 @@ func TestAggregateReportsFiltersAndAverages(t *testing.T) {
 	foreign := mkReport("judge-06", "other-sha", uniform(100))
 	reports = append(reports, foreign)
 
-	agg := AggregateReports(reports, sha)
+	agg := AggregateReports(reports, sha, DefaultMinValidJudges)
 	if agg.ValidJudges != 3 {
 		t.Fatalf("valid judges = %d, want 3 (%+v)", agg.ValidJudges, agg.DroppedInvalid)
 	}
@@ -66,14 +66,32 @@ func TestAggregateReportsFiltersAndAverages(t *testing.T) {
 }
 
 func TestAggregateReportsInconclusiveBelowThreshold(t *testing.T) {
-	agg := AggregateReports([]JudgeReport{
+	// Regulation 9.5: fewer than three valid scores require substitute judges;
+	// a missing report is never counted as zero.
+	twoValid := AggregateReports([]JudgeReport{
 		mkReport("judge-01", "sha", uniform(80)),
-	}, "sha")
-	if !agg.Inconclusive {
-		t.Fatal("a single valid report must be inconclusive")
+		mkReport("judge-02", "sha", uniform(84)),
+	}, "sha", DefaultMinValidJudges)
+	if !twoValid.Inconclusive {
+		t.Fatal("two valid reports must be inconclusive with min_valid_judges=3")
 	}
-	if agg.MeanTotal != 80 {
-		t.Fatalf("mean = %v, want 80", agg.MeanTotal)
+	if twoValid.MinValid != 3 || twoValid.RubricVersion != RubricVersion {
+		t.Fatalf("aggregate provenance missing: %+v", twoValid)
+	}
+	if twoValid.MeanTotal != 82 {
+		t.Fatalf("mean = %v, want 82 (dropped reports are not zeros)", twoValid.MeanTotal)
+	}
+
+	threeValid := AggregateReports([]JudgeReport{
+		mkReport("judge-01", "sha", uniform(80)),
+		mkReport("judge-02", "sha", uniform(84)),
+		mkReport("judge-03", "sha", uniform(82)),
+	}, "sha", DefaultMinValidJudges)
+	if threeValid.Inconclusive {
+		t.Fatal("three valid reports must be conclusive")
+	}
+	if threeValid.MeanTotal != 82 || threeValid.MeanTotalRounded != 82 {
+		t.Fatalf("mean = %v rounded = %v, want 82", threeValid.MeanTotal, threeValid.MeanTotalRounded)
 	}
 }
 
@@ -91,7 +109,7 @@ func TestAggregateHighDisagreementAndGrouping(t *testing.T) {
 	third := mkReport("judge-03", sha, uniform(80))
 	third.Questions = []string{"What happens if MCP fails?"}
 
-	agg := AggregateReports([]JudgeReport{first, second, third}, sha)
+	agg := AggregateReports([]JudgeReport{first, second, third}, sha, DefaultMinValidJudges)
 	if len(agg.CommonDeductions) != 1 {
 		t.Fatalf("expected one grouped deduction, got %+v", agg.CommonDeductions)
 	}
@@ -154,7 +172,7 @@ func TestValidateJudgeReportUnknownCriteriaAreSorted(t *testing.T) {
 func TestCalibrateUsesRetestDelta(t *testing.T) {
 	run1 := Aggregate{ValidJudges: 10, MeanTotal: 80}
 	run2 := Aggregate{ValidJudges: 10, MeanTotal: 83.4}
-	cal, err := Calibrate(run1, run2, 0.5)
+	cal, err := Calibrate(run1, run2, 0.5, DefaultMinValidJudges)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -165,17 +183,17 @@ func TestCalibrateUsesRetestDelta(t *testing.T) {
 		t.Fatalf("noise floor = %v, want 6.8", cal.NoiseFloor)
 	}
 	// min_delta dominates when retest noise is small.
-	cal, err = Calibrate(Aggregate{ValidJudges: 10, MeanTotal: 80}, Aggregate{ValidJudges: 10, MeanTotal: 80.2}, 1)
+	cal, err = Calibrate(Aggregate{ValidJudges: 10, MeanTotal: 80}, Aggregate{ValidJudges: 10, MeanTotal: 80.2}, 1, DefaultMinValidJudges)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if cal.NoiseFloor != 1 {
 		t.Fatalf("noise floor = %v, want 1", cal.NoiseFloor)
 	}
-	if _, err := Calibrate(Aggregate{ValidJudges: 1}, Aggregate{ValidJudges: 3, MeanTotal: 80}, 0.5); err == nil {
+	if _, err := Calibrate(Aggregate{ValidJudges: 1}, Aggregate{ValidJudges: 3, MeanTotal: 80}, 0.5, DefaultMinValidJudges); err == nil {
 		t.Fatal("inconclusive run must fail calibration")
 	}
-	if _, err := Calibrate(Aggregate{ValidJudges: 10, MeanTotal: 80, SnapshotSHA: "a"}, Aggregate{ValidJudges: 10, MeanTotal: 80, SnapshotSHA: "b"}, 0.5); err == nil {
+	if _, err := Calibrate(Aggregate{ValidJudges: 10, MeanTotal: 80, SnapshotSHA: "a"}, Aggregate{ValidJudges: 10, MeanTotal: 80, SnapshotSHA: "b"}, 0.5, DefaultMinValidJudges); err == nil {
 		t.Fatal("calibration across different snapshots must fail")
 	}
 }
@@ -214,5 +232,144 @@ func TestCompareJudgeLoop(t *testing.T) {
 		if got := Compare(c.in).Decision; got != c.want {
 			t.Fatalf("%s: decision = %s, want %s", c.name, got, c.want)
 		}
+	}
+}
+
+func rankAggregate(sha string, total, resultQuality, value, presentation float64) Aggregate {
+	return Aggregate{
+		SnapshotSHA:      sha,
+		RubricVersion:    RubricVersion,
+		MinValid:         DefaultMinValidJudges,
+		ValidJudges:      3,
+		MeanTotal:        total,
+		MeanTotalRounded: round2(total),
+		CriterionMeans: map[string]float64{
+			"value":                value,
+			"result_quality":       resultQuality,
+			"innovation":           10,
+			"scalability":          10,
+			"presentation_demo_qa": presentation,
+		},
+	}
+}
+
+func TestRankAppliesOfficialTieBreaks(t *testing.T) {
+	// Regulation 9.6: equal totals break on result_quality, then value, then
+	// presentation_demo_qa.
+	ranking, err := Rank([]Aggregate{
+		rankAggregate("a", 80, 15, 20, 15),
+		rankAggregate("b", 80, 16, 19, 15),
+		rankAggregate("c", 75, 20, 20, 20),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	order := []string{ranking.Entries[0].SnapshotSHA, ranking.Entries[1].SnapshotSHA, ranking.Entries[2].SnapshotSHA}
+	if order[0] != "b" || order[1] != "a" || order[2] != "c" {
+		t.Fatalf("order = %v, want [b a c]", order)
+	}
+	if ranking.Entries[1].TieBreak != "result_quality" {
+		t.Fatalf("tie-break label = %q, want result_quality", ranking.Entries[1].TieBreak)
+	}
+	if ranking.Entries[0].Rank != 1 || ranking.Entries[2].Rank != 3 {
+		t.Fatalf("ranks = %+v", ranking.Entries)
+	}
+	if len(ranking.Unresolved) != 0 {
+		t.Fatalf("unexpected unresolved tie: %v", ranking.Unresolved)
+	}
+
+	valueTie, err := Rank([]Aggregate{
+		rankAggregate("a", 80, 16, 19, 15),
+		rankAggregate("b", 80, 16, 20, 15),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if valueTie.Entries[0].SnapshotSHA != "b" || valueTie.Entries[1].TieBreak != "value" {
+		t.Fatalf("value tie-break failed: %+v", valueTie.Entries)
+	}
+
+	presentationTie, err := Rank([]Aggregate{
+		rankAggregate("a", 80, 16, 20, 15),
+		rankAggregate("b", 80, 16, 20, 16),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if presentationTie.Entries[0].SnapshotSHA != "b" || presentationTie.Entries[1].TieBreak != "presentation_demo_qa" {
+		t.Fatalf("presentation tie-break failed: %+v", presentationTie.Entries)
+	}
+}
+
+func TestRankFlagsUnresolvedTie(t *testing.T) {
+	ranking, err := Rank([]Aggregate{
+		rankAggregate("a", 80, 16, 20, 15),
+		rankAggregate("b", 80, 16, 20, 15),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ranking.Unresolved) != 2 {
+		t.Fatalf("unresolved = %v, want both snapshots", ranking.Unresolved)
+	}
+}
+
+func TestApplyCommissionDecidesTie(t *testing.T) {
+	ranking, err := Rank([]Aggregate{
+		rankAggregate("a", 80, 16, 20, 15),
+		rankAggregate("b", 80, 16, 20, 15),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	decided, err := ApplyCommission(ranking, Commission{
+		Members: []string{"judge-05", "judge-06", "judge-07"},
+		Votes:   map[string]int{"a": 2, "b": 1},
+		Grounds: "a demonstrates the mandatory scenario end to end",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decided.Entries[0].SnapshotSHA != "a" || decided.Entries[0].TieBreak != "commission" {
+		t.Fatalf("commission order = %+v", decided.Entries)
+	}
+	if len(decided.Unresolved) != 0 || decided.Commission == nil {
+		t.Fatalf("commission not recorded: %+v", decided)
+	}
+
+	if _, err := ApplyCommission(ranking, Commission{Members: []string{"j1", "j2"}, Votes: map[string]int{"a": 1, "b": 1}}); err == nil {
+		t.Fatal("a commission with fewer than 3 members must fail")
+	}
+	if _, err := ApplyCommission(ranking, Commission{Members: []string{"j1", "j2", "j3"}, Votes: map[string]int{"a": 1, "b": 1}}); err == nil {
+		t.Fatal("a vote total that does not match the members must fail")
+	}
+	if _, err := ApplyCommission(ranking, Commission{Members: []string{"j1", "j2", "j3"}, Votes: map[string]int{"a": 2, "b": 2}}); err == nil {
+		t.Fatal("a non-strict majority must fail")
+	}
+}
+
+func TestRankRejectsInconclusiveAndMixedRubric(t *testing.T) {
+	if _, err := Rank([]Aggregate{{SnapshotSHA: "a", Inconclusive: true, ValidJudges: 1, MinValid: 3}}); err == nil {
+		t.Fatal("inconclusive aggregates must not be ranked")
+	}
+	mixed := rankAggregate("a", 80, 16, 20, 15)
+	mixed.RubricVersion = "1.0.0"
+	if _, err := Rank([]Aggregate{mixed}); err == nil {
+		t.Fatal("aggregates from another rubric version must not be ranked")
+	}
+	if _, err := Rank(nil); err == nil {
+		t.Fatal("ranking without aggregates must fail")
+	}
+}
+
+func TestCompareUsesUnroundedValues(t *testing.T) {
+	// Raw improvement 0.004 clears a 0.001 noise floor; rounding to 2 decimals
+	// would wrongly report no improvement.
+	out := Compare(CompareInput{Mode: ModeTechnical, Candidate: 80.004, Best: 80, Target: 0, NoiseFloor: 0.001})
+	if out.Decision != DecisionAccept {
+		t.Fatalf("decision = %s, want accept (raw improvement)", out.Decision)
+	}
+	if out.Improvement != 0 {
+		t.Fatalf("displayed improvement = %v, want 0 after rounding", out.Improvement)
 	}
 }

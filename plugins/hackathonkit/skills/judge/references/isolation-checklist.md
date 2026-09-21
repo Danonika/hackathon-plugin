@@ -8,11 +8,15 @@ the score, not statistical independence.
 
 | Input | Where |
 |---|---|
-| Project files | The read-only `judge-bundle/` copy |
+| Project files | The read-only `judge-bundle/` copy (`profile: "demo"`) |
 | Bundle manifest | `bundle.json`, `git-sha.txt`, `rubric-version.txt` |
-| Demo evidence | `demo-artifacts/`, `test-results.json`, `smoke-results.json`, `docker-build.json` |
-| Documentation | `TASK.md`, `README.md`, `architecture.md`, `known-limitations.md`, `selected-source/` |
+| Demo evidence | `demo-artifacts/`, demo script or recording, presentation material, observed live demonstration (regulation 9.3) |
+| Documentation | `TASK.md`, `README.md`, `architecture.md`, `known-limitations.md` |
 | Rubric | `references/rubric.md` (criteria, weights, schema) |
+
+Source code, `selected-source/`, `test-results.json`, `smoke-results.json` and
+build logs are not Demo Day evidence (regulation 9.4: no repeated technical code
+check). A pass that awards or deducts points from them is invalid.
 
 ## Forbidden Inputs
 
@@ -24,11 +28,11 @@ the score, not statistical independence.
 
 ## Clean-Room Setup
 
-1. Freeze once with `eval.freeze_bundle(out="judge-bundle", read_only=true, model="<model-id>")`; note `bundle_hash` and `git_sha`.
-2. Create one working directory per pass: `judge-01/`, `judge-02/`, `judge-03/`.
+1. Freeze once with `eval.freeze_bundle(out="judge-bundle", profile="demo", read_only=true, model="<model-id>")`; note `bundle_hash`, `git_sha` and `profile`.
+2. Create one working directory per pass: `judge-01/`, `judge-02/`, `judge-03/`, plus `judge-04/` ... for substitute passes.
 3. Copy the bundle into each directory; keep file mode read-only (0444) and never write into the bundle.
-4. Start the three passes with no shared conversation state; parallel execution is fine.
-5. If a pass must be repeated, repeat it from a fresh copy of the same frozen bundle, not from its own notes.
+4. Start the passes with no shared conversation state; parallel execution is fine.
+5. If a pass must be repeated or replaced, repeat it from a fresh copy of the same frozen bundle, not from its own notes. A substitute pass replaces a dropped or conflicted report; record the replaced judge and the reason.
 
 ## Per-Judge Procedure
 
@@ -46,8 +50,8 @@ the score, not statistical independence.
 | Pass | Perspective | Focus |
 |---|---|---|
 | judge-01 | Product value and innovation | TASK.md mapping, differentiation vs baseline, demo scenario |
-| judge-02 | Result quality and technical depth | tests, smoke, architecture, contracts, known limitations |
-| judge-03 | Adversarial Q&A, scaling and presentation | hostile questions, load/scaling claims, demo evidence, Q&A cards |
+| judge-02 | Result quality and demo integrity | end-to-end demo output, user-visible artifacts, architecture, known limitations |
+| judge-03 | Adversarial Q&A, scaling and presentation | hostile questions, scaling claims, demo evidence, Q&A cards |
 
 Perspectives change the questions asked, never the criteria or the weights.
 
@@ -59,10 +63,10 @@ number of valid reports. Scores without this record are not comparable.
 
 ## Final Checklist
 
-- [ ] Bundle untouched, read-only, hash recorded.
-- [ ] No forbidden input observed by any pass.
-- [ ] Three reports, exact schema, one snapshot sha.
-- [ ] Each deduction cites evidence; assumptions labeled.
-- [ ] Conflict of interest declared per pass.
-- [ ] Aggregate and calibration produced by the tools, not by hand.
-- [ ] Decision left to `eval.compare`.
+- [ ] Bundle untouched, read-only, hash and `profile: demo` recorded.
+- [ ] No forbidden input observed by any pass (no source, tests or build logs).
+- [ ] At least `min_valid_judges` valid reports (default 3), exact schema, one snapshot sha; substitutes recorded with reasons.
+- [ ] Each deduction cites demo evidence; assumptions labeled.
+- [ ] Conflict of interest declared per pass; recused judges never vote on ties.
+- [ ] Aggregate, calibration and ranking produced by the tools, not by hand.
+- [ ] Decision left to `eval.compare`; unresolved ties recorded via `eval.rank` commission.

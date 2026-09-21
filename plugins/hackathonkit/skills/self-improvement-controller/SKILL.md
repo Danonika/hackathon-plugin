@@ -66,7 +66,7 @@ Never mix axes in one round: a score drop must be attributable to one change cla
    - Quick smoke: MCP starts, `initialize`, `tools/list`, mandatory happy path.
 4. **Freeze the candidate.** Call `eval.freeze_bundle` with `out` (default `judge-bundle`), `read_only=true` and the candidate `model`; keep `bundle_path`, `bundle_hash` and `git_sha`. A full clean-room rebuild is not part of an iteration.
 5. **Technical decision.** Re-score the candidate with `$project-cost`, then call `eval.compare` with `mode=technical`, `candidate=<new technical score>`, `best=<accepted score>`, `mandatory_scenario_failed=<bool>`, `snapshot_sha=<git_sha>`, `persist=true` and follow the decision matrix.
-6. **Judge loop** (at most `max_judge_rounds`, default 2): `eval.freeze_bundle` the best candidate; run 3 isolated `$judge` passes on read-only copies; `eval.aggregate` with `reports[]` and `snapshot_sha=<git_sha>`; then `eval.compare` with `mode=judge`, `candidate=<aggregate.mean_total>`, `best=<previous judge mean>`, `noise_floor=<calibrated>`, `snapshot_sha=<git_sha>`, `persist=true`. Feed `common_deductions` and `top_improvements` into the next fast block.
+6. **Judge loop** (at most `max_judge_rounds`, default 2): `eval.freeze_bundle` the best candidate with `profile="demo"`; run `$judge` passes on read-only copies; `eval.aggregate` with `reports[]` and `snapshot_sha=<git_sha>`, and when `valid_judges < min_valid_judges` (default 3) run substitute passes until the minimum is met; rank candidates with `eval.rank` when comparing snapshots (regulation 9.6); then `eval.compare` with `mode=judge`, `candidate=<aggregate.mean_total>` (unrounded), `best=<previous judge mean>`, `noise_floor=<calibrated>`, `snapshot_sha=<git_sha>`, `persist=true`. Feed `common_deductions` and `top_improvements` into the next fast block.
 7. **Persist stage evidence.** Call `plan.update` with `slug`, `stage=<current_stage.id>`, `status` (`doing` while a round runs, `done` or `failed` after the decision) and `evidence=[bundle_hash, aggregate_path, decision_path]`. `plan.update` bumps `revision`; keep the previous revision for comparison.
 8. **Record the learning.** Call `learning.record` with `trigger`, `insight`, `outcome` (`success`/`failure`/`neutral`) and `evidence` for anything reusable - including why a rollback happened.
 9. **Final freeze.** Run the full clean-room gate once on the best snapshot: fresh checkout, setup, compose build, MCP handshake, mandatory scenario, Normal/Fly toggle. If it fails, restore the last clean-room-passing snapshot. Freeze README, demo script and evidence-backed Q&A cards from the passing snapshot.
@@ -106,7 +106,7 @@ Stops that are not decisions must still be recorded with the value that fired.
 {
   "round": 2, "axis": "performance",
   "candidate_bundle_hash": "sha256:9f2c...", "git_sha": "abc1234",
-  "model": "<model id>", "rubric_version": "1.0.0",
+  "model": "<model id>", "rubric_version": "2.0.0",
   "decision": "accept", "improvement": 3.5, "noise_floor": 0.5,
   "aggregate_path": "evals/judges/abc1234/aggregate.json",
   "decision_path": "evals/decisions/abc1234/technical-20260921-101500.json",

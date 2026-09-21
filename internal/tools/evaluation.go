@@ -19,7 +19,7 @@ import (
 func registerEvaluation(reg *mcp.Registry, d Deps) {
 	reg.Register(tool(
 		"eval.aggregate",
-		"Aggregate judge reports deterministically: validate schemas, drop conflicted or invalid reports, require a majority of valid ones, then compute mean, sample variance, high-disagreement criteria, common deductions and likely questions. The judges stay LLM-driven; this tool owns the arithmetic.",
+		"Aggregate judge reports deterministically: validate schemas, drop conflicted or invalid reports (a missing report is never zero), require the configured minimum valid reports (min_valid_judges, default 3 per regulation 9.5), then compute the unrounded mean, sample variance, high-disagreement criteria, common deductions and likely questions. The judges stay LLM-driven; this tool owns the arithmetic.",
 		map[string]any{
 			"reports":      arrProp("Judge report file paths relative to the repository root", map[string]any{"type": "string"}),
 			"reports_json": arrProp("Inline judge report objects, an alternative to reports", objProp("Judge report")),
@@ -33,7 +33,8 @@ func registerEvaluation(reg *mcp.Registry, d Deps) {
 			if err != nil {
 				return mcp.Fail(trace(ctx), err.Error()), nil
 			}
-			agg := evaluation.AggregateReports(reports, argString(args, "snapshot_sha"))
+			minValid := d.Cfg.Evaluation().MinValidJudges
+			agg := evaluation.AggregateReports(reports, argString(args, "snapshot_sha"), minValid)
 			if len(loadInvalids) > 0 {
 				agg.DroppedInvalid = append(loadInvalids, agg.DroppedInvalid...)
 			}
@@ -69,7 +70,7 @@ func registerEvaluation(reg *mcp.Registry, d Deps) {
 
 			var env mcp.Envelope
 			if agg.Inconclusive {
-				env = mcp.Partial(trace(ctx), data, fmt.Sprintf("fewer than %d valid judge reports; run is inconclusive", evaluation.MinValidJudges))
+				env = mcp.Partial(trace(ctx), data, fmt.Sprintf("fewer than %d valid judge reports; assign a substitute judge on the same frozen bundle and re-aggregate", agg.MinValid))
 			} else {
 				env = mcp.OK(trace(ctx), data)
 			}
@@ -116,8 +117,9 @@ func registerEvaluation(reg *mcp.Registry, d Deps) {
 				return mcp.Fail(trace(ctx), "run2: "+err.Error()), nil
 			}
 			sha := argString(args, "snapshot_sha")
-			agg1 := evaluation.AggregateReports(run1, sha)
-			agg2 := evaluation.AggregateReports(run2, sha)
+			minValid := d.Cfg.Evaluation().MinValidJudges
+			agg1 := evaluation.AggregateReports(run1, sha, minValid)
+			agg2 := evaluation.AggregateReports(run2, sha, minValid)
 			agg1.DroppedInvalid = append(invalid1, agg1.DroppedInvalid...)
 			agg2.DroppedInvalid = append(invalid2, agg2.DroppedInvalid...)
 
@@ -126,7 +128,7 @@ func registerEvaluation(reg *mcp.Registry, d Deps) {
 			if minDelta < 0 {
 				minDelta = settings.MinDelta
 			}
-			cal, err := evaluation.Calibrate(agg1, agg2, minDelta)
+			cal, err := evaluation.Calibrate(agg1, agg2, minDelta, minValid)
 			if err != nil {
 				return mcp.Fail(trace(ctx), err.Error()), nil
 			}
@@ -275,6 +277,7 @@ func registerEvaluation(reg *mcp.Registry, d Deps) {
 			"exclude":   arrProp("Extra exclude patterns: repository-relative paths, base names or globs (for example .env*, secrets/*)", map[string]any{"type": "string"}),
 			"read_only": boolProp("Mark copied files read-only (default true)"),
 			"model":     strProp("Model id recorded in the bundle manifest"),
+			"profile":   strProp("full (default), technical (alias) or demo (presentation evidence only: TASK, README, architecture, demo artifacts, limitations)"),
 		},
 		nil,
 		func(ctx context.Context, args map[string]any) (any, error) {
@@ -294,6 +297,7 @@ func registerEvaluation(reg *mcp.Registry, d Deps) {
 				ReadOnly:      argBool(args, "read_only", true),
 				Model:         argString(args, "model"),
 				RubricVersion: evaluation.RubricVersion,
+				Profile:       argString(args, "profile"),
 			})
 			if err != nil {
 				return mcp.Fail(trace(ctx), err.Error()), nil
@@ -311,6 +315,7 @@ func registerEvaluation(reg *mcp.Registry, d Deps) {
 				"git_sha":        bundle.GitSHA,
 				"model":          bundle.Model,
 				"rubric_version": bundle.RubricVersion,
+				"profile":        bundle.Profile,
 				"files":          bundle.Files,
 				"bytes":          bundle.Bytes,
 				"excluded":       bundle.Excluded,
@@ -333,22 +338,131 @@ func registerEvaluation(reg *mcp.Registry, d Deps) {
 			}), nil
 		},
 	))
+
+	reg.Register(tool(
+		"eval.rank",
+		"Rank two or more judge-run aggregates with the regulation 9.6 rules: unrounded mean total first, then result_quality, value and presentation_demo_qa, then a recorded three-member commission vote. Persists the ranking under evals/rankings/.",
+		map[string]any{
+			"aggregates":      arrProp("Paths to aggregate.json files relative to the repository root", map[string]any{"type": "string"}),
+			"aggregates_json": arrProp("Inline aggregate objects", objProp("Aggregate")),
+			"commission":      objProp("Optional tie-break commission: {members:[3+ non-conflicted judges], votes:{sha:count}, grounds}"),
+			"persist":         boolProp("Write evals/rankings/<ts>.json (default true)"),
+		},
+		nil,
+		func(ctx context.Context, args map[string]any) (any, error) {
+			aggregates, err := readAggregates(d.Cfg.Root(), args)
+			if err != nil {
+				return mcp.Fail(trace(ctx), err.Error()), nil
+			}
+			ranking, err := evaluation.Rank(aggregates)
+			if err != nil {
+				return mcp.Fail(trace(ctx), err.Error()), nil
+			}
+			if raw := argMap(args, "commission"); raw != nil {
+				commission := evaluation.Commission{
+					Members: argStringSlice(raw, "members"),
+					Grounds: argString(raw, "grounds"),
+					Votes:   map[string]int{},
+				}
+				if votes, ok := raw["votes"].(map[string]any); ok {
+					for sha, value := range votes {
+						if count, ok := value.(float64); ok {
+							commission.Votes[sha] = int(count)
+						}
+					}
+				}
+				ranking, err = evaluation.ApplyCommission(ranking, commission)
+				if err != nil {
+					return mcp.Fail(trace(ctx), err.Error()), nil
+				}
+			}
+			if d.Metrics != nil {
+				d.Metrics.Inc("eval_rankings_total")
+			}
+			data := map[string]any{
+				"ranking":        ranking,
+				"rubric_version": evaluation.RubricVersion,
+			}
+			if argBool(args, "persist", true) && d.Store != nil {
+				stamp := time.Now().UTC().Format("20060102-150405")
+				rel := filepath.ToSlash(filepath.Join("evals", "rankings", "ranking-"+stamp+".json"))
+				if path, werr := writeRepoJSON(d.Store.Root(), rel, ranking); werr != nil {
+					data["persist_error"] = werr.Error()
+				} else {
+					data["ranking_path"] = path
+				}
+			}
+			env := mcp.OK(trace(ctx), data)
+			if len(ranking.Unresolved) > 0 {
+				env = env.WithWarnings("unresolved tie: record a three-member non-conflicted commission vote via the commission argument")
+			}
+			if msg, ok := data["persist_error"]; ok {
+				env = env.WithWarnings(fmt.Sprintf("ranking not persisted: %v", msg))
+			}
+			return env.WithMetrics(map[string]any{
+				"entries":        len(ranking.Entries),
+				"unresolved":     len(ranking.Unresolved),
+				"rubric_version": evaluation.RubricVersion,
+			}), nil
+		},
+	))
+}
+
+// readAggregates loads aggregates from file paths and/or inline JSON.
+func readAggregates(root string, args map[string]any) ([]evaluation.Aggregate, error) {
+	aggregates := []evaluation.Aggregate{}
+	if raw, ok := args["aggregates_json"].([]any); ok {
+		for _, item := range raw {
+			data, err := json.Marshal(item)
+			if err != nil {
+				return nil, fmt.Errorf("cannot marshal inline aggregate: %w", err)
+			}
+			var aggregate evaluation.Aggregate
+			if err := json.Unmarshal(data, &aggregate); err != nil {
+				return nil, fmt.Errorf("cannot parse inline aggregate: %w", err)
+			}
+			aggregates = append(aggregates, aggregate)
+		}
+	}
+	for _, rel := range argStringSlice(args, "aggregates") {
+		full, err := resolveRepoPath(root, rel)
+		if err != nil {
+			return nil, err
+		}
+		data, err := os.ReadFile(full)
+		if err != nil {
+			return nil, fmt.Errorf("cannot read aggregate %s: %w", rel, err)
+		}
+		var aggregate evaluation.Aggregate
+		if err := json.Unmarshal(data, &aggregate); err != nil {
+			return nil, fmt.Errorf("cannot parse aggregate %s: %w", rel, err)
+		}
+		aggregates = append(aggregates, aggregate)
+	}
+	if len(aggregates) == 0 {
+		return nil, fmt.Errorf("aggregates or aggregates_json is required")
+	}
+	return aggregates, nil
 }
 
 func aggregateData(agg evaluation.Aggregate) map[string]any {
 	return map[string]any{
-		"snapshot_sha":      agg.SnapshotSHA,
-		"valid_judges":      agg.ValidJudges,
-		"inconclusive":      agg.Inconclusive,
-		"mean_total":        agg.MeanTotal,
-		"criterion_means":   agg.CriterionMeans,
-		"score_variance":    agg.ScoreVariance,
-		"high_disagreement": agg.HighDisagreement,
-		"common_deductions": agg.CommonDeductions,
-		"likely_questions":  agg.LikelyQuestions,
-		"top_improvements":  agg.TopImprovements,
-		"dropped_invalid":   agg.DroppedInvalid,
-		"dropped_conflict":  agg.DroppedConflict,
+		"snapshot_sha":            agg.SnapshotSHA,
+		"rubric_version":          agg.RubricVersion,
+		"min_valid_judges":        agg.MinValid,
+		"valid_judges":            agg.ValidJudges,
+		"inconclusive":            agg.Inconclusive,
+		"mean_total":              agg.MeanTotal,
+		"mean_total_rounded":      agg.MeanTotalRounded,
+		"criterion_means":         agg.CriterionMeans,
+		"criterion_means_rounded": agg.CriterionMeansRounded,
+		"score_variance":          agg.ScoreVariance,
+		"high_disagreement":       agg.HighDisagreement,
+		"common_deductions":       agg.CommonDeductions,
+		"likely_questions":        agg.LikelyQuestions,
+		"top_improvements":        agg.TopImprovements,
+		"dropped_invalid":         agg.DroppedInvalid,
+		"dropped_conflict":        agg.DroppedConflict,
 	}
 }
 

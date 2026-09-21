@@ -2,7 +2,7 @@
 
 Local Codex plugin backed by a typed MCP capability layer. Codex is the main reasoning engine, Skills define domain workflows, the local MCP server exposes deterministic and AI-powered capabilities, and the experimental Fly router recommends capability routes while Codex keeps the final decision.
 
-Status: v0.9.0. MCP runtime (33 tools), 17 standard-compliant skills (validator-enforced), session hooks, durable learnings, Codex subagents, four harness adapters, a full control plane (SQLite store, daemon, TUI, worktrees, agent runs, risk scoring, session handoff), staged build plans, PDF/XLSX processing, Fly v2 (keyword + embeddings + kNN memory + mushroom-body learning + LLM classifier), Postgres/MinIO backends, demo dashboard, install profiles/repair, a quality gate with a Go-enabled Docker target, a Fly A/B benchmark, plan review, security review and the evaluation subsystem (deterministic aggregation, calibration, loop decisions and bundle freezing) are in place.
+Status: v0.10.0. MCP runtime (34 tools), 17 standard-compliant skills (validator-enforced), session hooks, durable learnings, Codex subagents, four harness adapters, a full control plane (SQLite store, daemon, TUI, worktrees, agent runs, risk scoring, session handoff), staged build plans, PDF/XLSX processing, Fly v2 (keyword + embeddings + kNN memory + mushroom-body learning + LLM classifier), Postgres/MinIO backends, demo dashboard, install profiles/repair, a quality gate with a Go-enabled Docker target, a Fly A/B benchmark, plan review, security review and the evaluation subsystem (deterministic aggregation, calibration, loop decisions and bundle freezing) are in place.
 
 ## Contents
 
@@ -103,7 +103,7 @@ $task-router            mode + capability selection for every task
    -> domain skills     document-intelligence, data-analysis, time-series-analysis, ...
    -> $self-improvement-controller   bounded improvement rounds against the plan
    -> $project-cost     technical readiness score (gate)
-   -> $judge            Demo Day score from 3 isolated runs
+   -> $judge            Demo Day score from at least 3 valid isolated runs + regulation 9.6 ranking
    -> freeze            clean-room gate + read-only bundle
 ```
 
@@ -125,7 +125,7 @@ Skills are prompt packages (`plugins/hackathonkit/skills/`). Implicit skills tri
 | `government-services` | implicit | Procedures, requirements and deadlines grounded in an indexed regulation corpus | `documents.ingest`, `knowledge.index/search`, `reports.create` |
 | `kazakh-language` | implicit | Kazakh transcription, normalization, subtitles, language quality | `audio.transcribe`, `reports.create` |
 | `report-builder` | implicit | Deliverable reports, summaries and presentation text with evidence | `reports.create` |
-| `judge` | explicit-only | 3 isolated judge runs over a frozen bundle, official Demo Day rubric | `eval.freeze_bundle`, `eval.aggregate`, `eval.calibrate` |
+| `judge` | explicit-only | At least 3 valid isolated judge runs over a frozen demo bundle, official Demo Day rubric, substitute passes and 9.6 ranking | `eval.freeze_bundle`, `eval.aggregate`, `eval.calibrate`, `eval.rank` |
 | `project-cost` | explicit-only | Internal technical readiness score 0-100, evidence-only | `eval.compare` |
 | `roast-project` | explicit-only | Three isolated critics (bug hunter, product skeptic, reproducibility), findings only | reads the snapshot, no tools |
 | `cp-expert-refactoring` | explicit-only | Algorithmic and performance review of hot paths | `go test`, smoke handshake |
@@ -218,10 +218,11 @@ Every tool returns the shared envelope: `status` (`ok` | `partial` | `error`), `
 
 | Tool | Arguments | Returns |
 |---|---|---|
-| `eval.aggregate` | `reports[]` (repo-relative paths) or `reports_json[]`, `snapshot_sha`, `kind` (default `judges`), `persist` (default true) | `valid_judges`, `inconclusive`, `mean_total`, `criterion_means`, `score_variance`, `high_disagreement[]`, `common_deductions[]`, `likely_questions[]`, `top_improvements[]`, `dropped_invalid[]`, `dropped_conflict[]`, `aggregate_path` |
+| `eval.aggregate` | `reports[]` (repo-relative paths) or `reports_json[]`, `snapshot_sha`, `kind` (default `judges`), `persist` (default true) | `valid_judges`, `min_valid_judges`, `inconclusive`, unrounded `mean_total` + `mean_total_rounded`, `criterion_means`, `score_variance`, `high_disagreement[]`, `common_deductions[]`, `likely_questions[]`, `top_improvements[]`, `dropped_invalid[]`, `dropped_conflict[]`, `aggregate_path` |
 | `eval.calibrate` | `run1[]`/`run2[]` or `run1_json[]`/`run2_json[]`, `snapshot_sha`, `min_delta`, `persist` (default true) | `calibration.retest_delta`, `calibration.noise_floor`, `calibration_path` |
+| `eval.rank` | `aggregates[]` or `aggregates_json[]`, optional `commission {members, votes, grounds}`, `persist` (default true) | ordered `ranking` (9.6 tie-breaks, `tie_unresolved`, `commission`), `ranking_path` |
 | `eval.compare` | `mode` (`technical`/`judge`), `candidate` (required), `best`, `target`, `noise_floor`, `mandatory_scenario_failed`, `snapshot_sha`, `persist` (default false) | `decision` (`target_reached`/`accept`/`rollback`/`stop`), `reason`, `improvement` |
-| `eval.freeze_bundle` | `out` (default `judge-bundle`), `exclude[]`, `read_only` (default true), `model` | `bundle_path`, `bundle_hash`, `git_sha`, `files`, `bytes`, `excluded[]` |
+| `eval.freeze_bundle` | `out` (default `judge-bundle`), `profile` (`full`/`technical`/`demo`), `exclude[]`, `read_only` (default true), `model` | `bundle_path`, `bundle_hash`, `git_sha`, `profile`, `files`, `bytes`, `excluded[]` |
 
 ### Learning
 
@@ -329,9 +330,9 @@ Rubrics:
 
 Flow:
 
-1. `eval.freeze_bundle` copies a read-only snapshot (`git-sha.txt`, `rubric-version.txt`, `bundle.json`, `bundle-hash.txt`) excluding `logs/`, `data/`, `evals/`, `.env*`, `bin/`, `node_modules/` and the generated skills mirror.
-2. Three isolated judge runs score the bundle; each report needs judge id, snapshot sha, all five criteria within their max, a matching total, at least one evidence entry and reasons for every deduction.
-3. `eval.aggregate` drops invalid/conflicted/foreign-sha reports, requires a majority valid (at least 2 of 3), and computes mean, criterion means, sample variance, top-quartile high disagreement, common deductions and likely questions.
+1. `eval.freeze_bundle` copies a read-only snapshot (`git-sha.txt`, `rubric-version.txt`, `bundle.json`, `bundle-hash.txt`) excluding `logs/`, `data/`, `evals/`, `.env*`, `bin/`, `node_modules/` and the generated skills mirror. `profile: "demo"` keeps only presentation evidence (TASK, README, architecture, demo artifacts, limitations) because Demo Day judges do not re-check code (regulation 9.4).
+2. At least three valid isolated judge runs score the frozen demo bundle (no code re-check, regulation 9.4); each report needs judge id, snapshot sha, all five criteria within their max, a matching total, at least one evidence entry and reasons for every deduction.
+3. `eval.aggregate` drops invalid/conflicted/foreign-sha reports (a missing report is never zero), requires `min_valid_judges` (default 3) valid reports, and computes the unrounded mean, criterion means, sample variance, top-quartile high disagreement, common deductions and likely questions. Short runs trigger substitute passes. `eval.rank` orders candidates by regulation 9.6 with a recorded three-member commission for unresolved ties.
 4. `eval.calibrate` runs the same frozen snapshot twice: `retest_delta = abs(mean1 - mean2)`, `noise_floor = max(min_delta, 2 * retest_delta)`.
 5. `eval.compare` applies the loop rules: technical - any decrease rolls back; judge - only a regression above the noise floor rolls back; reaching the target accepts and exits; an improvement below the noise floor stops work on that axis.
 

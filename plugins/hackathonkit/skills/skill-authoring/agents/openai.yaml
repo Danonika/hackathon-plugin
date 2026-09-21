@@ -1,0 +1,7 @@
+interface:
+  display_name: "Skill Authoring"
+  short_description: "Add or update Hackathon Agent Kit skills to standard and validate them."
+  default_prompt: "Use $skill-authoring to add a new skill that passes validation."
+
+policy:
+  allow_implicit_invocation: false
