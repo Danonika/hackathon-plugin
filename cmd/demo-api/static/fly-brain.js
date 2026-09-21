@@ -75,11 +75,6 @@ export async function createBrainView(container) {
 
   const anatomy = new THREE.Group();
   brain.add(anatomy);
-  const pulseShell = new THREE.Mesh(
-    new THREE.SphereGeometry(1.55, 32, 24),
-    new THREE.MeshBasicMaterial({ color: 0x2bff9e, transparent: true, opacity: 0, depthWrite: false, blending: THREE.AdditiveBlending })
-  );
-  brain.add(pulseShell);
   const controls = new OrbitControls(camera, renderer.domElement);
   controls.enableDamping = true;
   controls.dampingFactor = 0.09;
@@ -327,12 +322,9 @@ export async function createBrainView(container) {
     const pulseColor = pulse < 0 ? 0xff3b5c : 0x2bff9e;
     regionMaterials[0].emissive.setHex(pulseColor);
     regionMaterials[1].emissive.setHex(pulseColor);
-    regionMaterials[0].emissiveIntensity = 0.1 + magnitude * 0.18;
-    regionMaterials[1].emissiveIntensity = 0.12 + magnitude * 0.26;
-    pulseShell.material.color.setHex(pulseColor);
-    // Оболочка — только тонкая подсветка по краям, а не заливка кадра.
-    pulseShell.material.opacity = magnitude * 0.025;
-    pulseShell.scale.setScalar(0.9 + magnitude * 0.3);
+    // Пульс живёт только в мешах и точках KC: кадр ничем не заливается.
+    regionMaterials[0].emissiveIntensity = 0.1 + magnitude * 0.22;
+    regionMaterials[1].emissiveIntensity = 0.12 + magnitude * 0.32;
     if (colors && points) {
       if (magnitude > 0.02) {
         const targetR = pulse < 0 ? 0.98 : 0.16;
