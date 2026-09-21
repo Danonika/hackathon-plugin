@@ -3,82 +3,202 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Fly Brain — мини-демо активности</title>
+<title>Fly Brain — активность мозга и события</title>
 <style>
-  :root { color-scheme: dark; }
+  :root {
+    color-scheme: dark;
+    --line: #ffffff14;
+    --muted: #87909f;
+    --pam: #6fe3b0;
+    --ppl1: #ef8f8f;
+    --kc: #a58cff;
+  }
   * { box-sizing: border-box; }
-  body { margin: 0; background: radial-gradient(ellipse at 40% 30%, #1b1b2c 0, transparent 55%), #0a0c12; color: #edf0f5; font-family: Inter, "Segoe UI", sans-serif; overflow: hidden; }
-  .wrap { display: grid; grid-template-columns: 1fr 420px; height: 100vh; }
-  .left { padding: 28px 32px; display: flex; flex-direction: column; gap: 14px; }
-  h1 { font-size: 26px; font-weight: 450; letter-spacing: -0.8px; margin: 0; }
-  .muted { color: #87909f; font-size: 12.5px; line-height: 1.6; }
-  .row { display: flex; gap: 10px; flex-wrap: wrap; }
-  button { font: inherit; color: inherit; cursor: pointer; border: 1px solid #ffffff22; background: #161a26; border-radius: 10px; padding: 10px 16px; font-size: 13px; }
-  button:hover { background: #1d2230; }
-  button.reward { border-color: #a4e8cf55; color: #bff3e0; }
-  button.pain { border-color: #ef9c9c55; color: #f3c4c4; }
-  .stat { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-top: auto; border-top: 1px solid #ffffff14; padding-top: 16px; }
-  .stat b { display: block; font-size: 22px; font-weight: 450; font-variant-numeric: tabular-nums; }
-  .stat small { color: #87909f; font-size: 10px; display: block; margin-top: 4px; }
-  .right { border-left: 1px solid #ffffff14; display: flex; flex-direction: column; }
-  .brain-head { padding: 18px 20px 8px; display: flex; justify-content: space-between; align-items: baseline; }
-  .brain-head h2 { font-size: 14px; font-weight: 500; margin: 0; }
-  .brain-head span { font-size: 10px; color: #87909f; }
-  #brain-view { flex: 1; min-height: 260px; }
-  #brain-view canvas { display: block; width: 100%; height: 100%; }
-  .legend { padding: 10px 20px 16px; font-size: 10.5px; color: #87909f; display: flex; gap: 14px; align-items: center; }
-  .key { display: inline-flex; gap: 6px; align-items: center; }
-  .key i { width: 7px; height: 7px; border-radius: 50%; display: inline-block; }
-  .stage { flex: 1; min-height: 220px; border: 1px solid #ffffff14; border-radius: 14px; overflow: hidden; position: relative; background: radial-gradient(ellipse at 45% 40%, #171a28 0, transparent 60%); }
+  html, body { height: 100%; }
+  body {
+    margin: 0; overflow: hidden; color: #edf0f5;
+    background: radial-gradient(ellipse at 35% 18%, #191b2b 0, transparent 55%), #0a0c12;
+    font-family: Inter, "Segoe UI", sans-serif;
+  }
+  .app { height: 100vh; display: grid; grid-template-rows: auto minmax(0, 1fr) auto; gap: 10px; padding: 10px; }
+  .card { background: linear-gradient(180deg, #12151f, #0f1219); border: 1px solid var(--line); border-radius: 14px; }
+  .muted { color: var(--muted); font-size: 11.5px; }
+
+  /* ── верхняя панель ─────────────────────────────────────────── */
+  .topbar { display: flex; align-items: center; gap: 12px; padding: 8px 12px; flex-wrap: wrap; }
+  .brand { display: flex; align-items: center; gap: 8px; }
+  .brand h1 { font-size: 15px; font-weight: 500; margin: 0; letter-spacing: -0.3px; }
+  .pill { font-size: 10.5px; padding: 3px 9px; border-radius: 999px; border: 1px solid var(--line); color: var(--muted); white-space: nowrap; }
+  .pill.live { color: #7ef0c0; border-color: #6fe3b055; }
+  .pill.live.off { color: var(--muted); border-color: #ffffff22; }
+  .controls { display: flex; align-items: center; gap: 8px; margin-left: auto; flex-wrap: wrap; }
+  button.btn {
+    font: inherit; font-size: 12.5px; color: inherit; cursor: pointer;
+    border: 1px solid #ffffff22; background: #161a26; border-radius: 10px; padding: 7px 13px;
+    transition: background .15s, box-shadow .15s, transform .15s;
+  }
+  button.btn:hover { background: #1d2230; }
+  button.btn.reward { border-color: #6fe3b055; color: #bff3e0; }
+  button.btn.pain { border-color: #ef8f8f55; color: #f3c4c4; }
+  button.btn.flash { transform: translateY(-1px); }
+  button.btn.reward.flash { box-shadow: 0 0 0 1px #6fe3b0aa, 0 0 20px -4px #6fe3b0; background: #14312699; }
+  button.btn.pain.flash { box-shadow: 0 0 0 1px #ef8f8faa, 0 0 20px -4px #ef8f8f; background: #31161699; }
+  .switch { display: inline-flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--muted); cursor: pointer; user-select: none; }
+  .switch input { position: absolute; opacity: 0; pointer-events: none; }
+  .switch .track { width: 34px; height: 18px; border-radius: 999px; background: #242a3a; border: 1px solid var(--line); position: relative; transition: background .18s, border-color .18s; }
+  .switch .knob { position: absolute; top: 2px; left: 2px; width: 12px; height: 12px; border-radius: 50%; background: #87909f; transition: transform .18s, background .18s; }
+  .switch input:checked + .track { background: #17372b; border-color: #6fe3b055; }
+  .switch input:checked + .track .knob { transform: translateX(16px); background: #7ef0c0; }
+  .switch input:focus-visible + .track { outline: 2px solid #6fe3b055; outline-offset: 2px; }
+
+  /* ── основная сетка: сцена 68% / мозг 32% ───────────────────── */
+  .grid { display: grid; grid-template-columns: minmax(0, 1fr) clamp(300px, 32%, 430px); gap: 10px; min-height: 0; }
+  .scene-card, .brain-card { display: flex; flex-direction: column; min-height: 0; }
+  .card-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; padding: 9px 12px 7px; }
+  .card-head h2 { font-size: 12.5px; font-weight: 500; margin: 0; letter-spacing: 0.2px; }
+  .stage { flex: 1; min-height: 0; margin: 0 8px 8px; border: 1px solid var(--line); border-radius: 12px; overflow: hidden; position: relative; background: radial-gradient(ellipse at 45% 40%, #171a28 0, transparent 62%); }
   .stage canvas { display: block; width: 100%; height: 100%; }
-  #fly-speech { position: absolute; left: 16px; top: 16px; z-index: 2; max-width: 280px; background: #141826f2; border: 1px solid #ffffff22; border-radius: 14px; padding: 10px 14px; font-size: 13px; line-height: 1.45; opacity: 0; transform: translateY(6px); transition: opacity .25s ease, transform .25s ease; pointer-events: none; }
+
+  #fly-speech {
+    position: absolute; left: 14px; top: 14px; z-index: 3; max-width: 300px;
+    background: #141826f2; border: 1px solid #ffffff22; border-radius: 14px; padding: 9px 13px;
+    font-size: 12.5px; line-height: 1.45; opacity: 0; transform: translateY(6px);
+    transition: opacity .25s ease, transform .25s ease; pointer-events: none;
+  }
   #fly-speech.show { opacity: 1; transform: none; }
-  #fly-speech::after { content: ''; position: absolute; left: 26px; bottom: -8px; border: 8px solid transparent; border-top-color: #141826f2; border-bottom: 0; }
-  .tune { display: flex; gap: 16px; align-items: center; flex-wrap: wrap; border: 1px solid #ffffff14; border-radius: 12px; padding: 10px 14px; font-size: 11.5px; color: #87909f; }
-  .tune label { display: flex; gap: 8px; align-items: center; }
-  .tune input[type=range] { width: 110px; accent-color: #a4e8cf; }
-  #tune-readout { margin-left: auto; font-variant-numeric: tabular-nums; }
-  #error { margin: 0 20px 16px; padding: 10px 12px; border: 1px solid #ef444455; background: #2a1414; color: #f3c4c4; border-radius: 8px; font-size: 12px; display: none; white-space: pre-wrap; }
-  @media (max-width: 900px) { .wrap { grid-template-columns: 1fr; grid-template-rows: 1fr 380px; } .right { border-left: 0; border-top: 1px solid #ffffff14; } }
+  #fly-speech::after { content: ''; position: absolute; left: 24px; bottom: -8px; border: 8px solid transparent; border-top-color: #141826f2; border-bottom: 0; }
+
+  #event-toast {
+    position: absolute; right: 14px; top: 14px; z-index: 3; font-size: 12.5px; font-weight: 500;
+    padding: 7px 14px; border-radius: 999px; opacity: 0; transform: translateY(-8px);
+    transition: opacity .2s ease, transform .2s ease; pointer-events: none;
+  }
+  #event-toast.show { opacity: 1; transform: none; }
+  #event-toast.reward { background: #123126e6; color: #bff3e0; border: 1px solid #6fe3b055; }
+  #event-toast.pain { background: #311616e6; color: #f3c4c4; border: 1px solid #ef8f8f55; }
+  #event-toast.info { background: #1a1d2ae6; color: #cfd6e4; border: 1px solid #ffffff22; }
+
+  .tune {
+    position: absolute; left: 50%; bottom: 12px; transform: translateX(-50%); z-index: 2;
+    display: flex; gap: 14px; align-items: center; flex-wrap: wrap; justify-content: center;
+    background: #0d1017d9; border: 1px solid var(--line); border-radius: 12px; padding: 8px 14px;
+    font-size: 11.5px; color: var(--muted); backdrop-filter: blur(4px);
+  }
+  .tune label { display: flex; gap: 7px; align-items: center; white-space: nowrap; }
+  .tune input[type=range] { width: 96px; accent-color: #6fe3b0; }
+  .tune b { color: #dfe6f2; font-weight: 500; font-variant-numeric: tabular-nums; min-width: 42px; }
+
+  /* ── мозг ───────────────────────────────────────────────────── */
+  #brain-view { flex: 1; min-height: 0; margin: 0 8px; }
+  #brain-view canvas { display: block; width: 100%; height: 100%; }
+  .brain-stats { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; padding: 8px; }
+  .bstat { border: 1px solid var(--line); border-radius: 10px; padding: 6px 9px; background: #0e111a; }
+  .bstat small { display: block; color: var(--muted); font-size: 10px; margin-bottom: 3px; }
+  .bstat b { font-size: 14px; font-weight: 500; font-variant-numeric: tabular-nums; }
+  .bstat.pam b { color: var(--pam); }
+  .bstat.ppl1 b { color: var(--ppl1); }
+  .bstat.kc b { color: #d9d2ff; }
+
+  /* ── телеметрия ─────────────────────────────────────────────── */
+  .telemetry { display: grid; grid-template-columns: minmax(280px, 340px) minmax(0, 1fr); gap: 12px; padding: 10px 12px; align-items: center; }
+  .metrics { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+  .metric { border: 1px solid var(--line); border-radius: 10px; padding: 6px 10px; background: #0e111a; }
+  .metric small { display: block; color: var(--muted); font-size: 10px; margin-bottom: 2px; }
+  .metric b { font-size: 16px; font-weight: 500; font-variant-numeric: tabular-nums; }
+  .metric .cap { color: #5d6675; font-size: 9.5px; margin-left: 5px; }
+  #m-reward { color: var(--pam); }
+  #m-ppl1 { color: var(--ppl1); }
+  .chart-wrap { position: relative; height: 104px; min-width: 0; }
+  #chart { width: 100%; height: 100%; display: block; }
+  .chart-legend { position: absolute; right: 4px; top: -2px; display: flex; gap: 10px; font-size: 10px; color: var(--muted); }
+  .chart-legend i { display: inline-block; width: 8px; height: 2px; border-radius: 2px; margin-right: 4px; vertical-align: middle; }
+
+  #error { margin: 0; padding: 8px 10px; border: 1px solid #ef444455; background: #2a1414; color: #f3c4c4; border-radius: 8px; font-size: 11.5px; display: none; white-space: pre-wrap; }
+
+  @media (max-width: 980px) {
+    body { overflow: auto; }
+    .app { height: auto; }
+    .grid { grid-template-columns: 1fr; }
+    .stage { min-height: 320px; }
+    #brain-view { min-height: 300px; }
+    .telemetry { grid-template-columns: 1fr; }
+  }
 </style>
 </head>
 <body>
-<div class="wrap">
-  <div class="left">
-    <h1>🪰 Активность мозга</h1>
-    <div class="muted">Мини-демо: справа — тот же рендер, что на странице мухи (реальные меши VFB + 4133 KC-нейрона).<br>
-      Нажми «Награда» или «Ошибка» — или дождись живого события из <code>/fly-neuron-events</code>.</div>
-    <div class="row">
-      <button class="reward" id="btn-reward">🍬 Награда (PAM)</button>
-      <button class="pain" id="btn-pain">⚡ Ошибка (PPL1)</button>
-      <button id="btn-live">▶ Живые события: вкл</button>
-      <button id="btn-reset">Сброс</button>
+<div class="app">
+
+  <header class="card topbar">
+    <div class="brand">
+      <h1>🧠 Активность мозга</h1>
+      <span class="pill live" id="live-pill">● LIVE</span>
+      <span class="pill"><b id="hdr-kc">4133</b> KC</span>
     </div>
-    <div class="tune">
-      <label title="Наклон тела вперёд/назад при награде">Наклон (pitch) <input type="range" id="t-pitch" min="0" max="1.5" step="0.05" value="0.9"><b id="v-pitch">+0.90</b></label>
-      <label title="Подъём корпуса — насколько высоко привстаёт">Подъём (lift) <input type="range" id="t-lift" min="0" max="0.8" step="0.02" value="0.38"><b id="v-lift">+0.38</b></label>
-      <label title="Амплитуда взмаха передних лапок">Взмах (flap) <input type="range" id="t-clap" min="0" max="3" step="0.1" value="1"><b id="v-clap">×1.0</b></label>
-      <span id="tune-readout"></span>
+    <div class="controls">
+      <button class="btn reward" id="btn-reward" title="Дофаминовое событие: активные KC подсвечиваются, меши получают зелёный пульс">🍬 Награда / PAM</button>
+      <button class="btn pain" id="btn-pain" title="Сигнал ошибки: активные KC подсвечиваются, меши получают красный пульс">⚡ Ошибка / PPL1</button>
+      <label class="switch" title="Подписка на поток /fly-live (SSE). Выключено — мозг не реагирует на события из логов.">
+        <input type="checkbox" id="tgl-live" checked>
+        <span class="track"><span class="knob"></span></span>
+        <span>Живые события</span>
+      </label>
+      <button class="btn" id="btn-reset" title="Сбросить подсветку и режим">↻ Сброс</button>
     </div>
-    <div class="muted" id="status">ожидание…</div>
-    <div class="stage" id="fly-stage"><div id="fly-speech"></div></div>
-    <div class="stat">
-      <div><b id="stat-active">0</b><small>активных KC</small></div>
-      <div><b id="stat-mode">idle</b><small>режим</small></div>
-      <div><b id="stat-events">0</b><small>событий получено</small></div>
+  </header>
+
+  <main class="grid">
+    <section class="card scene-card">
+      <div class="card-head">
+        <h2>🪰 Сцена</h2>
+        <span class="muted" id="status">ожидание…</span>
+      </div>
+      <div class="stage" id="fly-stage">
+        <div id="fly-speech"></div>
+        <div id="event-toast"></div>
+        <div class="tune">
+          <label title="Наклон (pitch) — наклон тела вперёд/назад при награде">Наклон (pitch) <input type="range" id="t-pitch" min="0" max="1.5" step="0.05" value="0.9"><b id="v-pitch">+0.90</b></label>
+          <label title="Подъём (lift) — насколько высоко привстаёт на задних лапках">Подъём (lift) <input type="range" id="t-lift" min="0" max="0.8" step="0.02" value="0.38"><b id="v-lift">+0.38</b></label>
+          <label title="Взмах (flap) — амплитуда хлопка передними лапками">Взмах (flap) <input type="range" id="t-clap" min="0" max="3" step="0.1" value="1"><b id="v-clap">×1.0</b></label>
+        </div>
+      </div>
+    </section>
+
+    <section class="card brain-card">
+      <div class="card-head">
+        <h2>🧠 Активность мозга</h2>
+        <span class="muted" id="brain-state">покой (idle)</span>
+      </div>
+      <div id="brain-view"></div>
+      <div class="brain-stats">
+        <div class="bstat kc"><small>Активные KC</small><b><span id="stat-active">0</span> / <span id="stat-total">4133</span></b></div>
+        <div class="bstat"><small>Spikes/s <span title="оценка: активные KC × текущая активность">(оценка)</span></small><b id="stat-spikes">0</b></div>
+        <div class="bstat pam"><small>PAM · награда</small><b id="stat-pam">0</b></div>
+        <div class="bstat ppl1"><small>PPL1 · ошибка</small><b id="stat-ppl1">0</b></div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="card telemetry">
+    <div class="metrics">
+      <div class="metric"><small>Активные KC (Kenyon cells)</small><b id="m-kc">0</b><span class="cap">из 4133</span></div>
+      <div class="metric"><small>Коррекции (correction)</small><b id="m-corr">0</b><span class="cap">за сессию</span></div>
+      <div class="metric"><small>Сигнал награды (reward)</small><b id="m-reward">+0.00</b><span class="cap">импульс PAM</span></div>
+      <div class="metric"><small>Сигнал ошибки (PPL1)</small><b id="m-ppl1">0.00</b><span class="cap">импульс боли</span></div>
     </div>
-  </div>
-  <div class="right">
-    <div class="brain-head"><h2>Мозг</h2><span>VFB meshes + KC activity</span></div>
-    <div id="brain-view"></div>
-    <div class="legend">
-      <span class="key"><i style="background:#b8a1f6"></i>KC нейроны</span>
-      <span class="key"><i style="background:#a4e8cf"></i>награда (PAM)</span>
-      <span class="key"><i style="background:#ef9c9c"></i>ошибка (PPL1)</span>
+    <div class="chart-wrap">
+      <canvas id="chart"></canvas>
+      <div class="chart-legend">
+        <span><i style="background:#6fe3b0"></i>PAM</span>
+        <span><i style="background:#ef8f8f"></i>PPL1</span>
+        <span><i style="background:#a58cff"></i>KC-активность</span>
+        <span>последние 20 с</span>
+      </div>
     </div>
-    <div id="error"></div>
-  </div>
+  </footer>
+
+  <div id="error"></div>
 </div>
+
 <script>
 window.onerror = function (msg, src, line) {
   var b = document.getElementById('error');
@@ -97,14 +217,16 @@ import * as THREE from 'three';
 import { createBrainView } from '/fly-static/fly-brain.js';
 import { loadFlyModel } from '/fly-static/fly-anatomy.js';
 
+const $ = id => document.getElementById(id);
 const KC_TOTAL = 4133;
-const view = await createBrainView(document.getElementById('brain-view'));
+const view = await createBrainView($('brain-view'));
 
-const stageEl = document.getElementById('fly-stage');
+/* ── сцена с мухой ─────────────────────────────────────────────── */
+const stageEl = $('fly-stage');
 const flyScene = new THREE.Scene();
 const flyCamera = new THREE.PerspectiveCamera(38, 1, 0.01, 40);
-flyCamera.position.set(3.1, 1.9, 4.6);
-flyCamera.lookAt(0, 0.5, 0);
+flyCamera.position.set(2.7, 1.7, 4.0);
+flyCamera.lookAt(0, 0.55, 0);
 const flyRenderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
 flyRenderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
 flyRenderer.setClearColor(0x000000, 0);
@@ -132,8 +254,9 @@ function resizeFlyStage() {
 resizeFlyStage();
 addEventListener('resize', resizeFlyStage);
 
-const state = { mode: 'idle', pulse: 0, activity: 0, events: 0, live: true };
-const $ = id => document.getElementById(id);
+/* ── состояние ─────────────────────────────────────────────────── */
+const state = { mode: 'idle', pulse: 0, activity: 0, events: 0, live: true, pam: 0, ppl1: 0, corrections: 0 };
+const MODE_LABEL = { idle: 'покой (idle)', reward: 'награда (reward)', correction: 'ошибка (correction)' };
 
 const FLY_PHRASES = [
   'I should work harder',
@@ -162,6 +285,23 @@ function showSpeech(reward) {
   speechTimer = setTimeout(() => el.classList.remove('show'), 4200);
 }
 
+let toastTimer = null;
+function showToast(text, kind) {
+  const el = $('event-toast');
+  el.textContent = text;
+  el.className = kind;
+  el.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => el.classList.remove('show'), 1400);
+}
+
+function flashButton(id) {
+  const el = $(id);
+  el.classList.add('flash');
+  setTimeout(() => el.classList.remove('flash'), 500);
+}
+
+/* ── ползунки управления мухой ─────────────────────────────────── */
 const tune = { pitch: 0.9, lift: 0.38, clapAmp: 1 };
 function bindTune() {
   const pitch = $('t-pitch'), lift = $('t-lift'), clap = $('t-clap');
@@ -172,13 +312,13 @@ function bindTune() {
     $('v-pitch').textContent = (tune.pitch >= 0 ? '+' : '') + tune.pitch.toFixed(2);
     $('v-lift').textContent = (tune.lift >= 0 ? '+' : '') + tune.lift.toFixed(2);
     $('v-clap').textContent = '×' + tune.clapAmp.toFixed(1);
-    $('tune-readout').textContent = '';
   };
   [pitch, lift, clap].forEach(el => el.addEventListener('input', sync));
   sync();
 }
 bindTune();
 
+/* ── импульс события: мозг + тост + кнопка + график ────────────── */
 function synthRecommendation(strength) {
   const count = Math.round(KC_TOTAL * 0.06);
   const active = [];
@@ -199,19 +339,37 @@ function synthRecommendation(strength) {
   };
 }
 
-function fire(kind) {
-  const strength = kind === 'reward' ? 1 : 0.8;
-  const status = view.update(synthRecommendation(strength));
+function fire(kind, opts = {}) {
+  const reward = kind === 'reward';
+  const strength = reward ? 1 : 0.8;
+  view.update(synthRecommendation(strength));
   state.mode = kind;
-  state.pulse = kind === 'reward' ? 1 : -1;
+  state.pulse = reward ? 1 : -1;
   state.events++;
-  $('stat-mode').textContent = kind;
-  $('stat-active').textContent = status.activeCount;
-  $('stat-events').textContent = state.events;
-  $('status').textContent = kind === 'reward'
+  if (reward) state.pam++; else { state.ppl1++; state.corrections++; }
+  flashButton(reward ? 'btn-reward' : 'btn-pain');
+  showToast(reward ? '🍬 + Награда · PAM' : '⚡ − Ошибка · PPL1', reward ? 'reward' : 'pain');
+  if (!opts.quiet) showSpeech(reward);
+  $('status').textContent = reward
     ? 'награда: активные KC подсвечены, на мешах зелёный дофаминовый пульс'
     : 'ошибка: активные KC подсвечены, на мешах красный сигнал боли';
-  showSpeech(kind === 'reward');
+  updateReadouts();
+}
+
+function updateReadouts() {
+  const status = view.getStatus();
+  const active = status.activeCount;
+  $('stat-active').textContent = active;
+  $('stat-total').textContent = status.kcTotal || KC_TOTAL;
+  $('hdr-kc').textContent = status.kcTotal || KC_TOTAL;
+  $('stat-spikes').textContent = active ? Math.round(active * (0.8 + 0.6 * state.activity)) : 0;
+  $('stat-pam').textContent = state.pam;
+  $('stat-ppl1').textContent = state.ppl1;
+  $('brain-state').textContent = MODE_LABEL[state.mode] || state.mode;
+  $('m-kc').textContent = active;
+  $('m-corr').textContent = state.corrections;
+  $('m-reward').textContent = '+' + Math.max(0, state.pulse).toFixed(2);
+  $('m-ppl1').textContent = Math.max(0, -state.pulse).toFixed(2);
 }
 
 $('btn-reward').onclick = () => fire('reward');
@@ -219,53 +377,163 @@ $('btn-pain').onclick = () => fire('correction');
 $('btn-reset').onclick = () => {
   state.mode = 'idle'; state.pulse = 0;
   view.update({ kc_total: KC_TOTAL, activation_available: false, activation_complete: true, ts: new Date().toISOString(), active_kc: [] });
-  $('stat-mode').textContent = 'idle';
-  $('stat-active').textContent = '0';
-  $('status').textContent = 'сброшено';
-};
-$('btn-live').onclick = () => {
-  state.live = !state.live;
-  $('btn-live').textContent = '▶ Живые события: ' + (state.live ? 'вкл' : 'выкл');
+  $('status').textContent = 'сброшено (reset)';
+  updateReadouts();
 };
 
-let lastEventId = '';
-async function poll() {
-  if (!state.live) return;
+/* ── живой поток /fly-live (SSE) + резервный опрос ─────────────── */
+let liveSource = null, pollTimer = null;
+let lastRecKey = '', lastFbKey = '';
+
+function setLivePill(mode) {
+  const pill = $('live-pill');
+  pill.classList.toggle('off', mode !== 'live');
+  pill.textContent = mode === 'live' ? '● LIVE' : mode === 'connecting' ? '○ подключение…' : '○ офлайн (опрос)';
+}
+
+function recKey(rec) { return String(rec.trace_id || rec.ts || ''); }
+function fbKey(fb) { return String(fb.ts || '') + '|' + String(fb.source || ''); }
+
+function applyRecommendation(rec, quiet) {
+  const status = view.update({
+    kc_total: rec.kc_total || KC_TOTAL,
+    activation_available: true,
+    activation_complete: true,
+    ts: rec.ts,
+    event_id: rec.trace_id,
+    active_kc: rec.active_kc || []
+  });
+  state.activity = Math.max(state.activity, 0.9);
+  if (!quiet) {
+    state.events++;
+    showToast('⚡ живое событие · route=' + (rec.route || '?'), 'info');
+    $('status').textContent = 'живое событие: encoder=' + (rec.encoder || '?') + ' · route=' + (rec.route || '?');
+  }
+  updateReadouts();
+  return status;
+}
+
+function applyFeedback(fb) {
+  const reward = fb.source === 'accepted' || fb.source === 'normal-teacher';
+  fire(reward ? 'reward' : 'correction');
+}
+
+function onSnapshot(ev) {
+  setLivePill('live');
+  let frame;
+  try { frame = JSON.parse(ev.data); } catch { return; }
+  const rec = frame.recommendation || null;
+  const fb = frame.feedback || null;
+  if (frame.initial) {
+    // Первый кадр восстанавливает историю: показываем рекомендацию, но не
+    // проигрываем старое событие награды/ошибки повторно.
+    if (rec) { applyRecommendation(rec, true); lastRecKey = recKey(rec); }
+    if (fb) lastFbKey = fbKey(fb);
+    $('status').textContent = 'поток /fly-live подключён · история восстановлена';
+    return;
+  }
+  if (rec) {
+    const key = recKey(rec);
+    if (key && key !== lastRecKey) { lastRecKey = key; applyRecommendation(rec, false); }
+  }
+  if (fb) {
+    const key = fbKey(fb);
+    if (key && key !== lastFbKey) { lastFbKey = key; applyFeedback(fb); }
+  }
+}
+
+function connectLive() {
+  if (liveSource) { liveSource.close(); liveSource = null; }
+  if (!state.live) { setLivePill('off'); return; }
+  setLivePill('connecting');
+  liveSource = new EventSource('/fly-live');
+  liveSource.addEventListener('snapshot', onSnapshot);
+  liveSource.onopen = () => { setLivePill('live'); stopPolling(); };
+  liveSource.onerror = () => { setLivePill('off'); startPolling(); };
+}
+
+async function pollOnce() {
   try {
     const [neurons, feedback] = await Promise.all([
       fetch('/fly-neuron-events?limit=10').then(r => r.json()),
       fetch('/fly-feedback?limit=5').then(r => r.json())
     ]);
     const rec = (neurons.events || []).filter(e => e.type === 'recommend').pop();
-    if (rec && rec.trace_id && rec.trace_id !== lastEventId) {
-      lastEventId = rec.trace_id;
-      const status = view.update({
-        kc_total: rec.kc_total || KC_TOTAL,
-        activation_available: true,
-        activation_complete: true,
-        ts: rec.ts,
-        event_id: rec.trace_id,
-        active_kc: rec.active_kc || []
-      });
-      state.events++;
-      $('stat-active').textContent = status.activeCount;
-      $('stat-events').textContent = state.events;
-      $('status').textContent = 'живое событие: encoder=' + (rec.encoder || '?') + ' · route=' + (rec.route || '?');
+    if (rec && rec.trace_id && rec.trace_id !== lastRecKey) {
+      lastRecKey = rec.trace_id;
+      applyRecommendation(rec, false);
     }
     const fb = (feedback.events || []).pop();
     if (fb && fb.ts) {
-      const reward = fb.source === 'accepted' || fb.source === 'normal-teacher';
-      state.mode = reward ? 'reward' : 'correction';
-      state.pulse = reward ? 1 : -1;
-      $('stat-mode').textContent = state.mode;
-      showSpeech(reward);
+      const key = fbKey(fb);
+      if (key !== lastFbKey) { lastFbKey = key; applyFeedback(fb); }
     }
   } catch (e) {
-    $('status').textContent = 'offline: ' + e.message;
+    $('status').textContent = 'офлайн: ' + e.message;
   }
 }
-poll(); setInterval(poll, 3000);
+function startPolling() { if (!pollTimer) pollTimer = setInterval(pollOnce, 3000); }
+function stopPolling() { if (pollTimer) { clearInterval(pollTimer); pollTimer = null; } }
 
+$('tgl-live').addEventListener('change', (e) => {
+  state.live = e.target.checked;
+  if (state.live) { connectLive(); } else { if (liveSource) liveSource.close(); liveSource = null; stopPolling(); setLivePill('off'); }
+});
+connectLive();
+
+/* ── мини-график: PAM / PPL1 / KC за 20 секунд ─────────────────── */
+const chart = $('chart');
+const cctx = chart.getContext('2d');
+const CHART_MAX = 100;
+const series = { pam: [], ppl1: [], kc: [] };
+let chartW = 0, chartH = 0, sampleAcc = 0;
+
+function sizeChart() {
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  const w = Math.max(chart.clientWidth, 1), h = Math.max(chart.clientHeight, 1);
+  chart.width = Math.round(w * dpr); chart.height = Math.round(h * dpr);
+  cctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  chartW = w; chartH = h;
+}
+sizeChart();
+addEventListener('resize', sizeChart);
+
+function pushSample() {
+  const status = view.getStatus();
+  const total = status.kcTotal || KC_TOTAL;
+  series.pam.push(Math.max(0, state.pulse));
+  series.ppl1.push(Math.max(0, -state.pulse));
+  series.kc.push(total ? status.activeCount / total : 0);
+  for (const key of Object.keys(series)) if (series[key].length > CHART_MAX) series[key].shift();
+}
+
+function drawChart() {
+  if (!chartW || !chartH) return;
+  cctx.clearRect(0, 0, chartW, chartH);
+  cctx.strokeStyle = '#ffffff10';
+  cctx.lineWidth = 1;
+  for (let i = 1; i <= 3; i++) {
+    const y = (chartH / 4) * i;
+    cctx.beginPath(); cctx.moveTo(0, y); cctx.lineTo(chartW, y); cctx.stroke();
+  }
+  const draw = (data, color, scale) => {
+    if (data.length < 2) return;
+    cctx.strokeStyle = color;
+    cctx.lineWidth = 1.6;
+    cctx.beginPath();
+    for (let i = 0; i < data.length; i++) {
+      const x = (i / (CHART_MAX - 1)) * chartW;
+      const y = chartH - Math.min(1, data[i] * scale) * (chartH - 6) - 3;
+      if (i === 0) cctx.moveTo(x, y); else cctx.lineTo(x, y);
+    }
+    cctx.stroke();
+  };
+  draw(series.kc, '#a58cff88', 1);
+  draw(series.pam, '#6fe3b0', 1);
+  draw(series.ppl1, '#ef8f8f', 1);
+}
+
+/* ── главный цикл ──────────────────────────────────────────────── */
 let last = performance.now();
 function loop(now) {
   requestAnimationFrame(loop);
@@ -305,6 +573,11 @@ function loop(now) {
     flight: state.mode === 'reward' ? 0.9 : state.mode === 'correction' ? 0.55 : 0
   });
   flyRenderer.render(flyScene, flyCamera);
+
+  sampleAcc += dt;
+  if (sampleAcc >= 0.2) { sampleAcc = 0; pushSample(); }
+  updateReadouts();
+  drawChart();
 }
 requestAnimationFrame(loop);
 </script>
