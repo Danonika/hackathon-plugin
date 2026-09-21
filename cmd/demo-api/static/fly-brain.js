@@ -66,7 +66,7 @@ export async function createBrainView(container) {
   const camera = new THREE.PerspectiveCamera(33, 1, 0.01, 40);
   const composer = new EffectComposer(renderer);
   composer.addPass(new RenderPass(scene, camera));
-  const bloomPass = new UnrealBloomPass(new THREE.Vector2(1, 1), 1.1, 0.65, 0.72);
+  const bloomPass = new UnrealBloomPass(new THREE.Vector2(1, 1), 1.35, 0.75, 0.62);
   composer.addPass(bloomPass);
 
   const brain = new THREE.Group();
