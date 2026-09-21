@@ -36,7 +36,10 @@ evaluation subsystem owns the arithmetic.
 | `document-intelligence` | extraction, classification, summaries |
 | `data-analysis` / `time-series-analysis` | tables, telemetry, anomalies |
 | `government-services` / `kazakh-language` / `report-builder` | domain deliverables |
-| `judge` / `project-cost` / `roast-project` / `cp-expert-refactoring` / `system-design-expert` / `self-improvement-controller` / `output-self-check` | explicit evaluation (`$name`) |
+| `tdd-workflow` / `verification-loop` / `git-workflow` | building and verifying code |
+| `search-first` / `codebase-onboarding` / `context-management` | reuse, onboarding, context economy |
+| `security-review` / `learning-loop` | security scanning and durable learnings |
+| `judge` / `project-cost` / `roast-project` / `cp-expert-refactoring` / `system-design-expert` / `self-improvement-controller` / `output-self-check` / `skill-authoring` | explicit (`$name`) |
 
 Skill authoring rules: `docs/SKILL-STANDARD.md`.
 
