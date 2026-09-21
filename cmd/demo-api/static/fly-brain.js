@@ -306,13 +306,14 @@ export async function createBrainView(container) {
         intensity[i] *= 0.96;
         if (intensity[i] < 0.02) intensity[i] = 0;
         const hash = ((i * 2654435761) ^ (sparkSeed * 40503)) >>> 0;
-        if (hash % 997 < 9) intensity[i] = Math.max(intensity[i], 0.7);
+        if (hash % 997 < 12) intensity[i] = Math.max(intensity[i], 0.75);
       }
       for (let i = 0; i < neuronCount; i++) {
         const s = Math.sqrt(intensity[i]);
-        colors[i * 3] = 0.42 + s * 0.58;
-        colors[i * 3 + 1] = 0.32 + s * 0.5;
-        colors[i * 3 + 2] = 0.78 + s * 0.22;
+        const tint = (i % 5) / 5;
+        colors[i * 3] = 0.40 + s * 0.6 - tint * 0.16;
+        colors[i * 3 + 1] = 0.34 + s * 0.52 + tint * 0.14;
+        colors[i * 3 + 2] = 0.80 + s * 0.2 - tint * 0.06;
       }
       points.geometry.attributes.intensity.needsUpdate = true;
       points.geometry.attributes.color.needsUpdate = true;
