@@ -1,0 +1,68 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  quality:
+    name: quality gate (linux)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: hooks behavior
+        run: node plugins/hackathonkit/scripts/hooks.test.js
+      - name: quality gate
+        run: ./scripts/quality-gate.sh
+
+  docker:
+    name: docker stack (linux)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: prepare env
+        run: cp .env.example .env
+      - name: compose config
+        run: docker compose config --quiet
+      - name: build images
+        run: docker compose build hackathonkit-mcp demo-api
+      - name: MCP selftest in the container
+        run: docker compose run --rm -T hackathonkit-mcp --selftest
+      - name: quality gate in the Go-enabled image
+        run: docker compose --profile quality run --rm quality
+      - name: start infrastructure
+        run: docker compose up -d postgres redis minio
+      - name: MCP handshake over compose
+        run: sh scripts/smoke.sh
+
+  windows:
+    name: windows (hooks + tests)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: build windows binary
+        run: go build -o bin/hackathonkit-mcp.exe ./cmd/hackathonkit-mcp
+      - name: go tests
+        run: go test ./...
+      - name: hooks behavior (real .exe lookup)
+        run: node plugins/hackathonkit/scripts/hooks.test.js
+      - name: selftest and skill validator
+        run: |
+          ./bin/hackathonkit-mcp.exe --selftest
+          ./bin/hackathonkit-mcp.exe --validate-skills

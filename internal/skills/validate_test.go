@@ -112,3 +112,33 @@ func TestValidateMissingSkillsDir(t *testing.T) {
 		t.Fatal("missing skills directory must fail")
 	}
 }
+
+func TestValidateRequiresPolicyForExplicitOnly(t *testing.T) {
+	root := t.TempDir()
+	explicitBody := strings.Replace(validSkillBody("explicit-demo", 140),
+		"description: \"Use when testing the validator. Produces a report.\"",
+		"description: \"Use when testing. Explicit-only: never invoke implicitly.\"", 1)
+	writeSkill(t, root, "explicit-demo", explicitBody, validOpenAI, map[string]string{"references/protocol.md": "x"})
+	report, err := Validate(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.OK {
+		t.Fatal("explicit-only skill without policy must fail")
+	}
+	problems := strings.Join(report.Skills[0].Problems, "; ")
+	if !strings.Contains(problems, "allow_implicit_invocation") {
+		t.Fatalf("problem = %q", problems)
+	}
+
+	root2 := t.TempDir()
+	policyYAML := validOpenAI + "policy:\n  allow_implicit_invocation: false\n"
+	writeSkill(t, root2, "explicit-demo", explicitBody, policyYAML, map[string]string{"references/protocol.md": "x"})
+	report2, err := Validate(root2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !report2.OK {
+		t.Fatalf("explicit-only skill with policy must pass: %+v", report2.Skills)
+	}
+}

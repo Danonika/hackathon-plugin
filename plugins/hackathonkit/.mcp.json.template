@@ -1,7 +1,7 @@
 {
   "mcpServers": {
     "hackathonkit": {
-      "command": "{{REPO_ROOT}}/plugins/hackathonkit/scripts/hackathonkit-mcp-launcher.sh",
+      "command": "{{REPO_ROOT}}/plugins/hackathonkit/scripts/{{MCP_LAUNCHER}}",
       "args": []
     }
   }

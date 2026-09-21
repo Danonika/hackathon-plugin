@@ -85,6 +85,10 @@ run("tool-use", { session_id: "A", tool_name: "alpha" });
 const alpha = events("session-events.jsonl").find((e) => e.tool === "alpha");
 check("explicit session id owns its event", alpha && alpha.session_id === "A", JSON.stringify(alpha));
 
+run("tool-use", { session_id: "A", tool: { name: "nested-tool" } });
+const nested = events("session-events.jsonl").find((e) => e.tool === "nested-tool");
+check("nested tool object is normalized to its name", Boolean(nested), JSON.stringify(events("session-events.jsonl").slice(-1)));
+
 run("tool-use", { tool_name: "beta" });
 const beta = events("session-events.jsonl").find((e) => e.tool === "beta");
 check("fallback attributes to the newest session", beta && beta.session_id === "B", JSON.stringify(beta));
@@ -101,6 +105,30 @@ check("B keeps ownership after A stops", gamma && gamma.session_id === "B", JSON
 
 run("stop", { session_id: "B" });
 check("registry empties after both stop", active().length === 0, JSON.stringify(active()));
+
+// --- Distinct ids keep distinct files after sanitizing -----------------------
+
+run("session-start", { session_id: "a/b" });
+run("session-start", { session_id: "a-b" });
+check("sanitized ids do not collide", active().length === 2, JSON.stringify(active()));
+run("stop", { session_id: "a/b" });
+const afterCollisionStop = active().map((entry) => entry.id);
+check("stopping one colliding id keeps the other", afterCollisionStop.length === 1 && afterCollisionStop[0] === "a-b", JSON.stringify(afterCollisionStop));
+run("stop", { session_id: "a-b" });
+check("collision fixtures cleaned up", active().length === 0, JSON.stringify(active()));
+
+// --- Stale sessions expire ---------------------------------------------------
+
+const sessionDirForTtl = path.join(root, "data", "control", "sessions");
+fs.mkdirSync(sessionDirForTtl, { recursive: true });
+const stalePath = path.join(sessionDirForTtl, "stale.json");
+fs.writeFileSync(stalePath, JSON.stringify({ id: "stale", started_at: "2020-01-01T00:00:00Z" }) + "\n");
+const old = new Date("2020-01-01T00:00:00Z");
+fs.utimesSync(stalePath, old, old);
+run("tool-use", { tool_name: "after-stale" });
+const afterStale = events("session-events.jsonl").find((e) => e.tool === "after-stale");
+check("stale session is not used as fallback", afterStale && afterStale.session_id === "", JSON.stringify(afterStale));
+check("stale session file is pruned", !fs.existsSync(stalePath), "stale.json still exists");
 
 // --- Session ids cannot escape the state directory ---------------------------
 
@@ -138,13 +166,29 @@ fs.mkdirSync(path.join(exeProject, "configs"), { recursive: true });
 fs.writeFileSync(path.join(exeProject, "configs", "routing.yaml"), "routing:\n  mode: normal\n  version: 1\n");
 fs.mkdirSync(path.join(exeProject, "bin"), { recursive: true });
 const exePath = path.join(exeProject, "bin", "hackathonkit-mcp.exe");
-fs.writeFileSync(exePath, '#!/bin/sh\necho FAKE_BINARY_CONTEXT\n');
-fs.chmodSync(exePath, 0o755);
-const exeOut = run("session-start", { session_id: "exe-1" }, {
-  cwd: exeProject,
-  env: { HACKATHONKIT_REPO_ROOT: undefined, PLUGIN_ROOT: undefined },
-});
-check(".exe binary context is used", exeOut.includes("FAKE_BINARY_CONTEXT"), exeOut.slice(0, 120));
+if (process.platform === "win32") {
+  // A non-PE fixture cannot execute on Windows; use the real binary when it is
+  // built (CI builds bin/hackathonkit-mcp.exe before this test).
+  const realExe = path.join(process.cwd(), "bin", "hackathonkit-mcp.exe");
+  if (fs.existsSync(realExe)) {
+    fs.copyFileSync(realExe, exePath);
+    const exeOut = run("session-start", { session_id: "exe-1" }, {
+      cwd: exeProject,
+      env: { HACKATHONKIT_REPO_ROOT: undefined, PLUGIN_ROOT: undefined },
+    });
+    check(".exe binary context is used", exeOut.includes("Hackathon Agent Kit session context"), exeOut.slice(0, 120));
+  } else {
+    console.log("[skip] .exe fixture requires a real PE binary; build bin/hackathonkit-mcp.exe first");
+  }
+} else {
+  fs.writeFileSync(exePath, '#!/bin/sh\necho FAKE_BINARY_CONTEXT\n');
+  fs.chmodSync(exePath, 0o755);
+  const exeOut = run("session-start", { session_id: "exe-1" }, {
+    cwd: exeProject,
+    env: { HACKATHONKIT_REPO_ROOT: undefined, PLUGIN_ROOT: undefined },
+  });
+  check(".exe binary context is used", exeOut.includes("FAKE_BINARY_CONTEXT"), exeOut.slice(0, 120));
+}
 fs.rmSync(exeProject, { recursive: true, force: true });
 
 fs.rmSync(root, { recursive: true, force: true });

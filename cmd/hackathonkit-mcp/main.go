@@ -27,7 +27,7 @@ import (
 	"hackathonkit.local/agentkit/internal/tools"
 )
 
-const version = "0.11.2"
+const version = "0.11.3"
 
 func main() {
 	selftest := flag.Bool("selftest", false, "run an in-process MCP handshake and exit")

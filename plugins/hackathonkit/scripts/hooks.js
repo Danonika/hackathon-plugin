@@ -12,9 +12,13 @@
  */
 "use strict";
 
+const crypto = require("crypto");
 const fs = require("fs");
 const path = require("path");
 const { execFileSync } = require("child_process");
+
+// A session without a stop event is expired after this window.
+const SESSION_TTL_MS = 12 * 60 * 60 * 1000;
 
 const EVENT = process.argv[2] || "";
 
@@ -58,7 +62,8 @@ function repoRoot() {
   for (const candidate of candidates) {
     if (looksLikeRepo(candidate)) return candidate;
   }
-  return candidates.find(Boolean) || process.cwd();
+  // Never fall back to an unvalidated plugin-cache path.
+  return process.cwd();
 }
 
 const ROOT = repoRoot();
@@ -127,11 +132,15 @@ function newSessionID() {
 // One file per session: concurrent start/stop operations touch different files
 // and can never erase each other's state.
 function safeStem(id) {
-  const stem = String(id)
-    .replace(/[^A-Za-z0-9._-]+/g, "-")
-    .replace(/^[.-]+|[.-]+$/g, "")
-    .slice(0, 80);
-  return stem || "session";
+  const raw = String(id);
+  const stem =
+    raw
+      .replace(/[^A-Za-z0-9._-]+/g, "-")
+      .replace(/^[.-]+|[.-]+$/g, "")
+      .slice(0, 64) || "session";
+  // A short hash keeps distinct ids distinct after sanitizing and truncation.
+  const hash = crypto.createHash("sha1").update(raw).digest("hex").slice(0, 8);
+  return stem + "-" + hash;
 }
 
 function sessionFile(id) {
@@ -155,6 +164,7 @@ function removeActive(id) {
 function readActive() {
   try {
     const entries = [];
+    const now = Date.now();
     for (const name of fs.readdirSync(SESSIONS_DIR)) {
       if (!name.endsWith(".json")) continue;
       const full = path.join(SESSIONS_DIR, name);
@@ -162,6 +172,15 @@ function readActive() {
         const entry = JSON.parse(fs.readFileSync(full, "utf8"));
         if (!entry || typeof entry.id !== "string" || !entry.id) continue;
         const stat = fs.statSync(full);
+        const started = Date.parse(entry.started_at || "") || stat.mtimeMs;
+        if (now - started > SESSION_TTL_MS) {
+          // A session that never emitted stop (crash, timeout) must not keep
+          // stealing events; expire it.
+          try {
+            fs.unlinkSync(full);
+          } catch (_) {}
+          continue;
+        }
         entries.push({ entry, mtime: stat.mtimeMs });
       } catch (_) {}
     }
@@ -223,13 +242,13 @@ function binaryContext() {
 }
 
 function toolName(payload) {
-  return (
-    payload.tool_name ||
-    payload.tool ||
-    payload.name ||
-    (payload.tool && typeof payload.tool === "object" && payload.tool.name) ||
-    ""
-  );
+  if (payload.tool && typeof payload.tool === "object" && typeof payload.tool.name === "string") {
+    return payload.tool.name;
+  }
+  for (const candidate of [payload.tool_name, payload.tool, payload.name]) {
+    if (typeof candidate === "string" && candidate) return candidate;
+  }
+  return "";
 }
 
 switch (EVENT) {

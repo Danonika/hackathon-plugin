@@ -28,22 +28,8 @@ if ($Profile -eq "core") {
   Write-Host "[setup] core profile: explicit-only evaluation skills excluded from mirrors (the plugin still ships all skills)"
 }
 
-$templatePath = Join-Path $root "plugins\hackathonkit\.mcp.json.template"
-if (-not (Test-Path -LiteralPath $templatePath)) {
-  Write-Error "[setup] template not found: $templatePath"
-  exit 1
-}
-$template = Get-Content -LiteralPath $templatePath -Raw
-$manifest = $template.Replace("{{REPO_ROOT}}", $root.Replace("\", "/")).Replace("hackathonkit-mcp-launcher.sh", "hackathonkit-mcp-launcher.cmd")
-$manifestPath = Join-Path $root "plugins\hackathonkit\.mcp.json"
-$manifestTmp = "$manifestPath.tmp"
-try {
-  [System.IO.File]::WriteAllText($manifestTmp, $manifest, (New-Object System.Text.UTF8Encoding($false)))
-  Move-Item -LiteralPath $manifestTmp -Destination $manifestPath -Force
-} finally {
-  if (Test-Path -LiteralPath $manifestTmp) { Remove-Item -LiteralPath $manifestTmp -Force -ErrorAction SilentlyContinue }
-}
-Write-Host "[setup] generated plugins/hackathonkit/.mcp.json with the absolute repository root"
+& (Join-Path $root "scripts\gen-mcp-manifest.ps1") -Root $root
+if ($LASTEXITCODE -ne 0) { Write-Error "[setup] manifest generation failed"; exit 1 }
 
 New-Item -ItemType Directory -Force -Path (Join-Path $root "logs"), (Join-Path $root "evals"), (Join-Path $root "data\artifacts"), (Join-Path $root "data\index"), (Join-Path $root "data\control"), (Join-Path $root "data\judge-bundles") | Out-Null
 

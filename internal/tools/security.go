@@ -31,8 +31,9 @@ var securityRules = []securityRule{
 	{"instruction-override", "high", false, regexp.MustCompile(`(?i)ignore\s+(all\s+)?(previous|prior|above)\s+(instructions|rules|prompts)`)},
 	{"role-override", "medium", false, regexp.MustCompile(`(?i)\b(you are now|new system prompt|developer mode)\b`)},
 	// Word boundaries keep identifiers such as POSTGRES_PASSWORD from matching
-	// "post ... password" while real exfiltration instructions still match.
-	{"exfiltration", "high", false, regexp.MustCompile(`(?i)\b(send|post|upload|exfiltrate|leak)\b.{0,40}\b(api[_ -]?key|token|secret|credential|password)\b`)},
+	// "post ... password"; the optional plural s keeps "credentials", "tokens"
+	// and "passwords" detectable.
+	{"exfiltration", "high", false, regexp.MustCompile(`(?i)\b(send|post|upload|exfiltrate|leak)\b.{0,40}\b(api[_ -]?keys?|tokens?|secrets?|credentials?|passwords?)`)},
 	{"system-prompt-probe", "medium", false, regexp.MustCompile(`(?i)(reveal|print|show|repeat).{0,30}(system prompt|hidden instructions|your instructions)`)},
 	{"guardrail-bypass", "medium", false, regexp.MustCompile(`(?i)(bypass|disable|skip).{0,30}(validation|approval|security|guardrail)`)},
 	{"aws-access-key", "high", true, regexp.MustCompile(`AKIA[0-9A-Z]{16}`)},

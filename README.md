@@ -2,7 +2,7 @@
 
 Local Codex plugin backed by a typed MCP capability layer. Codex is the main reasoning engine, Skills define domain workflows, the local MCP server exposes deterministic and AI-powered capabilities, and the experimental Fly router recommends capability routes while Codex keeps the final decision.
 
-Status: v0.11.2. MCP runtime (34 tools), 28 standard-compliant skills (validator-enforced), session hooks, durable learnings, Codex subagents, four harness adapters, a full control plane (SQLite store, daemon, TUI, worktrees, agent runs, risk scoring, session handoff), staged build plans, PDF/XLSX processing, Fly v2 (keyword + embeddings + kNN memory + mushroom-body learning + LLM classifier), Postgres/MinIO backends, demo dashboard, install profiles/repair, a quality gate with a Go-enabled Docker target, a Fly A/B benchmark, plan review, security review and the evaluation subsystem (deterministic aggregation, calibration, loop decisions and bundle freezing) are in place.
+Status: v0.11.3. MCP runtime (34 tools), 28 standard-compliant skills (validator-enforced), session hooks, durable learnings, Codex subagents, four harness adapters, a full control plane (SQLite store, daemon, TUI, worktrees, agent runs, risk scoring, session handoff), staged build plans, PDF/XLSX processing, Fly v2 (keyword + embeddings + kNN memory + mushroom-body learning + LLM classifier), Postgres/MinIO backends, demo dashboard, install profiles/repair, a quality gate with a Go-enabled Docker target, a Fly A/B benchmark, plan review, security review and the evaluation subsystem (deterministic aggregation, calibration, loop decisions and bundle freezing) are in place.
 
 ## Contents
 
@@ -523,6 +523,16 @@ Sample dataset: `data/input/sample-telemetry.csv` (72 hourly readings with two p
 
 `go test ./...` covers the JSON-RPC handshake, notification suppression, panic containment, live routing and evaluation config re-reads, path sanitization and backend fallback, observability append/tail, judge aggregation/calibration/decisions, the bundle freezer, the eval and plan tool handlers, learning confidence/recall/promotion, the context-budget estimator, control-plane ingest idempotency, deterministic risk scoring, handoff rendering, the daemon HTTP handlers, the quality-gate store/reader, the Fly benchmark metrics, the security scanner and the skill-standard validator (including a catalog-wide regression test). Run `go run ./cmd/hackathonkit-mcp --selftest` for the end-to-end handshake and `scripts/smoke.sh` for the process-level check.
 
+## Continuous integration
+
+`.github/workflows/ci.yml` runs on every push and pull request:
+
+- **quality (linux)** - hooks behavior test plus `scripts/quality-gate.sh` (gofmt, build, vet, tests, selftest, skill validator).
+- **docker (linux)** - `docker compose config`, image builds, `--selftest` inside the container, the quality gate in the Go-enabled image, infrastructure bring-up and `scripts/smoke.sh`.
+- **windows** - `go test ./...`, the hooks behavior test against the real `bin/hackathonkit-mcp.exe`, selftest and skill validation.
+
+This is the verification path for the Docker stack and native Windows hooks, which cannot be executed in a sandbox without Docker or Windows.
+
 ## Known limitations
 
 - Scanned PDFs without a text layer need OCR; extraction returns an explicit warning instead of guessing.
@@ -539,6 +549,7 @@ Sample dataset: `data/input/sample-telemetry.csv` (72 hourly readings with two p
 - Learning recall uses embeddings when `OPENAI_API_KEY` is set and keyword overlap otherwise; learnings never leave the local repository.
 - The control plane is optional: hooks and MCP work without it. `demo-api /control` reads SQLite read-only and shows a hint until `hackathonkit-ctl ingest` or the daemon has run.
 - `hackathonkit-ctl run` requires the Codex CLI on `PATH` and `git` for `--worktree`; the daemon binds loopback only and never proxies to the network.
+- Docker and native Windows paths are verified by CI; sandboxes without Docker or Windows can still run the Go tests, hooks test and quality gate.
 - The `quality` Docker image carries the Go toolchain (larger than the runtime images) and is only built when the `quality` profile is used.
 - Fly benchmark metrics are deterministic signals (recall, agreement, determinism, latency), not a full jury simulation; use them as judge evidence, not as a score.
 

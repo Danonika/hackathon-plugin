@@ -72,6 +72,9 @@ type openaiInterface struct {
 		ShortDescription string `yaml:"short_description"`
 		DefaultPrompt    string `yaml:"default_prompt"`
 	} `yaml:"interface"`
+	Policy struct {
+		AllowImplicitInvocation *bool `yaml:"allow_implicit_invocation"`
+	} `yaml:"policy"`
 }
 
 var (
@@ -172,8 +175,13 @@ func validateSkill(base, name string) SkillReport {
 		}
 	}
 
-	if err := validateOpenAIYAML(dir); err != nil {
+	doc, err := validateOpenAIYAML(dir)
+	if err != nil {
 		item.Problems = append(item.Problems, err.Error())
+	} else if strings.Contains(fm.Description, "Explicit-only:") {
+		if doc.Policy.AllowImplicitInvocation == nil || *doc.Policy.AllowImplicitInvocation {
+			item.Problems = append(item.Problems, "explicit-only skill must set policy.allow_implicit_invocation: false in agents/openai.yaml")
+		}
 	}
 
 	if len(item.Problems) > 0 {
@@ -199,28 +207,28 @@ func parseFrontmatter(text string) (frontmatter, error) {
 	return fm, nil
 }
 
-func validateOpenAIYAML(dir string) error {
+func validateOpenAIYAML(dir string) (openaiInterface, error) {
 	data, err := os.ReadFile(filepath.Join(dir, "agents", "openai.yaml"))
 	if err != nil {
-		return fmt.Errorf("missing agents/openai.yaml")
+		return openaiInterface{}, fmt.Errorf("missing agents/openai.yaml")
 	}
 	var doc openaiInterface
 	if err := yaml.Unmarshal(data, &doc); err != nil {
-		return fmt.Errorf("agents/openai.yaml does not parse: %v", err)
+		return openaiInterface{}, fmt.Errorf("agents/openai.yaml does not parse: %v", err)
 	}
 	if strings.TrimSpace(doc.Interface.DisplayName) == "" {
-		return fmt.Errorf("agents/openai.yaml is missing interface.display_name")
+		return doc, fmt.Errorf("agents/openai.yaml is missing interface.display_name")
 	}
 	if strings.TrimSpace(doc.Interface.ShortDescription) == "" {
-		return fmt.Errorf("agents/openai.yaml is missing interface.short_description")
+		return doc, fmt.Errorf("agents/openai.yaml is missing interface.short_description")
 	}
 	if len([]rune(doc.Interface.ShortDescription)) > maxShortDescription {
-		return fmt.Errorf("agents/openai.yaml short_description exceeds %d chars", maxShortDescription)
+		return doc, fmt.Errorf("agents/openai.yaml short_description exceeds %d chars", maxShortDescription)
 	}
 	if strings.TrimSpace(doc.Interface.DefaultPrompt) == "" {
-		return fmt.Errorf("agents/openai.yaml is missing interface.default_prompt")
+		return doc, fmt.Errorf("agents/openai.yaml is missing interface.default_prompt")
 	}
-	return nil
+	return doc, nil
 }
 
 func referencedFiles(text string) []string {
