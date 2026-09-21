@@ -1,6 +1,9 @@
 import * as THREE from 'three';
 import { OBJLoader } from 'three/addons/loaders/OBJLoader.js';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 
 const DEFAULT_KC_TOTAL = 4133;
 const MAX_SNAPSHOT_AGE_MS = 5000;
@@ -61,6 +64,11 @@ export async function createBrainView(container) {
 
   const scene = new THREE.Scene();
   const camera = new THREE.PerspectiveCamera(33, 1, 0.01, 40);
+  const composer = new EffectComposer(renderer);
+  composer.addPass(new RenderPass(scene, camera));
+  const bloomPass = new UnrealBloomPass(new THREE.Vector2(1, 1), 1.1, 0.65, 0.72);
+  composer.addPass(bloomPass);
+
   const brain = new THREE.Group();
   brain.rotation.set(-0.23, 0.07, -0.035);
   scene.add(brain);
@@ -284,6 +292,7 @@ export async function createBrainView(container) {
     camera.position.copy(direction.normalize().multiplyScalar(distance).add(controls.target));
     camera.updateProjectionMatrix();
     renderer.setSize(width, height, false);
+    composer.setSize(width, height);
     controls.update();
   }
 
@@ -362,7 +371,7 @@ export async function createBrainView(container) {
       points.geometry.attributes.color.needsUpdate = true;
     }
     controls.update();
-    renderer.render(scene, camera);
+    composer.render();
   }
 
   function dispose() {
