@@ -38,6 +38,24 @@ func TestReadAnyTableTSVAndErrors(t *testing.T) {
 	}
 }
 
+func TestBOMHeaderStripped(t *testing.T) {
+	reg, root := testRegistry(t)
+	mustWrite(t, filepath.Join(root, "data", "input", "bom.csv"), "\ufeffts,value\n2026-01-01 00:00:00,1\n2026-01-01 01:00:00,2\n")
+
+	env := call(t, reg, "files.describe", map[string]any{"path": "bom.csv"})
+	if env.Status != "ok" {
+		t.Fatalf("status %s data %+v", env.Status, env.Data)
+	}
+	data := env.Data.(map[string]any)
+	headers := data["headers"].([]string)
+	if headers[0] != "ts" {
+		t.Fatalf("headers[0] = %q, want ts", headers[0])
+	}
+	if data["has_timestamp"] != true {
+		t.Fatalf("has_timestamp = %v, want true", data["has_timestamp"])
+	}
+}
+
 func TestColumnIndexFallback(t *testing.T) {
 	tbl := &table{Headers: []string{" Timestamp ", "Measured Value", "note"}}
 	cases := []struct {

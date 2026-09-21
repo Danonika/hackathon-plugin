@@ -56,7 +56,11 @@ func readCSVTable(path string, delimiter string) (*table, error) {
 	if len(records) == 0 {
 		return nil, fmt.Errorf("empty table")
 	}
-	return &table{Headers: records[0], Rows: records[1:]}, nil
+	headers := records[0]
+	if len(headers) > 0 {
+		headers[0] = strings.TrimPrefix(headers[0], "\ufeff")
+	}
+	return &table{Headers: headers, Rows: records[1:]}, nil
 }
 
 func (t *table) columnIndex(name string) int {
