@@ -44,6 +44,14 @@ Call the smallest set that finishes the task. Do not list or call tools "just in
 | `quality.gate` | - | latest gate evidence (`sha`, `ok`, `summary`, `failed[]`, checks) |
 | `security.review` | `text` or `path` or `artifact_id` | `findings[]` (type, severity, line, redacted excerpt), `counts`, `clean` |
 
+## Telegram
+
+| Tool | Arguments | Returns |
+|---|---|---|
+| `telegram.send` | `text` (required), `chat_id`, `parse_mode`, `silent`, `reply_to` | `message_id`, `chat_id`, `chunks`; partial + hint when unconfigured |
+| `telegram.validate` | `chat_id` (optional) | `bot`, `chat`, `recent_chats` for id discovery |
+| `telegram.manage` | `action` (`get_updates`/`set_commands`/`set_webhook`/`delete_webhook`) + per-action args | action result; https-only webhooks |
+
 ## Evaluation
 
 | Tool | Arguments | Returns |

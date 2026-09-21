@@ -24,10 +24,11 @@ import (
 	"hackathonkit.local/agentkit/internal/routing/fly"
 	"hackathonkit.local/agentkit/internal/skills"
 	"hackathonkit.local/agentkit/internal/storage"
+	"hackathonkit.local/agentkit/internal/telegram"
 	"hackathonkit.local/agentkit/internal/tools"
 )
 
-const version = "0.11.3"
+const version = "0.12.0"
 
 func main() {
 	selftest := flag.Bool("selftest", false, "run an in-process MCP handshake and exit")
@@ -103,6 +104,7 @@ func main() {
 	logger := observability.NewLogger(os.Stderr)
 	store := storage.New(root, cfg.Storage)
 	oa := openai.New(cfg.OpenAI)
+	tg := telegram.New(telegram.SettingsFromEnv())
 	router := fly.NewRouter(cfg.Routing)
 	router.WithMemory(filepath.Join(root, "data", "index", "fly-memory.json"))
 	router.WithBrain(filepath.Join(root, "data", "index", "fly-brain.json"))
@@ -147,6 +149,7 @@ func main() {
 		Metrics:  metrics,
 		Router:   router,
 		Learning: learn,
+		Telegram: tg,
 		Meta:     meta,
 		Version:  version,
 	})

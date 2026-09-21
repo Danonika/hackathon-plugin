@@ -1,7 +1,7 @@
 # Hackathon Agent Kit for Codex CLI
 
 This supplements the root `AGENTS.md` with Codex-specific guidance. The plugin
-registers the MCP server, 28 skills and three lifecycle hooks; the repository
+registers the MCP server, 29 skills and three lifecycle hooks; the repository
 fallback path (`.codex/config.toml` + `.agents/skills`) works without the
 plugin.
 

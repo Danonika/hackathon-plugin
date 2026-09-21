@@ -2,7 +2,7 @@
 
 Local Codex plugin backed by a typed MCP capability layer. Codex is the main reasoning engine, Skills define domain workflows, the local MCP server exposes deterministic and AI-powered capabilities, and the experimental Fly router recommends capability routes while Codex keeps the final decision.
 
-Status: v0.11.3. MCP runtime (34 tools), 28 standard-compliant skills (validator-enforced), session hooks, durable learnings, Codex subagents, four harness adapters, a full control plane (SQLite store, daemon, TUI, worktrees, agent runs, risk scoring, session handoff), staged build plans, PDF/XLSX processing, Fly v2 (keyword + embeddings + kNN memory + mushroom-body learning + LLM classifier), Postgres/MinIO backends, demo dashboard, install profiles/repair, a quality gate with a Go-enabled Docker target, a Fly A/B benchmark, plan review, security review and the evaluation subsystem (deterministic aggregation, calibration, loop decisions and bundle freezing) are in place.
+Status: v0.12.0. MCP runtime (37 tools), 29 standard-compliant skills (validator-enforced), session hooks, durable learnings, Codex subagents, four harness adapters, a full control plane (SQLite store, daemon, TUI, worktrees, agent runs, risk scoring, session handoff), staged build plans, PDF/XLSX processing, Fly v2 (keyword + embeddings + kNN memory + mushroom-body learning + LLM classifier), Postgres/MinIO backends, demo dashboard, install profiles/repair, a quality gate with a Go-enabled Docker target, a Fly A/B benchmark, plan review, security review, a Telegram integration capability for built projects and the evaluation subsystem (deterministic aggregation, calibration, loop decisions and bundle freezing) are in place.
 
 ## Contents
 
@@ -15,6 +15,7 @@ Status: v0.11.3. MCP runtime (34 tools), 28 standard-compliant skills (validator
 - [Learnings](#learnings)
 - [Control plane](#control-plane)
 - [MCP tools](#mcp-tools)
+- [Telegram integration](#telegram-integration)
 - [Routing modes](#routing-modes)
 - [Evaluation subsystem](#evaluation-subsystem)
 - [Demo UI](#demo-ui)
@@ -52,6 +53,7 @@ Codex (reasoning, final decisions)
         data.*              inspect, query, analyze tables
         timeseries.*        analyze, detect anomalies
         classification.*    deterministic keyword rules
+        telegram.*          send, validate and manage a project Telegram bot
         charts/reports.*    SVG and markdown/HTML artifacts
         audio/vision.*      OpenAI transcription and vision (need OPENAI_API_KEY)
   |
@@ -129,6 +131,7 @@ Skills are prompt packages (`plugins/hackathonkit/skills/`). Implicit skills tri
 | `verification-loop` | implicit | Pre-claim verification: gofmt/build/vet/test/selftest/skills, mandatory scenario, artifacts | `quality.gate`, `plan.status`, `eval.compare`, `learning.record` |
 | `git-workflow` | implicit | Checkpoint commits, no secrets, worktree isolation, evidence in commit bodies | `plan.status`, `plan.update`, `system.context` |
 | `devops-expert` | implicit | Dockerfile/compose configuration and diagnosis, static validation, build/up/health, stack troubleshooting with command evidence | `quality.gate`, `system.context`, `security.review`, `reports.create`, `plan.update`, `learning.record` |
+| `telegram-integration` | implicit | Integrate Telegram notifications and a read-only management bot into the project being built (BotFather, alerts/digests, dedupe, allowlisted commands, Go/Node recipes) | `telegram.send`, `telegram.validate`, `telegram.manage`, `security.review`, `reports.create`, `learning.record` |
 | `search-first` | implicit | Reuse-before-build: repo, catalog, registries, existing artifacts; adopt/extend/compose/build | `system.capabilities`, `system.context_budget`, `knowledge.search`, `reports.create` |
 | `codebase-onboarding` | implicit | Map an unfamiliar repo into an architecture artifact with commands, modules, risks | `system.context`, `system.capabilities`, `system.context_budget`, `reports.create`, `learning.record` |
 | `context-management` | implicit | Keep the context window lean: budget audit, progressive disclosure, artifact offloading | `system.context_budget`, `system.capabilities`, `reports.create` |
@@ -258,6 +261,14 @@ Every tool returns the shared envelope: `status` (`ok` | `partial` | `error`), `
 | `quality.gate` | - | latest gate evidence: `sha`, `ok`, `summary`, `failed[]`, per-check status/duration/output |
 | `security.review` | `text` or `path` or `artifact_id` | `findings[]` (type, severity, line, redacted excerpt), `counts`, `clean` |
 
+### Telegram
+
+| Tool | Arguments | Returns |
+|---|---|---|
+| `telegram.send` | `text` (required), `chat_id`, `parse_mode`, `silent`, `reply_to` | `message_id`, `chat_id`, `chunks`; partial + hint when `TELEGRAM_BOT_TOKEN` is unset |
+| `telegram.validate` | `chat_id` (optional) | `bot` (getMe), `chat` (getChat), `recent_chats` (getUpdates) for chat/topic id discovery |
+| `telegram.manage` | `action` (`get_updates`/`set_commands`/`set_webhook`/`delete_webhook`) + per-action args | action result; https-only webhooks; no arbitrary API passthrough |
+
 ### Files and documents
 
 | Tool | Arguments | Returns |
@@ -299,6 +310,16 @@ Time columns accept RFC3339, `YYYY-MM-DD[ HH:MM[:SS]]`, `DD.MM.YYYY` and epoch s
 | `vision.analyze` | `path`, `prompt` | analysis text + `artifact_id` (requires `OPENAI_API_KEY`) |
 
 Input paths are relative to `data/input`; `artifact_id` values are relative to `data/artifacts`; `eval.*` report paths are relative to the repository root. Absolute paths and `..` are rejected.
+
+## Telegram integration
+
+A capability for the **project being built**: product alerts, digests and a small management bot, set up and tested during the build with the `telegram.*` MCP tools. It is not a channel for Hackathon Agent Kit harness alerts.
+
+- Configure `.env`: `TELEGRAM_BOT_TOKEN` from BotFather, `TELEGRAM_CHAT_ID`, and `TELEGRAM_ALLOWED_CHAT_IDS` for chat overrides. The token is read from the environment only and never appears in tool output, logs or judge bundles (`.env*` is excluded).
+- Discover ids: send a message to the bot, then call `telegram.validate` (getMe, getChat, recent getUpdates).
+- Send: `telegram.send` chunks text at 4096 characters, supports HTML parse mode and silent delivery; a `chat_id` override must be allowlisted.
+- Manage: `telegram.manage` reads updates, sets the bot command list and sets/deletes an https webhook.
+- Implement in the project with the `$telegram-integration` skill (implicit): BotFather setup, alert/digest patterns with dedupe and rate limits, read-only inbound commands (`/status`, `/subscribe`, `/unsubscribe`, `/help`) with an allowlist, and Go/Node recipes. The skill also covers documenting the integration in the project README, which judges score.
 
 ## Routing modes
 
@@ -399,7 +420,7 @@ Artifacts always land in `data/artifacts` (offline-safe). With the environment c
 
 `configs/routing.yaml`: `routing.mode` + `routing.version` (see [Routing modes](#routing-modes)).
 
-`.env` variables: `OPENAI_API_KEY`, `OPENAI_BASE_URL`, `HACKATHONKIT_DEMO_PORT`, `HACKATHONKIT_DEMO_TOKEN`, `HACKATHONKIT_UID`, `HACKATHONKIT_GID`, `POSTGRES_PASSWORD`, `MINIO_ROOT_PASSWORD`; plus `POSTGRES_DSN`, `MINIO_*` and `HACKATHONKIT_REPO_ROOT` for direct runs. `.env` is loaded from the repo root without overwriting existing environment variables.
+`.env` variables: `OPENAI_API_KEY`, `OPENAI_BASE_URL`, `HACKATHONKIT_DEMO_PORT`, `HACKATHONKIT_DEMO_TOKEN`, `HACKATHONKIT_UID`, `HACKATHONKIT_GID`, `POSTGRES_PASSWORD`, `MINIO_ROOT_PASSWORD`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, `TELEGRAM_ALLOWED_CHAT_IDS`; plus `POSTGRES_DSN`, `MINIO_*` and `HACKATHONKIT_REPO_ROOT` for direct runs. `.env` is loaded from the repo root without overwriting existing environment variables.
 
 ## Observability
 
@@ -480,6 +501,7 @@ internal/routing/fly/      Fly router (keyword, embeddings, kNN memory, MB brain
 internal/learning/         durable confidence-scored learnings (instincts)
 internal/plans/            staged build plans under evals/plans/
 internal/control/          SQLite store, JSONL ingest, risk scoring, session handoff
+internal/telegram/         Telegram Bot API client for the telegram.* tools (token never logged)
 internal/evaluation/       judge-report validation/aggregation, calibration, loop decisions, bundle freezer
 internal/tools/            capability implementations
 internal/storage/          filesystem storage with path sanitization + backend attach
@@ -521,7 +543,7 @@ Sample dataset: `data/input/sample-telemetry.csv` (72 hourly readings with two p
 
 ## Testing
 
-`go test ./...` covers the JSON-RPC handshake, notification suppression, panic containment, live routing and evaluation config re-reads, path sanitization and backend fallback, observability append/tail, judge aggregation/calibration/decisions, the bundle freezer, the eval and plan tool handlers, learning confidence/recall/promotion, the context-budget estimator, control-plane ingest idempotency, deterministic risk scoring, handoff rendering, the daemon HTTP handlers, the quality-gate store/reader, the Fly benchmark metrics, the security scanner and the skill-standard validator (including a catalog-wide regression test). Run `go run ./cmd/hackathonkit-mcp --selftest` for the end-to-end handshake and `scripts/smoke.sh` for the process-level check.
+`go test ./...` covers the JSON-RPC handshake, notification suppression, panic containment, live routing and evaluation config re-reads, path sanitization and backend fallback, observability append/tail, judge aggregation/calibration/decisions, the bundle freezer, the eval and plan tool handlers, learning confidence/recall/promotion, the context-budget estimator, control-plane ingest idempotency, deterministic risk scoring, handoff rendering, the daemon HTTP handlers, the quality-gate store/reader, the Fly benchmark metrics, the security scanner, the Telegram client and tools (fake Bot API; no live calls in CI) and the skill-standard validator (including a catalog-wide regression test). Run `go run ./cmd/hackathonkit-mcp --selftest` for the end-to-end handshake and `scripts/smoke.sh` for the process-level check.
 
 ## Continuous integration
 
@@ -550,6 +572,8 @@ This is the verification path for the Docker stack and native Windows hooks, whi
 - The control plane is optional: hooks and MCP work without it. `demo-api /control` reads SQLite read-only and shows a hint until `hackathonkit-ctl ingest` or the daemon has run.
 - `hackathonkit-ctl run` requires the Codex CLI on `PATH` and `git` for `--worktree`; the daemon binds loopback only and never proxies to the network.
 - Docker and native Windows paths are verified by CI; sandboxes without Docker or Windows can still run the Go tests, hooks test and quality gate.
+- `telegram.*` tools need outbound HTTPS to `api.telegram.org`; all tests use a fake Bot API, so CI never calls Telegram. The Go/Node recipes in the skill are documentation and drift-prone: verify the current library APIs before shipping.
+- Telegram is a capability for the project being built; Hackathon Agent Kit itself does not send harness alerts to Telegram.
 - The `quality` Docker image carries the Go toolchain (larger than the runtime images) and is only built when the `quality` profile is used.
 - Fly benchmark metrics are deterministic signals (recall, agreement, determinism, latency), not a full jury simulation; use them as judge evidence, not as a score.
 

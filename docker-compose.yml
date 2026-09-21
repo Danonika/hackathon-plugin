@@ -12,6 +12,9 @@ services:
       HACKATHONKIT_REPO_ROOT: /workspace
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       OPENAI_BASE_URL: ${OPENAI_BASE_URL:-}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:-}
+      TELEGRAM_ALLOWED_CHAT_IDS: ${TELEGRAM_ALLOWED_CHAT_IDS:-}
       POSTGRES_DSN: postgres://hackathonkit:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@postgres:5432/hackathonkit?sslmode=disable
       MINIO_ENDPOINT: minio:9000
       MINIO_ACCESS_KEY: hackathonkit

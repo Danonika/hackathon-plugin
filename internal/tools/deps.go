@@ -13,6 +13,7 @@ import (
 	"hackathonkit.local/agentkit/internal/openai"
 	"hackathonkit.local/agentkit/internal/routing/fly"
 	"hackathonkit.local/agentkit/internal/storage"
+	"hackathonkit.local/agentkit/internal/telegram"
 )
 
 type Deps struct {
@@ -22,6 +23,7 @@ type Deps struct {
 	Metrics  *observability.Metrics
 	Router   *fly.Router
 	Learning *learning.Store
+	Telegram *telegram.Client
 	Meta     metadata.Recorder
 	Version  string
 }
@@ -33,6 +35,7 @@ func RegisterAll(reg *mcp.Registry, d Deps) {
 	registerPlans(reg, d)
 	registerQuality(reg, d)
 	registerSecurity(reg, d)
+	registerTelegram(reg, d)
 	registerContextBudget(reg, d)
 	registerFiles(reg, d)
 	registerDocuments(reg, d)
@@ -137,7 +140,9 @@ func argMap(args map[string]any, key string) map[string]any {
 func domainCapabilities(reg *mcp.Registry) []string {
 	out := []string{}
 	for _, name := range reg.Names() {
-		if strings.HasPrefix(name, "system.") || strings.HasPrefix(name, "routing.") || strings.HasPrefix(name, "files.") || strings.HasPrefix(name, "eval.") || strings.HasPrefix(name, "learning.") {
+		if strings.HasPrefix(name, "system.") || strings.HasPrefix(name, "routing.") || strings.HasPrefix(name, "files.") ||
+			strings.HasPrefix(name, "eval.") || strings.HasPrefix(name, "learning.") || strings.HasPrefix(name, "plan.") ||
+			strings.HasPrefix(name, "quality.") || strings.HasPrefix(name, "security.") || strings.HasPrefix(name, "telegram.") {
 			continue
 		}
 		out = append(out, name)

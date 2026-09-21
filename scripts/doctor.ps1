@@ -71,6 +71,13 @@ if (Test-Path -LiteralPath $statePath) {
 }
 Check "install state" (Test-Path -LiteralPath $statePath) $(if ($stateVersion) { "version $stateVersion" } else { "missing configs/install-state.json; run scripts/setup.ps1" })
 
+$telegramSet = $false
+if ($env:TELEGRAM_BOT_TOKEN) { $telegramSet = $true }
+elseif (Test-Path (Join-Path $root ".env")) {
+  $telegramSet = [bool](Select-String -Path (Join-Path $root ".env") -Pattern "^TELEGRAM_BOT_TOKEN=.+" -Quiet)
+}
+Write-Host ("[info] {0,-22} {1}" -f "telegram", $(if ($telegramSet) { "configured" } else { "not configured (set TELEGRAM_BOT_TOKEN in .env)" }))
+
 $node = Get-Command node -ErrorAction SilentlyContinue
 Check "node (hooks)" ($null -ne $node) $(if ($node) { (node --version) } else { "not found; session hooks require Node 18+" })
 if ($node) {

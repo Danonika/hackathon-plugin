@@ -127,6 +127,12 @@ else
   echo "[info] skill standard check skipped (no local binary; run scripts/setup.sh)"
 fi
 
+if [ -n "$TELEGRAM_BOT_TOKEN" ] || grep -q '^TELEGRAM_BOT_TOKEN=.' "$ROOT/.env" 2>/dev/null; then
+  echo "[info] telegram             configured (telegram.* tools available)"
+else
+  echo "[info] telegram             not configured (set TELEGRAM_BOT_TOKEN in .env)"
+fi
+
 if command -v node >/dev/null 2>&1; then
   check "node (hooks)" 1 "$(node --version 2>/dev/null)"
   if node "$ROOT/plugins/hackathonkit/scripts/hooks.test.js" >/dev/null 2>&1; then

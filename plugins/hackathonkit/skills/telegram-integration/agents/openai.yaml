@@ -1,0 +1,4 @@
+interface:
+  display_name: "Telegram Integration"
+  short_description: "Add Telegram alerts and a small bot to the team's project."
+  default_prompt: "Use $telegram-integration to add Telegram notifications to this project."

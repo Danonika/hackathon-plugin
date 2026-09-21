@@ -12,6 +12,7 @@ Run top to bottom; each item is either proven by a command or reported as a gap.
 - [ ] `.env.example` lists every `${VAR:?}` compose variable with an empty or placeholder value.
 - [ ] `plugins/hackathonkit/.mcp.json` invokes `hackathonkit-mcp-launcher.sh` (or `.cmd` on Windows), not `docker` directly, so a binary-only install works.
 - [ ] Shell scripts are executable: `git ls-files -s scripts/*.sh` shows mode `100755`.
+- [ ] Telegram (optional): `TELEGRAM_*` values are passed only as environment variables, never baked into images; the stack can reach `api.telegram.org` when the built project needs it.
 
 ## Static Validation
 

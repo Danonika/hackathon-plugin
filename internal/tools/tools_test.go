@@ -15,6 +15,7 @@ import (
 	"hackathonkit.local/agentkit/internal/observability"
 	"hackathonkit.local/agentkit/internal/routing/fly"
 	"hackathonkit.local/agentkit/internal/storage"
+	"hackathonkit.local/agentkit/internal/telegram"
 )
 
 func testRegistry(t *testing.T) (*mcp.Registry, string) {
@@ -39,6 +40,7 @@ func testRegistry(t *testing.T) (*mcp.Registry, string) {
 		Metrics:  observability.NewMetrics(),
 		Router:   fly.NewRouter(mgr.Config().Routing),
 		Learning: learning.NewStore(filepath.Join(root, "data", "index", "learnings.json"), learning.ProjectKey(root)),
+		Telegram: telegram.New(telegram.Settings{}),
 		Version:  "test",
 	})
 	return reg, root
