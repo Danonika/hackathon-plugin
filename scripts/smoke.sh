@@ -9,16 +9,52 @@ REQUESTS=$(cat <<'EOF'
 EOF
 )
 
-if [ -x "$ROOT/bin/hackathonkit-mcp" ]; then
-  OUT="$(printf '%s\n' "$REQUESTS" | "$ROOT/bin/hackathonkit-mcp" --repo-root "$ROOT" 2>/dev/null)"
-else
-  if ! command -v docker >/dev/null 2>&1; then
-    echo "[smoke] no MCP runtime available (build bin/ or start docker)" >&2
-    exit 1
-  fi
+TRANSPORT="auto"
+case "${1:-}" in
+  ""|--auto) TRANSPORT="auto" ;;
+  --binary) TRANSPORT="binary" ;;
+  --compose) TRANSPORT="compose" ;;
+  *)
+    echo "[smoke] unknown argument: $1 (expected --auto, --binary or --compose)" >&2
+    exit 2
+    ;;
+esac
+
+run_binary() {
+  printf '%s\n' "$REQUESTS" | "$ROOT/bin/hackathonkit-mcp" --repo-root "$ROOT" 2>/dev/null
+}
+
+run_compose() {
   cd "$ROOT"
-  OUT="$(printf '%s\n' "$REQUESTS" | docker compose -f "$ROOT/docker-compose.yml" run --rm -T hackathonkit-mcp 2>/dev/null)"
-fi
+  printf '%s\n' "$REQUESTS" | docker compose -f "$ROOT/docker-compose.yml" run --rm -T hackathonkit-mcp 2>/dev/null
+}
+
+case "$TRANSPORT" in
+  binary)
+    if [ ! -x "$ROOT/bin/hackathonkit-mcp" ]; then
+      echo "[smoke] --binary requires $ROOT/bin/hackathonkit-mcp" >&2
+      exit 1
+    fi
+    OUT="$(run_binary)"
+    ;;
+  compose)
+    if ! command -v docker >/dev/null 2>&1; then
+      echo "[smoke] --compose requires the docker CLI" >&2
+      exit 1
+    fi
+    OUT="$(run_compose)"
+    ;;
+  auto)
+    if [ -x "$ROOT/bin/hackathonkit-mcp" ]; then
+      OUT="$(run_binary)"
+    elif command -v docker >/dev/null 2>&1; then
+      OUT="$(run_compose)"
+    else
+      echo "[smoke] no MCP runtime available (build bin/ or start docker)" >&2
+      exit 1
+    fi
+    ;;
+esac
 
 LINES=$(printf '%s\n' "$OUT" | grep -c '"jsonrpc"' || true)
 if [ "$LINES" != "3" ]; then

@@ -73,7 +73,7 @@ curl -fsS http://127.0.0.1:8787/healthz
 
 - [ ] Infrastructure containers are `running`/`healthy`: `docker compose ps`.
 - [ ] The quality gate exits 0 inside the image (or the reason is recorded).
-- [ ] Doctor and smoke pass; three valid JSON-RPC responses, `isError: false`.
+- [ ] Doctor and smoke pass (`sh scripts/smoke.sh --compose` forces the container transport); three valid JSON-RPC responses, `isError: false`.
 - [ ] `/healthz` reports `status: ok` and the live routing mode.
 - [ ] `docker compose logs --tail=50 <service>` has no repeated error loop.
 

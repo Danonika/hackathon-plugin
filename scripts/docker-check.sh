@@ -40,18 +40,10 @@ if [ ! -f .env ]; then
 fi
 
 # Containers run as HACKATHONKIT_UID:HACKATHONKIT_GID; align them with the current user
-# so bind-mounted data/, logs/, evals/ and configs/ stay writable.
-set_env() {
-  key="$1"
-  value="$2"
-  awk -v k="$key" -v v="$value" 'BEGIN { done = 0 }
-    $0 ~ "^" k "=" { print k "=" v; done = 1; next }
-    { print }
-    END { if (!done) print k "=" v }' .env > .env.tmp
-  mv .env.tmp .env
-}
-set_env HACKATHONKIT_UID "$(id -u)"
-set_env HACKATHONKIT_GID "$(id -g)"
+# so bind-mounted data/, logs/, evals/ and configs/ stay writable. env-set.sh
+# preserves the .env permission bits (a plain rewrite would downgrade 0600).
+sh "$ROOT/scripts/env-set.sh" .env HACKATHONKIT_UID "$(id -u)"
+sh "$ROOT/scripts/env-set.sh" .env HACKATHONKIT_GID "$(id -g)"
 
 mkdir -p logs evals data/artifacts data/index data/control data/judge-bundles
 
@@ -116,7 +108,7 @@ if [ "$MODE" = "full" ]; then
 fi
 
 echo "[docker-check] MCP handshake over compose"
-sh scripts/smoke.sh
+sh scripts/smoke.sh --compose
 
 trap - EXIT
 echo "[docker-check] ok (mode: $MODE)"

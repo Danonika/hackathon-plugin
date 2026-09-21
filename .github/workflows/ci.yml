@@ -21,6 +21,10 @@ jobs:
           node-version: "20"
       - name: hooks behavior
         run: node plugins/hackathonkit/scripts/hooks.test.js
+      - name: shell regression tests
+        run: |
+          sh scripts/env-set.test.sh
+          sh scripts/smoke.test.sh
       - name: quality gate
         run: ./scripts/quality-gate.sh
 

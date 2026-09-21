@@ -227,3 +227,111 @@ func TestChunkTextAndEscapeHTML(t *testing.T) {
 		t.Fatalf("EscapeHTML = %q", got)
 	}
 }
+
+func TestGetUpdatesOutlivesDefaultTimeout(t *testing.T) {
+	fake := &fakeBot{handler: func(call int, method string, payload map[string]any) (int, string) {
+		if method == "getUpdates" {
+			time.Sleep(300 * time.Millisecond)
+			return 200, `{"ok":true,"result":[]}`
+		}
+		time.Sleep(300 * time.Millisecond)
+		return 200, `{"ok":true,"result":{}}`
+	}}
+	client := testClient(t, fake, Settings{Timeout: 100 * time.Millisecond})
+
+	if _, err := client.GetMe(context.Background()); err == nil {
+		t.Fatal("a normal call must respect the default request deadline")
+	}
+	if _, err := client.GetUpdates(context.Background(), 0, 5, 1); err != nil {
+		t.Fatalf("a long poll must outlive the default request deadline: %v", err)
+	}
+}
+
+func balancedHTML(chunk string) bool {
+	depth := 0
+	for _, match := range htmlTagPattern.FindAllStringSubmatch(chunk, -1) {
+		full := match[0]
+		switch {
+		case strings.HasPrefix(full, "</"):
+			depth--
+		case strings.HasSuffix(full, "/>"):
+		default:
+			depth++
+		}
+		if depth < 0 {
+			return false
+		}
+	}
+	return depth == 0
+}
+
+func TestChunkHTMLBalancesTags(t *testing.T) {
+	text := "<b>" + strings.Repeat("x", 5000) + "</b>"
+	chunks := ChunkHTML(text, MaxMessageChars)
+	if len(chunks) != 2 {
+		t.Fatalf("chunks = %d, want 2", len(chunks))
+	}
+	for i, chunk := range chunks {
+		if len([]rune(chunk)) > MaxMessageChars {
+			t.Fatalf("chunk %d has %d runes", i, len([]rune(chunk)))
+		}
+		if !balancedHTML(chunk) {
+			t.Fatalf("chunk %d is not balanced HTML: %q...", i, chunk[:20])
+		}
+	}
+	if !strings.HasSuffix(chunks[0], "</b>") {
+		t.Fatalf("first chunk must close the tag: %q", chunks[0][len(chunks[0])-10:])
+	}
+	if !strings.HasPrefix(chunks[1], "<b>") {
+		t.Fatalf("second chunk must reopen the tag: %q", chunks[1][:10])
+	}
+}
+
+func TestChunkHTMLNestedTags(t *testing.T) {
+	text := "<b><i>" + strings.Repeat("y", 5000) + "</i></b>"
+	chunks := ChunkHTML(text, 100)
+	if len(chunks) < 2 {
+		t.Fatalf("expected multiple chunks, got %d", len(chunks))
+	}
+	for i, chunk := range chunks {
+		if len([]rune(chunk)) > 100 {
+			t.Fatalf("chunk %d has %d runes", i, len([]rune(chunk)))
+		}
+		if !balancedHTML(chunk) {
+			t.Fatalf("chunk %d is not balanced: %q", i, chunk)
+		}
+	}
+	if !strings.HasPrefix(chunks[1], "<b><i>") {
+		t.Fatalf("nested tags must reopen in order: %q", chunks[1][:12])
+	}
+}
+
+func TestChunkHTMLEscapedEntitiesAreNotTags(t *testing.T) {
+	text := "&lt;b&gt;" + strings.Repeat("z", 200)
+	chunks := ChunkHTML(text, 50)
+	for _, chunk := range chunks {
+		if strings.Contains(chunk, "</") {
+			t.Fatalf("escaped entities must not create tags: %q", chunk)
+		}
+	}
+}
+
+func TestSendMessageHTMLChunksAreValid(t *testing.T) {
+	fake := &fakeBot{}
+	client := testClient(t, fake, Settings{ChatID: "42"})
+	if _, err := client.SendMessage(context.Background(), "<b>"+strings.Repeat("q", 5000)+"</b>", SendOptions{ParseMode: "HTML"}); err != nil {
+		t.Fatal(err)
+	}
+	fake.mu.Lock()
+	payloads := append([]map[string]any{}, fake.payloads...)
+	fake.mu.Unlock()
+	if len(payloads) != 2 {
+		t.Fatalf("requests = %d, want 2", len(payloads))
+	}
+	for i, payload := range payloads {
+		text, _ := payload["text"].(string)
+		if len([]rune(text)) > MaxMessageChars || !balancedHTML(text) {
+			t.Fatalf("payload %d is invalid HTML: %q", i, text)
+		}
+	}
+}

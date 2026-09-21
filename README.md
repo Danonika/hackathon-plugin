@@ -2,7 +2,7 @@
 
 Local Codex plugin backed by a typed MCP capability layer. Codex is the main reasoning engine, Skills define domain workflows, the local MCP server exposes deterministic and AI-powered capabilities, and the experimental Fly router recommends capability routes while Codex keeps the final decision.
 
-Status: v0.12.3. MCP runtime (37 tools), 29 standard-compliant skills (validator-enforced), 92% Go test coverage with an 80% gate, session hooks, durable learnings, Codex subagents, four harness adapters, a full control plane (SQLite store, daemon, TUI, worktrees, agent runs, risk scoring, session handoff), staged build plans, PDF/XLSX processing, Fly v2 (keyword + embeddings + kNN memory + mushroom-body learning + LLM classifier), Postgres/MinIO backends, demo dashboard, install profiles/repair, a quality gate with a Go-enabled Docker target, a Fly A/B benchmark, plan review, security review, a Telegram integration capability for built projects and the evaluation subsystem (deterministic aggregation, calibration, loop decisions and bundle freezing) are in place.
+Status: v0.12.4. MCP runtime (37 tools), 29 standard-compliant skills (validator-enforced), 92% Go test coverage with an 80% gate, session hooks, durable learnings, Codex subagents, four harness adapters, a full control plane (SQLite store, daemon, TUI, worktrees, agent runs, risk scoring, session handoff), staged build plans, PDF/XLSX processing, Fly v2 (keyword + embeddings + kNN memory + mushroom-body learning + LLM classifier), Postgres/MinIO backends, demo dashboard, install profiles/repair, a quality gate with a Go-enabled Docker target, a Fly A/B benchmark, plan review, security review, a Telegram integration capability for built projects and the evaluation subsystem (deterministic aggregation, calibration, loop decisions and bundle freezing) are in place.
 
 ## Contents
 
@@ -197,7 +197,7 @@ Plans (`plan.create` / `plan.update` / `plan.status`) are stored under `evals/pl
 
 ## Quality gate
 
-`scripts/docker-check.sh` verifies the container stack end to end (config, builds, readiness, selftest, quality image, handshake) and aligns `HACKATHONKIT_UID`/`HACKATHONKIT_GID` with the current user first.
+`scripts/docker-check.sh` verifies the container stack end to end (config, builds, readiness, selftest, quality image, handshake) and aligns `HACKATHONKIT_UID`/`HACKATHONKIT_GID` with the current user first; the handshake is forced through Compose (`smoke.sh --compose`) so a local `bin/` binary cannot mask a broken container.
 
 `scripts/quality-gate.sh` runs gofmt, `go build ./...`, `go vet ./...`, `go test ./...`, `scripts/coverage-check.sh` (total coverage >= `HACKATHONKIT_COVERAGE_TARGET`, default 80%), the MCP selftest and the skill validator, then stores a report. Go VCS stamping is disabled (`-buildvcs=false`) so the gate also works in containers running as root over a bind-mounted repository, then stores a report at `evals/quality/<git-sha>/gate.json` (per-check status, duration and bounded output). It exits non-zero when any check fails.
 
@@ -465,13 +465,15 @@ Install profiles: `scripts/setup.sh --profile core` excludes the explicit-only e
 |---|---|
 | `setup.sh` / `setup.ps1` | create `.env`, record host UID/GID, sync skills, hydrate `.mcp.json`, build images/binaries, start postgres/redis/minio, register and install the plugin |
 | `doctor.sh` / `doctor.ps1` | check repo/config, Go, Codex plugin state, Docker, MCP runtime, skills mirror; run plugin-check and the MCP handshake |
-| `smoke.sh` / `smoke.ps1` | send `initialize`, `tools/list`, `tools/call system.context` and validate the three JSON-RPC responses |
+| `smoke.sh` / `smoke.ps1` | send `initialize`, `tools/list`, `tools/call system.context` and validate the three JSON-RPC responses; `--binary`/`--compose`/`--auto` select the transport explicitly |
 | `sync-skills.sh` / `sync-skills.ps1` | mirror `plugins/hackathonkit/skills/` to `.agents/skills/` and verify counts |
 | `plugin-check.sh` / `plugin-check.ps1` | spawn the installed plugin's MCP command from a temp cwd and validate the handshake (exit 0 ok, 1 failed, 2 skipped) |
 | `validate-skills.sh` | validate the skill catalog against `docs/SKILL-STANDARD.md` (exit 1 on violations) |
 | `quality-gate.sh` | run gofmt/build/vet/test/coverage/selftest/skills and store `evals/quality/<sha>/gate.json` (exit 1 on failures) |
 | `docker-check.sh` | staged Docker verification: compose config, builds, infra readiness, MCP selftest, quality image, compose handshake; `--full` includes the quality gate; dumps diagnostics on failure (exit 2 when Docker is unavailable) |
 | `coverage-check.sh` | run the Go suite with a coverage profile and enforce `HACKATHONKIT_COVERAGE_TARGET` (default 80%) |
+| `env-set.sh` | set a key in `.env` while preserving permission bits (new files are 0600) |
+| `env-set.test.sh`, `smoke.test.sh` | shell regression tests for permission preservation and smoke transport selection (run in CI) |
 
 ## Repository layout
 

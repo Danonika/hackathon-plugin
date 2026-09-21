@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -88,13 +89,9 @@ type Client struct {
 }
 
 func New(settings Settings) *Client {
-	timeout := settings.Timeout
-	if timeout <= 0 {
-		timeout = 15 * time.Second
-	}
 	return &Client{
 		settings:        settings,
-		http:            &http.Client{Timeout: timeout},
+		http:            &http.Client{},
 		rateLimitPerMin: 20,
 		retryDelay:      time.Second,
 	}
@@ -120,6 +117,15 @@ func (c *Client) WithRetryDelay(delay time.Duration) *Client {
 		c.retryDelay = delay
 	}
 	return c
+}
+
+// requestTimeout is the default per-request deadline when the caller's context
+// has none.
+func (c *Client) requestTimeout() time.Duration {
+	if c.settings.Timeout > 0 {
+		return c.settings.Timeout
+	}
+	return 15 * time.Second
 }
 
 func (c *Client) Settings() Settings {
@@ -219,7 +225,12 @@ func (c *Client) SendMessage(ctx context.Context, text string, opts SendOptions)
 	if text == "" {
 		return SendResult{}, fmt.Errorf("text is required")
 	}
-	chunks := ChunkText(text, MaxMessageChars)
+	var chunks []string
+	if strings.EqualFold(opts.ParseMode, "HTML") {
+		chunks = ChunkHTML(text, MaxMessageChars)
+	} else {
+		chunks = ChunkText(text, MaxMessageChars)
+	}
 	result := SendResult{ChatID: chatID, Chunks: len(chunks)}
 	for i, chunk := range chunks {
 		payload := map[string]any{"chat_id": chatID, "text": chunk}
@@ -273,10 +284,16 @@ func (c *Client) GetChat(ctx context.Context, chatID string) (ChatInfo, error) {
 }
 
 // GetUpdates reads recent updates; timeoutSec > 0 enables long polling, which
-// the built project's bot owns at runtime.
+// the built project's bot owns at runtime. The HTTP deadline is extended past
+// the requested polling duration so a quiet poll can finish.
 func (c *Client) GetUpdates(ctx context.Context, offset int64, limit, timeoutSec int) ([]UpdateInfo, error) {
 	if limit <= 0 || limit > 100 {
 		limit = 10
+	}
+	if timeoutSec > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, time.Duration(timeoutSec)*time.Second+c.requestTimeout())
+		defer cancel()
 	}
 	raw, err := c.callWithRetry(ctx, "getUpdates", map[string]any{
 		"offset":          offset,
@@ -408,6 +425,11 @@ func (c *Client) call(ctx context.Context, method string, payload any) (json.Raw
 	if !c.Configured() {
 		return nil, fmt.Errorf("telegram bot token is not configured (set TELEGRAM_BOT_TOKEN)")
 	}
+	if _, ok := ctx.Deadline(); !ok {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, c.requestTimeout())
+		defer cancel()
+	}
 	body, err := json.Marshal(payload)
 	if err != nil {
 		return nil, fmt.Errorf("telegram %s: invalid payload", method)
@@ -477,6 +499,112 @@ func ChunkText(text string, limit int) []string {
 		chunks = append(chunks, string(runes))
 	}
 	return chunks
+}
+
+var htmlTagPattern = regexp.MustCompile(`</?([a-zA-Z][a-zA-Z0-9-]*)(?:\s[^>]*)?>`)
+
+type openTag struct {
+	name string
+	full string
+}
+
+// ChunkHTML splits HTML-formatted text into chunks of at most limit runes.
+// Tags open at a boundary are closed at the end of the chunk and reopened in
+// the next one, so every chunk stays valid Telegram HTML. Entities such as
+// &lt; are not tags.
+func ChunkHTML(text string, limit int) []string {
+	if limit <= 0 {
+		limit = MaxMessageChars
+	}
+	runes := []rune(text)
+	if len(runes) <= limit {
+		return []string{text}
+	}
+	chunks := []string{}
+	stack := []openTag{}
+	pos := 0
+	for pos < len(runes) {
+		prefix := ""
+		for _, tag := range stack {
+			prefix += tag.full
+		}
+		budget := limit - len([]rune(prefix))
+		if budget < 1 {
+			budget = 1
+		}
+		cut := pos + budget
+		if cut > len(runes) {
+			cut = len(runes)
+		}
+		cut = cutOutsideTag(runes, pos, cut)
+		for i := cut; i > pos+1; i-- {
+			if runes[i-1] == '\n' {
+				cut = i
+				break
+			}
+		}
+		cut = cutOutsideTag(runes, pos, cut)
+		if cut <= pos {
+			cut = pos + 1
+		}
+		body := string(runes[pos:cut])
+		next, closers := scanTags(body, stack)
+		for len([]rune(prefix+body+closers)) > limit && cut > pos+1 {
+			cut--
+			cut = cutOutsideTag(runes, pos, cut)
+			body = string(runes[pos:cut])
+			next, closers = scanTags(body, stack)
+		}
+		chunks = append(chunks, prefix+body+closers)
+		stack = next
+		pos = cut
+	}
+	return chunks
+}
+
+// scanTags replays a fragment over the open-tag stack and returns the resulting
+// stack plus the closing tags needed to balance the fragment.
+func scanTags(fragment string, stack []openTag) ([]openTag, string) {
+	open := append([]openTag{}, stack...)
+	for _, match := range htmlTagPattern.FindAllStringSubmatch(fragment, -1) {
+		full := match[0]
+		name := strings.ToLower(match[1])
+		if strings.HasPrefix(full, "</") {
+			for i := len(open) - 1; i >= 0; i-- {
+				if open[i].name == name {
+					open = append(open[:i], open[i+1:]...)
+					break
+				}
+			}
+			continue
+		}
+		if strings.HasSuffix(full, "/>") {
+			continue
+		}
+		open = append(open, openTag{name: name, full: full})
+	}
+	closers := ""
+	for i := len(open) - 1; i >= 0; i-- {
+		closers += "</" + open[i].name + ">"
+	}
+	return open, closers
+}
+
+// cutOutsideTag moves a cut back when it would land inside a tag.
+func cutOutsideTag(runes []rune, start, cut int) int {
+	open := -1
+	for i := start; i < cut; i++ {
+		if runes[i] == '<' {
+			open = i
+		}
+		if runes[i] == '>' {
+			open = -1
+		}
+	}
+	if open >= 0 {
+		return open
+	}
+	return cut
 }
 
 // EscapeHTML escapes text for parse_mode=HTML.
