@@ -66,7 +66,7 @@ export async function createBrainView(container) {
   const camera = new THREE.PerspectiveCamera(33, 1, 0.01, 40);
   const composer = new EffectComposer(renderer);
   composer.addPass(new RenderPass(scene, camera));
-  const bloomPass = new UnrealBloomPass(new THREE.Vector2(1, 1), 1.5, 0.8, 0.35);
+  const bloomPass = new UnrealBloomPass(new THREE.Vector2(1, 1), 0.55, 0.5, 0.55);
   composer.addPass(bloomPass);
 
   const brain = new THREE.Group();
@@ -177,7 +177,7 @@ export async function createBrainView(container) {
         if (radius > 1.0) discard;
         float core = exp(-6.0 * radius * radius);
         float halo = pow(1.0 - radius, 1.8) * 0.55 * neuronIntensity;
-        float alpha = core * (0.85 + 0.6 * neuronIntensity) + halo * 1.6;
+        float alpha = core * (0.55 + 0.55 * neuronIntensity) + halo * 0.9;
         gl_FragColor = vec4(neuronColor, alpha);
         #include <tonemapping_fragment>
         #include <colorspace_fragment>
@@ -311,9 +311,9 @@ export async function createBrainView(container) {
       for (let i = 0; i < neuronCount; i++) {
         const s = Math.sqrt(intensity[i]);
         const tint = (i % 5) / 5;
-        colors[i * 3] = 0.40 + s * 0.6 - tint * 0.16;
-        colors[i * 3 + 1] = 0.34 + s * 0.52 + tint * 0.14;
-        colors[i * 3 + 2] = 0.80 + s * 0.2 - tint * 0.06;
+        colors[i * 3] = 0.14 + s * 0.86 - tint * 0.05;
+        colors[i * 3 + 1] = 0.13 + s * 0.72 + tint * 0.1;
+        colors[i * 3 + 2] = 0.26 + s * 0.74 - tint * 0.04;
       }
       points.geometry.attributes.intensity.needsUpdate = true;
       points.geometry.attributes.color.needsUpdate = true;
