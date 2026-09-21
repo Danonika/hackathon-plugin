@@ -9,7 +9,7 @@ RUN CGO_ENABLED=0 go build -trimpath -o /out/hackathonkit-demo-api ./cmd/demo-ap
 FROM alpine:3.24.2 AS runtime-base
 RUN apk add --no-cache ca-certificates && adduser -D -u 1000 hackathonkit
 WORKDIR /workspace
-RUN mkdir -p /workspace/configs /workspace/logs /workspace/data/input /workspace/data/artifacts /workspace/data/index && chown -R 1000:1000 /workspace
+RUN mkdir -p /workspace/configs /workspace/logs /workspace/evals /workspace/data/input /workspace/data/artifacts /workspace/data/index /workspace/data/judge-bundles && chown -R 1000:1000 /workspace
 ENV HACKATHONKIT_REPO_ROOT=/workspace
 USER 1000:1000
 

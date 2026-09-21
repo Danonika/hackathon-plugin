@@ -61,7 +61,7 @@ sh "$ROOT/scripts/gen-mcp-manifest.sh" "$ROOT"
 
 # Pre-create writable mount points as the host user so the non-root
 # containers can write logs and artifacts through the bind mounts.
-mkdir -p "$ROOT/logs" "$ROOT/data/artifacts" "$ROOT/data/index" "$ROOT/data/control"
+mkdir -p "$ROOT/logs" "$ROOT/evals" "$ROOT/data/artifacts" "$ROOT/data/index" "$ROOT/data/control" "$ROOT/data/judge-bundles"
 
 RUNTIME="binary"
 if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then

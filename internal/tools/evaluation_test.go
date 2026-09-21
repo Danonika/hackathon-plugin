@@ -161,17 +161,17 @@ func TestEvalFreezeBundle(t *testing.T) {
 		t.Fatalf("status %s data %+v warnings %v", env.Status, env.Data, env.Warnings)
 	}
 	data := env.Data.(map[string]any)
-	if data["bundle_path"] != "judge-bundle" {
+	if data["bundle_path"] != "data/judge-bundles" {
 		t.Fatalf("bundle_path = %v", data["bundle_path"])
 	}
 	hash := data["bundle_hash"].(string)
 	if len(hash) != 64 {
 		t.Fatalf("bundle_hash = %q", hash)
 	}
-	if _, err := os.Stat(filepath.Join(root, "judge-bundle", "README.md")); err != nil {
+	if _, err := os.Stat(filepath.Join(root, "data", "judge-bundles", "README.md")); err != nil {
 		t.Fatalf("bundle missing README: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(root, "judge-bundle", "logs")); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(root, "data", "judge-bundles", "logs")); !os.IsNotExist(err) {
 		t.Fatal("logs must be excluded from the bundle")
 	}
 	if len(env.Warnings) == 0 {
@@ -274,7 +274,7 @@ func TestEvalFreezeBundleDemoProfile(t *testing.T) {
 	mustWrite(t, filepath.Join(root, "TASK.md"), "# Task\n")
 	mustWrite(t, filepath.Join(root, "selected-source", "main.go"), "package main\n")
 
-	env := call(t, reg, "eval.freeze_bundle", map[string]any{"profile": "demo", "out": "judge-bundle"})
+	env := call(t, reg, "eval.freeze_bundle", map[string]any{"profile": "demo", "out": "data/judge-bundles"})
 	if env.Status != "ok" {
 		t.Fatalf("freeze: %s %+v", env.Status, env.Warnings)
 	}
@@ -282,10 +282,10 @@ func TestEvalFreezeBundleDemoProfile(t *testing.T) {
 	if data["profile"] != "demo" {
 		t.Fatalf("profile = %v", data["profile"])
 	}
-	if _, err := os.Stat(filepath.Join(root, "judge-bundle", "TASK.md")); err != nil {
+	if _, err := os.Stat(filepath.Join(root, "data", "judge-bundles", "TASK.md")); err != nil {
 		t.Fatalf("demo bundle missing TASK.md: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(root, "judge-bundle", "selected-source")); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(root, "data", "judge-bundles", "selected-source")); !os.IsNotExist(err) {
 		t.Fatal("demo bundle must exclude source")
 	}
 }

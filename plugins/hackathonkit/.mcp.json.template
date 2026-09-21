@@ -1,8 +1,8 @@
 {
   "mcpServers": {
     "hackathonkit": {
-      "command": "docker",
-      "args": ["compose", "-f", "{{REPO_ROOT}}/docker-compose.yml", "run", "--rm", "-T", "hackathonkit-mcp"]
+      "command": "{{REPO_ROOT}}/plugins/hackathonkit/scripts/hackathonkit-mcp-launcher.sh",
+      "args": []
     }
   }
 }

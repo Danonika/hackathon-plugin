@@ -2,6 +2,7 @@ package tools
 
 import (
 	"hash/fnv"
+	"math"
 	"strconv"
 	"strings"
 	"time"
@@ -149,15 +150,14 @@ func stddev(values []float64) float64 {
 	return sqrt(sum / float64(len(values)-1))
 }
 
+// sqrt delegates to math.Sqrt: the previous hand-rolled Newton iteration
+// started at x=v and halved toward the root, so large magnitudes (for example
+// 1e14) returned wrong values after a fixed iteration count.
 func sqrt(v float64) float64 {
 	if v <= 0 {
 		return 0
 	}
-	x := v
-	for i := 0; i < 40; i++ {
-		x = 0.5 * (x + v/x)
-	}
-	return x
+	return math.Sqrt(v)
 }
 
 func pearson(xs, ys []float64) float64 {

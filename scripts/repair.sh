@@ -7,7 +7,7 @@ echo "[repair] repository root: $ROOT"
 
 sh "$ROOT/scripts/sync-harness.sh"
 sh "$ROOT/scripts/gen-mcp-manifest.sh" "$ROOT"
-mkdir -p "$ROOT/logs" "$ROOT/data/artifacts" "$ROOT/data/index" "$ROOT/data/control"
+mkdir -p "$ROOT/logs" "$ROOT/evals" "$ROOT/data/artifacts" "$ROOT/data/index" "$ROOT/data/control" "$ROOT/data/judge-bundles"
 
 PROFILE="full"
 if [ -f "$ROOT/configs/install-state.json" ]; then

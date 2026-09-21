@@ -2,7 +2,7 @@
 
 Local Codex plugin backed by a typed MCP capability layer. Codex is the main reasoning engine, Skills define domain workflows, the local MCP server exposes deterministic and AI-powered capabilities, and the experimental Fly router recommends capability routes while Codex keeps the final decision.
 
-Status: v0.11.0. MCP runtime (34 tools), 28 standard-compliant skills (validator-enforced), session hooks, durable learnings, Codex subagents, four harness adapters, a full control plane (SQLite store, daemon, TUI, worktrees, agent runs, risk scoring, session handoff), staged build plans, PDF/XLSX processing, Fly v2 (keyword + embeddings + kNN memory + mushroom-body learning + LLM classifier), Postgres/MinIO backends, demo dashboard, install profiles/repair, a quality gate with a Go-enabled Docker target, a Fly A/B benchmark, plan review, security review and the evaluation subsystem (deterministic aggregation, calibration, loop decisions and bundle freezing) are in place.
+Status: v0.11.1. MCP runtime (34 tools), 28 standard-compliant skills (validator-enforced), session hooks, durable learnings, Codex subagents, four harness adapters, a full control plane (SQLite store, daemon, TUI, worktrees, agent runs, risk scoring, session handoff), staged build plans, PDF/XLSX processing, Fly v2 (keyword + embeddings + kNN memory + mushroom-body learning + LLM classifier), Postgres/MinIO backends, demo dashboard, install profiles/repair, a quality gate with a Go-enabled Docker target, a Fly A/B benchmark, plan review, security review and the evaluation subsystem (deterministic aggregation, calibration, loop decisions and bundle freezing) are in place.
 
 ## Contents
 
@@ -61,7 +61,7 @@ Codex (reasoning, final decisions)
   |
   |-- Storage: data/ (authoritative local files)
         data/index/learnings.json   durable learnings
-        data/control/session.env    current session marker
+        data/control/sessions.active.jsonl  active session registry
         data/control/control.db     control plane database (generated)
         data/worktrees/             per-session git worktrees
         Postgres  optional: artifacts, routing_runs, fly_predictions, eval_runs
@@ -156,9 +156,9 @@ The standard is enforced mechanically: `hackathonkit-mcp --validate-skills` (or 
 |---|---|
 | `SessionStart` | Injects a compact context block: routing mode, current plan stage, top learnings, pending eval decisions |
 | `PostToolUse` | Appends `{ts, type, session_id, tool}` to `logs/session-events.jsonl` for the control plane |
-| `Stop` | Appends `session_end` to `logs/sessions.jsonl` and clears `data/control/session.env` |
+| `Stop` | Appends `session_end` to `logs/sessions.jsonl` and removes only that session from `data/control/sessions.active.jsonl` |
 
-The context block comes from `hackathonkit-mcp --session-context` (local binary, then `docker compose`, then a shell fallback). Session state lives in `data/control/session.env` (gitignored).
+The context block comes from `hackathonkit-mcp --session-context` (local binary, then `docker compose`, then a shell fallback). Active sessions live in `data/control/sessions.active.jsonl` (gitignored); events use the session id from the hook payload when present, otherwise the most recently started active session, so overlapping sessions do not steal each other's events. `node plugins/hackathonkit/scripts/hooks.test.js` verifies this behavior and `scripts/doctor.sh` runs it.
 
 ## Learnings
 
@@ -233,7 +233,7 @@ Every tool returns the shared envelope: `status` (`ok` | `partial` | `error`), `
 | `eval.calibrate` | `run1[]`/`run2[]` or `run1_json[]`/`run2_json[]`, `snapshot_sha`, `min_delta`, `persist` (default true) | `calibration.retest_delta`, `calibration.noise_floor`, `calibration_path` |
 | `eval.rank` | `aggregates[]` or `aggregates_json[]`, optional `commission {members, votes, grounds}`, `persist` (default true) | ordered `ranking` (9.6 tie-breaks, `tie_unresolved`, `commission`), `ranking_path` |
 | `eval.compare` | `mode` (`technical`/`judge`), `candidate` (required), `best`, `target`, `noise_floor`, `mandatory_scenario_failed`, `snapshot_sha`, `persist` (default false) | `decision` (`target_reached`/`accept`/`rollback`/`stop`), `reason`, `improvement` |
-| `eval.freeze_bundle` | `out` (default `judge-bundle`), `profile` (`full`/`technical`/`demo`), `exclude[]`, `read_only` (default true), `model` | `bundle_path`, `bundle_hash`, `git_sha`, `profile`, `files`, `bytes`, `excluded[]` |
+| `eval.freeze_bundle` | `out` (default `data/judge-bundles`), `profile` (`full`/`technical`/`demo`), `exclude[]`, `read_only` (default true), `model` | `bundle_path`, `bundle_hash`, `git_sha`, `profile`, `files`, `bytes`, `excluded[]` |
 
 ### Learning
 
@@ -415,7 +415,7 @@ Every call gets a `trace_id` (`kit-...`) that flows through the envelope, logs a
 ## Plugin packaging
 
 - `plugins/hackathonkit/.codex-plugin/plugin.json` - name, version, `skills: "./skills/"`, `mcpServers: "./.mcp.json"`.
-- `plugins/hackathonkit/.mcp.json` - generated by `scripts/setup` from `.mcp.json.template` (replaces `{{REPO_ROOT}}` with the absolute path, not committed).
+- `plugins/hackathonkit/.mcp.json` - generated by `scripts/setup` from `.mcp.json.template` (replaces `{{REPO_ROOT}}` with the absolute path, not committed). It invokes the launcher, so a binary-only install works without Docker; `setup.ps1` substitutes the `.cmd` launcher.
 - `plugins/hackathonkit/scripts/hackathonkit-mcp-launcher.sh` / `.cmd` - prefer `bin/hackathonkit-mcp[.exe]`, otherwise `docker compose run --rm -T hackathonkit-mcp`.
 - `.agents/plugins/marketplace.json` - local marketplace `hackathonkit-local` pointing at `./plugins/hackathonkit`.
 - `.codex/config.toml` - plugin-free fallback MCP registration via the launcher.
@@ -455,7 +455,7 @@ AGENTS.md                  portable instructions for every harness
 docs/                      SKILL-STANDARD.md + skill template
 plugins/hackathonkit/          Codex plugin (single source of truth for skills)
   .codex-plugin/plugin.json
-  .mcp.json               generated by scripts/setup (docker compose run, absolute repo root, not committed)
+  .mcp.json               generated by scripts/setup (absolute launcher path; prefers bin/, falls back to docker compose)
   .mcp.json.template      template with {{REPO_ROOT}} placeholder
   hooks/codex-hooks.json  SessionStart / PostToolUse / Stop hook registration
   skills/                 28 skills, each with SKILL.md + agents/openai.yaml (+ references/)

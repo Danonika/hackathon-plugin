@@ -73,6 +73,10 @@ Check "install state" (Test-Path -LiteralPath $statePath) $(if ($stateVersion) {
 
 $node = Get-Command node -ErrorAction SilentlyContinue
 Check "node (hooks)" ($null -ne $node) $(if ($node) { (node --version) } else { "not found; session hooks require Node 18+" })
+if ($node) {
+  & node (Join-Path $root "plugins\hackathonkit\scripts\hooks.test.js") *> $null
+  Check "hook behavior" ($LASTEXITCODE -eq 0) "session ownership test"
+}
 
 $mcpExe = Join-Path $root "bin\hackathonkit-mcp.exe"
 if (Test-Path -LiteralPath $mcpExe) {

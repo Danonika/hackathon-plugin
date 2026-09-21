@@ -273,7 +273,7 @@ func registerEvaluation(reg *mcp.Registry, d Deps) {
 		"eval.freeze_bundle",
 		"Freeze a read-only snapshot of the repository for judge runs: copies the tree, writes git-sha.txt, rubric-version.txt, bundle.json and a deterministic bundle hash. Mutable state (logs, data, evals, secrets) is excluded.",
 		map[string]any{
-			"out":       strProp("Bundle directory relative to the repository root (default judge-bundle)"),
+			"out":       strProp("Bundle directory relative to the repository root (default data/judge-bundles)"),
 			"exclude":   arrProp("Extra exclude patterns: repository-relative paths, base names or globs (for example .env*, secrets/*)", map[string]any{"type": "string"}),
 			"read_only": boolProp("Mark copied files read-only (default true)"),
 			"model":     strProp("Model id recorded in the bundle manifest"),
@@ -284,7 +284,7 @@ func registerEvaluation(reg *mcp.Registry, d Deps) {
 			root := d.Cfg.Root()
 			out := argString(args, "out")
 			if out == "" {
-				out = "judge-bundle"
+				out = "data/judge-bundles"
 			}
 			outAbs, err := resolveRepoPath(root, out)
 			if err != nil {

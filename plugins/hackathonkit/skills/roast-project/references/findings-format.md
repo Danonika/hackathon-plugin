@@ -35,7 +35,7 @@ One JSON document per roast, stored under `evals/roast/<git_sha>/findings.json`.
 - `internal/tools/data.go:214` - source location.
 - `cmd: go test ./internal/tools -run TestReadCSVEmpty` - command and observed result.
 - `artifact: data/artifacts/<id>` - artifact behind the claim.
-- `bundle: judge-bundle/README.md:41` - location inside the frozen bundle.
+- `bundle: data/judge-bundles/README.md:41` - location inside the frozen bundle.
 
 Never cite "the code" without a path, and never cite a chat message.
 

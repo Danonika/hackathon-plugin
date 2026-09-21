@@ -57,7 +57,7 @@ Attack a frozen snapshot from three isolated angles; ship findings, never scores
 
 ## Workflow
 
-1. **Freeze.** Call `eval.freeze_bundle` with `out` (default `judge-bundle`), `read_only=true` and the candidate `model`; keep `bundle_path`, `bundle_hash`, `git_sha` and `files`. If the controller already froze the candidate, reuse that bundle instead of re-freezing.
+1. **Freeze.** Call `eval.freeze_bundle` with `out` (default `data/judge-bundles`), `read_only=true` and the candidate `model`; keep `bundle_path`, `bundle_hash`, `git_sha` and `files`. If the controller already froze the candidate, reuse that bundle instead of re-freezing.
 2. **Isolate.** Copy the bundle once per critic into a temp directory; no critic can see the repository, `evals/`, prior reports or another critic's copy.
 3. **Run the critics in parallel.** Each critic works its brief and the checklist, then returns findings in the format from `references/findings-format.md`.
 4. **Merge.** Deduplicate by `file:line` plus cause, keep the highest severity and preserve both evidence pointers; sort by severity, then blast radius.

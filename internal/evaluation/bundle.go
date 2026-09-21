@@ -96,7 +96,7 @@ type Bundle struct {
 }
 
 // FreezeBundle copies a read-only snapshot of the repository (defaults to
-// <root>/judge-bundle), writes git-sha.txt, rubric-version.txt, a bundle.json
+// <root>/data/judge-bundles), writes git-sha.txt, rubric-version.txt, a bundle.json
 // manifest and a deterministic bundle hash. The hash covers every copied file
 // except bundle.json and bundle-hash.txt, so freezing the same tree twice
 // yields the same hash.
@@ -111,7 +111,7 @@ func FreezeBundle(opts BundleOptions) (Bundle, error) {
 	}
 	outDir := opts.OutDir
 	if strings.TrimSpace(outDir) == "" {
-		outDir = filepath.Join(root, "judge-bundle")
+		outDir = filepath.Join(root, "data", "judge-bundles")
 	}
 	outAbs, err := filepath.Abs(outDir)
 	if err != nil {

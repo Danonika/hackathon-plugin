@@ -6,7 +6,7 @@ outcomes. The schema and rules stay authoritative in `references/rubric.md`.
 
 ## Setup
 
-`eval.freeze_bundle(out="judge-bundle", profile="demo", read_only=true,
+`eval.freeze_bundle(out="data/judge-bundles", profile="demo", read_only=true,
 model="gpt-5-codex")` returned `git_sha: "abc123"`,
 `bundle_hash: "9f2c...e1"`. The snapshot id is `abc123` (`git_sha` wins when
 present). Four pass copies were prepared and the reports were written to

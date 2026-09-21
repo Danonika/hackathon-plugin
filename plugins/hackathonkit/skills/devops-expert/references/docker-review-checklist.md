@@ -6,8 +6,12 @@ Run top to bottom; each item is either proven by a command or reported as a gap.
 
 - [ ] `Dockerfile` inspected: stages `build`, `runtime-base`, `hackathonkit-mcp`, `demo-api`, `quality`.
 - [ ] `docker-compose.yml` inspected: services `hackathonkit-mcp`, `demo-api`, `quality` (profile `quality`), `postgres`, `redis`, `minio`.
+- [ ] `hackathonkit-mcp` and `demo-api` mount `./evals:/workspace/evals` so plans, decisions, rankings and gate evidence survive `run --rm`.
+- [ ] `./data` is mounted, which persists `data/judge-bundles` (the default `eval.freeze_bundle` output) and `data/control`.
 - [ ] `.dockerignore` excludes `.env`, `data/`, `logs/`, `evals/`, `bin/`, `node_modules/`, `.git/`.
 - [ ] `.env.example` lists every `${VAR:?}` compose variable with an empty or placeholder value.
+- [ ] `plugins/hackathonkit/.mcp.json` invokes `hackathonkit-mcp-launcher.sh` (or `.cmd` on Windows), not `docker` directly, so a binary-only install works.
+- [ ] Shell scripts are executable: `git ls-files -s scripts/*.sh` shows mode `100755`.
 
 ## Static Validation
 

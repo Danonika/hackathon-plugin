@@ -8,7 +8,7 @@ the score, not statistical independence.
 
 | Input | Where |
 |---|---|
-| Project files | The read-only `judge-bundle/` copy (`profile: "demo"`) |
+| Project files | The read-only `data/judge-bundles/` copy (`profile: "demo"`) |
 | Bundle manifest | `bundle.json`, `git-sha.txt`, `rubric-version.txt` |
 | Demo evidence | `demo-artifacts/`, demo script or recording, presentation material, observed live demonstration (regulation 9.3) |
 | Documentation | `TASK.md`, `README.md`, `architecture.md`, `known-limitations.md` |
@@ -28,7 +28,7 @@ check). A pass that awards or deducts points from them is invalid.
 
 ## Clean-Room Setup
 
-1. Freeze once with `eval.freeze_bundle(out="judge-bundle", profile="demo", read_only=true, model="<model-id>")`; note `bundle_hash`, `git_sha` and `profile`.
+1. Freeze once with `eval.freeze_bundle(out="data/judge-bundles", profile="demo", read_only=true, model="<model-id>")`; note `bundle_hash`, `git_sha` and `profile`.
 2. Create one working directory per pass: `judge-01/`, `judge-02/`, `judge-03/`, plus `judge-04/` ... for substitute passes.
 3. Copy the bundle into each directory; keep file mode read-only (0444) and never write into the bundle.
 4. Start the passes with no shared conversation state; parallel execution is fine.

@@ -34,7 +34,7 @@ Stops that are not decisions: iteration cap reached, remaining time <= `finaliza
 best = project_cost(best_snapshot)
 for i in 1..max_technical_iterations:
     candidate = run_fast_block(best)              # one axis, targeted tests
-    bundle    = eval.freeze_bundle(out="judge-bundle", read_only=true, model=<model>)
+    bundle    = eval.freeze_bundle(out="data/judge-bundles", read_only=true, model=<model>)
     score     = project_cost(candidate)
     decision  = eval.compare(mode="technical", candidate=score, best=best.score,
                              mandatory_scenario_failed=<bool>, snapshot_sha=bundle.git_sha,

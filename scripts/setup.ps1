@@ -34,7 +34,7 @@ if (-not (Test-Path -LiteralPath $templatePath)) {
   exit 1
 }
 $template = Get-Content -LiteralPath $templatePath -Raw
-$manifest = $template.Replace("{{REPO_ROOT}}", $root.Replace("\", "/"))
+$manifest = $template.Replace("{{REPO_ROOT}}", $root.Replace("\", "/")).Replace("hackathonkit-mcp-launcher.sh", "hackathonkit-mcp-launcher.cmd")
 $manifestPath = Join-Path $root "plugins\hackathonkit\.mcp.json"
 $manifestTmp = "$manifestPath.tmp"
 try {
@@ -45,7 +45,7 @@ try {
 }
 Write-Host "[setup] generated plugins/hackathonkit/.mcp.json with the absolute repository root"
 
-New-Item -ItemType Directory -Force -Path (Join-Path $root "logs"), (Join-Path $root "data\artifacts"), (Join-Path $root "data\index"), (Join-Path $root "data\control") | Out-Null
+New-Item -ItemType Directory -Force -Path (Join-Path $root "logs"), (Join-Path $root "evals"), (Join-Path $root "data\artifacts"), (Join-Path $root "data\index"), (Join-Path $root "data\control"), (Join-Path $root "data\judge-bundles") | Out-Null
 
 $dockerOk = $false
 if (Get-Command docker -ErrorAction SilentlyContinue) {

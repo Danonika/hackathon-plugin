@@ -5,8 +5,10 @@
  * Usage: node hooks.js <session-start|tool-use|stop>
  *
  * Hooks must never break a Codex session: every failure is swallowed and the
- * process exits 0. Session state lives in data/control/session.env (gitignored)
- * and events are appended to logs/sessions.jsonl and logs/session-events.jsonl.
+ * process exits 0. Session state lives in
+ * data/control/sessions.active.jsonl (one JSON object per active session) so
+ * overlapping sessions keep their own ids; events are appended to
+ * logs/sessions.jsonl and logs/session-events.jsonl.
  */
 "use strict";
 
@@ -41,7 +43,7 @@ function repoRoot() {
 
 const ROOT = repoRoot();
 const CONTROL_DIR = path.join(ROOT, "data", "control");
-const MARKER = path.join(CONTROL_DIR, "session.env");
+const ACTIVE = path.join(CONTROL_DIR, "sessions.active.jsonl");
 const SESSIONS_LOG = path.join(ROOT, "logs", "sessions.jsonl");
 const EVENTS_LOG = path.join(ROOT, "logs", "session-events.jsonl");
 
@@ -63,18 +65,84 @@ function readStdin() {
   }
 }
 
-function sessionID() {
+function parsePayload(text) {
   try {
-    const text = fs.readFileSync(MARKER, "utf8");
-    const match = text.match(/^HACKATHONKIT_SESSION_ID=(.+)$/m);
-    if (match) return match[1].trim();
-  } catch (_) {}
+    const parsed = JSON.parse(text);
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch (_) {
+    return {};
+  }
+}
+
+// The hook payload schema varies by harness; accept the common session keys.
+function payloadSessionID(payload) {
+  const candidates = [
+    payload.session_id,
+    payload.sessionId,
+    payload.conversation_id,
+    payload.conversationId,
+    payload.thread_id,
+    payload.threadId,
+    payload.id,
+  ];
+  if (payload.session && typeof payload.session === "object") {
+    candidates.push(payload.session.id);
+  }
+  if (payload.conversation && typeof payload.conversation === "object") {
+    candidates.push(payload.conversation.id);
+  }
+  for (const candidate of candidates) {
+    if (typeof candidate === "string" && candidate.trim()) {
+      return candidate.trim();
+    }
+  }
   return "";
 }
 
 function newSessionID() {
   const stamp = new Date().toISOString().replace(/[-:T]/g, "").slice(0, 14);
   return "s-" + stamp + "-" + process.pid;
+}
+
+function readActive() {
+  try {
+    return fs
+      .readFileSync(ACTIVE, "utf8")
+      .split("\n")
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .map((line) => {
+        try {
+          return JSON.parse(line);
+        } catch (_) {
+          return null;
+        }
+      })
+      .filter((entry) => entry && typeof entry.id === "string" && entry.id);
+  } catch (_) {
+    return [];
+  }
+}
+
+function appendActive(entry) {
+  try {
+    fs.mkdirSync(CONTROL_DIR, { recursive: true });
+    fs.appendFileSync(ACTIVE, JSON.stringify(entry) + "\n");
+  } catch (_) {}
+}
+
+function removeActive(id) {
+  if (!id) return;
+  try {
+    const kept = readActive().filter((entry) => entry.id !== id);
+    const body = kept.map((entry) => JSON.stringify(entry)).join("\n");
+    fs.writeFileSync(ACTIVE, kept.length ? body + "\n" : "");
+  } catch (_) {}
+}
+
+function lastActiveID() {
+  const active = readActive();
+  return active.length ? active[active.length - 1].id : "";
 }
 
 function fallbackContext() {
@@ -89,19 +157,23 @@ function fallbackContext() {
 }
 
 function binaryContext() {
-  const args = ["--repo-root", ROOT, "--session-context"];
   const bin = path.join(ROOT, "bin", "hackathonkit-mcp");
   try {
     if (fs.existsSync(bin) && fs.statSync(bin).isFile()) {
-      return execFileSync(bin, args, { timeout: 15000, encoding: "utf8" });
+      return execFileSync(bin, ["--repo-root", ROOT, "--session-context"], {
+        timeout: 15000,
+        encoding: "utf8",
+      });
     }
   } catch (_) {}
   try {
     const compose = path.join(ROOT, "docker-compose.yml");
     if (fs.existsSync(compose)) {
+      // Inside the container the repository is mounted at /workspace, so the
+      // host path must not be passed as --repo-root.
       return execFileSync(
         "docker",
-        ["compose", "-f", compose, "run", "--rm", "-T", "hackathonkit-mcp"].concat(args),
+        ["compose", "-f", compose, "run", "--rm", "-T", "hackathonkit-mcp", "--session-context"],
         { timeout: 30000, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }
       );
     }
@@ -109,18 +181,21 @@ function binaryContext() {
   return "";
 }
 
+function toolName(payload) {
+  return (
+    payload.tool_name ||
+    payload.tool ||
+    payload.name ||
+    (payload.tool && typeof payload.tool === "object" && payload.tool.name) ||
+    ""
+  );
+}
+
 switch (EVENT) {
   case "session-start": {
-    const id = newSessionID();
-    try {
-      fs.mkdirSync(CONTROL_DIR, { recursive: true });
-      fs.writeFileSync(
-        MARKER,
-        "HACKATHONKIT_SESSION_ID=" + id + "\n" +
-          "HACKATHONKIT_SESSION_ROOT=" + ROOT + "\n" +
-          "HACKATHONKIT_SESSION_STARTED=" + new Date().toISOString() + "\n"
-      );
-    } catch (_) {}
+    const payload = parsePayload(readStdin());
+    const id = payloadSessionID(payload) || newSessionID();
+    appendActive({ id, root: ROOT, started_at: new Date().toISOString() });
     appendJSONL(SESSIONS_LOG, {
       ts: new Date().toISOString(),
       type: "session_start",
@@ -136,36 +211,30 @@ switch (EVENT) {
     break;
   }
   case "tool-use": {
-    const payload = readStdin();
-    let tool = "";
-    try {
-      const parsed = JSON.parse(payload);
-      tool =
-        parsed.tool_name ||
-        parsed.tool ||
-        parsed.name ||
-        (parsed.tool && parsed.tool.name) ||
-        "";
-    } catch (_) {
-      tool = (payload.match(/"tool_name"\s*:\s*"([^"]+)"/) || [])[1] || "";
+    const raw = readStdin();
+    const payload = parsePayload(raw);
+    let tool = toolName(payload);
+    if (!tool) {
+      tool = (raw.match(/"tool_name"\s*:\s*"([^"]+)"/) || [])[1] || "";
     }
+    const id = payloadSessionID(payload) || lastActiveID();
     appendJSONL(EVENTS_LOG, {
       ts: new Date().toISOString(),
       type: "tool_use",
-      session_id: sessionID(),
+      session_id: id,
       tool: tool || "unknown",
     });
     break;
   }
   case "stop": {
+    const payload = parsePayload(readStdin());
+    const id = payloadSessionID(payload) || lastActiveID();
     appendJSONL(SESSIONS_LOG, {
       ts: new Date().toISOString(),
       type: "session_end",
-      session_id: sessionID(),
+      session_id: id,
     });
-    try {
-      fs.unlinkSync(MARKER);
-    } catch (_) {}
+    removeActive(id);
     break;
   }
   default:

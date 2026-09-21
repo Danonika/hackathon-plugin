@@ -44,7 +44,7 @@ Score a frozen, read-only snapshot with procedurally isolated judge passes; the 
 
 ## Workflow
 
-1. Freeze the candidate: call `eval.freeze_bundle` with `out: "judge-bundle"`, `profile: "demo"` (TASK, README, architecture, demo artifacts, limitations; no source or test logs), `read_only: true`, `model: "<model-id>"` and extra `exclude` patterns only when something must be kept out. Keep `bundle_path`, `bundle_hash`, `git_sha`, `profile`, `files` and the `excluded` list.
+1. Freeze the candidate: call `eval.freeze_bundle` with `out: "data/judge-bundles"`, `profile: "demo"` (TASK, README, architecture, demo artifacts, limitations; no source or test logs), `read_only: true`, `model: "<model-id>"` and extra `exclude` patterns only when something must be kept out. Keep `bundle_path`, `bundle_hash`, `git_sha`, `profile`, `files` and the `excluded` list.
 2. Choose the snapshot id: use `git_sha` when present; if the envelope warns that the git sha was not resolved, use `bundle_hash` instead. Use the chosen value everywhere and never mix the two.
 3. Distribute: copy the read-only bundle to separate working directories, one per pass (parallel where the harness allows). Each pass gets one bundle copy and no shared state. Start with `judges` (default 3) passes.
 4. Run the passes. Each judge completes `references/isolation-checklist.md`, scores all five criteria from `references/rubric.md` against demo evidence only, and writes `evals/judges/<sha>/judge-01.json` ... `judge-0N.json` with the exact schema in the Output Contract.

@@ -12,7 +12,7 @@ if (-not (Test-Path -LiteralPath $templatePath)) {
   exit 1
 }
 $template = Get-Content -LiteralPath $templatePath -Raw
-$manifest = $template.Replace("{{REPO_ROOT}}", $Root.Replace("\", "/"))
+$manifest = $template.Replace("{{REPO_ROOT}}", $Root.Replace("\", "/")).Replace("hackathonkit-mcp-launcher.sh", "hackathonkit-mcp-launcher.cmd")
 $manifestPath = Join-Path $Root "plugins\hackathonkit\.mcp.json"
 $manifestTmp = "$manifestPath.tmp"
 try {

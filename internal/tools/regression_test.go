@@ -212,3 +212,20 @@ func TestSlugifyTruncatesRunes(t *testing.T) {
 		t.Fatalf("slug is not valid UTF-8: %q", got)
 	}
 }
+
+func TestStddevLargeMagnitude(t *testing.T) {
+	// Regression: the hand-rolled sqrt halved from x=v and was wrong for large
+	// values (1e14 returned ~9.1e15 instead of 1e14).
+	values := []float64{0, 1e14, 2e14}
+	got := stddev(values)
+	if got < 9.9e13 || got > 1.01e14 {
+		t.Fatalf("stddev = %v, want ~1e14", got)
+	}
+	if r := pearson(values, values); r != 1 {
+		t.Fatalf("pearson of identical columns = %v, want 1", r)
+	}
+	small := stddev([]float64{2, 4, 4, 4, 5, 5, 7, 9})
+	if small < 2.13 || small > 2.14 {
+		t.Fatalf("stddev = %v, want ~2.138", small)
+	}
+}

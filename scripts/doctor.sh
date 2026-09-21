@@ -129,6 +129,11 @@ fi
 
 if command -v node >/dev/null 2>&1; then
   check "node (hooks)" 1 "$(node --version 2>/dev/null)"
+  if node "$ROOT/plugins/hackathonkit/scripts/hooks.test.js" >/dev/null 2>&1; then
+    check "hook behavior" 1 "session ownership test"
+  else
+    check "hook behavior" 0 "run: node plugins/hackathonkit/scripts/hooks.test.js"
+  fi
 else
   check "node (hooks)" 0 "not found; session hooks require Node 18+"
 fi

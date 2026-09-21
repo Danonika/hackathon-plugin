@@ -11,7 +11,7 @@
       "name": "hackathonkit",
       "source": "./",
       "description": "Local MCP capability layer with Normal/Fly routing, skills, deterministic evaluation, learning and session hooks.",
-      "version": "0.11.0",
+      "version": "0.11.1",
       "category": "Developer Tools"
     }
   ]

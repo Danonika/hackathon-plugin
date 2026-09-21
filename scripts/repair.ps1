@@ -4,7 +4,7 @@ Write-Host "[repair] repository root: $root"
 
 & (Join-Path $root "scripts\sync-harness.ps1")
 & (Join-Path $root "scripts\gen-mcp-manifest.ps1") -Root $root
-New-Item -ItemType Directory -Force -Path (Join-Path $root "logs"), (Join-Path $root "data\artifacts"), (Join-Path $root "data\index"), (Join-Path $root "data\control") | Out-Null
+New-Item -ItemType Directory -Force -Path (Join-Path $root "logs"), (Join-Path $root "evals"), (Join-Path $root "data\artifacts"), (Join-Path $root "data\index"), (Join-Path $root "data\control"), (Join-Path $root "data\judge-bundles") | Out-Null
 
 $profile = "full"
 $statePath = Join-Path $root "configs\install-state.json"

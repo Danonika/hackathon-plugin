@@ -21,6 +21,7 @@ services:
       - ./configs:/workspace/configs
       - ./data:/workspace/data
       - ./logs:/workspace/logs
+      - ./evals:/workspace/evals
 
   demo-api:
     build:
@@ -40,6 +41,7 @@ services:
       - ./configs:/workspace/configs
       - ./data:/workspace/data
       - ./logs:/workspace/logs
+      - ./evals:/workspace/evals
 
   quality:
     build:
