@@ -28,7 +28,7 @@ description: "Use when <trigger>. <what it does>. <boundary: when NOT to use it>
 metadata:
   version: "1.0.0"
   origin: hackathonkit
-  category: <core|domain|evaluation|quality>
+  category: <core|domain|evaluation|quality|ops>
 tools:
   - <mcp.tool.name>
 ---

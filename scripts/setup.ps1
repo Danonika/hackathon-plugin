@@ -21,7 +21,7 @@ if ($LASTEXITCODE -ne 0) { Write-Error "[setup] sync-harness failed"; exit 1 }
 if ($Profile -eq "core") {
   foreach ($dir in @((Join-Path $root ".agents\skills"), (Join-Path $root ".claude\skills"))) {
     if (-not (Test-Path $dir)) { continue }
-    foreach ($skill in @("judge", "project-cost", "roast-project", "cp-expert-refactoring", "system-design-expert", "self-improvement-controller")) {
+    foreach ($skill in @("judge", "project-cost", "roast-project", "cp-expert-refactoring", "system-design-expert", "self-improvement-controller", "output-self-check", "skill-authoring", "qa-expert")) {
       Remove-Item -Recurse -Force (Join-Path $dir $skill) -ErrorAction SilentlyContinue
     }
   }

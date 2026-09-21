@@ -2,7 +2,7 @@
 name: data-analysis
 description: "Use when a CSV, TSV or XLSX table needs structure discovery, profiling, filtered queries, statistics, correlations or a data-quality assessment. Produces computed numbers with sources, optional charts and an evidence-backed report. Do not use for time-indexed trends or anomalies; use $time-series-analysis. Do not use for PDF, DOCX or free-text extraction; use $document-intelligence."
 metadata:
-  version: "2.0.0"
+  version: "2.1.0"
   origin: hackathonkit
   category: domain
 tools:
@@ -96,6 +96,8 @@ Request: "Profile `sample-telemetry.csv` and quantify the extremes."
 | More than 64 columns | Pass a `columns` subset for the profile you report |
 | Two or more numeric columns, user asks about "the value" | State which column you chose and why; never silently average unrelated columns |
 | User asks "why" or "will it happen" | Report association only; label any interpretation separately |
+| User asks for KPIs, funnels, cohorts, retention or an experiment readout | Define the metric first (population, numerator, denominator, window), then compute; see `references/analytics-playbook.md` |
+| A rate is requested | Report numerator and denominator, never a bare percentage; weight ratios by their base |
 
 ## Output Contract
 
@@ -148,3 +150,4 @@ Request: "Profile `sample-telemetry.csv` and quantify the extremes."
 
 - `references/query-cookbook.md` - operator semantics, coercion rules, pagination and worked filters against a real file.
 - `references/statistics-and-quality.md` - profile rules, correlation thresholds, data-quality checklist and interpretation wording.
+- `references/analytics-playbook.md` - metric definitions, KPI trees, funnels, cohorts/retention, experiment readouts, unit economics and metric traps.

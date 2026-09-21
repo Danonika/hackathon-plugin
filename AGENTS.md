@@ -38,8 +38,9 @@ evaluation subsystem owns the arithmetic.
 | `government-services` / `kazakh-language` / `report-builder` | domain deliverables |
 | `tdd-workflow` / `verification-loop` / `git-workflow` | building and verifying code |
 | `search-first` / `codebase-onboarding` / `context-management` | reuse, onboarding, context economy |
+| `devops-expert` | Docker/compose stack configuration and verification |
 | `security-review` / `learning-loop` | security scanning and durable learnings |
-| `judge` / `project-cost` / `roast-project` / `cp-expert-refactoring` / `system-design-expert` / `self-improvement-controller` / `output-self-check` / `skill-authoring` | explicit (`$name`) |
+| `judge` / `project-cost` / `roast-project` / `cp-expert-refactoring` / `system-design-expert` / `self-improvement-controller` / `output-self-check` / `skill-authoring` / `qa-expert` | explicit (`$name`) |
 
 Skill authoring rules: `docs/SKILL-STANDARD.md`.
 

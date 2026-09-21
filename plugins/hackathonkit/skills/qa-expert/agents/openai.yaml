@@ -1,0 +1,4 @@
+interface:
+  display_name: "QA Expert"
+  short_description: "Test plans, acceptance criteria, bug reports and release verdicts."
+  default_prompt: "Use $qa-expert to build a test plan and verify this candidate."
