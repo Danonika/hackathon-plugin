@@ -30,7 +30,9 @@ type securityRule struct {
 var securityRules = []securityRule{
 	{"instruction-override", "high", false, regexp.MustCompile(`(?i)ignore\s+(all\s+)?(previous|prior|above)\s+(instructions|rules|prompts)`)},
 	{"role-override", "medium", false, regexp.MustCompile(`(?i)\b(you are now|new system prompt|developer mode)\b`)},
-	{"exfiltration", "high", false, regexp.MustCompile(`(?i)(send|post|upload|exfiltrate|leak).{0,40}(api[_ -]?key|token|secret|credential|password)`)},
+	// Word boundaries keep identifiers such as POSTGRES_PASSWORD from matching
+	// "post ... password" while real exfiltration instructions still match.
+	{"exfiltration", "high", false, regexp.MustCompile(`(?i)\b(send|post|upload|exfiltrate|leak)\b.{0,40}\b(api[_ -]?key|token|secret|credential|password)\b`)},
 	{"system-prompt-probe", "medium", false, regexp.MustCompile(`(?i)(reveal|print|show|repeat).{0,30}(system prompt|hidden instructions|your instructions)`)},
 	{"guardrail-bypass", "medium", false, regexp.MustCompile(`(?i)(bypass|disable|skip).{0,30}(validation|approval|security|guardrail)`)},
 	{"aws-access-key", "high", true, regexp.MustCompile(`AKIA[0-9A-Z]{16}`)},

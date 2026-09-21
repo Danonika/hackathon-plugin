@@ -1,9 +1,13 @@
 #!/usr/bin/env node
 /*
- * Hook behaviour test: overlapping sessions must keep their own ids.
+ * Hook behaviour tests.
  *
  * Usage: node hooks.test.js
  * Exit code 0 when every assertion passes, 1 otherwise.
+ *
+ * Covers: overlapping session ownership, cached plugin roots, per-session
+ * state files (no shared read-modify-write), unsafe session ids, and the
+ * Windows .exe binary lookup.
  */
 "use strict";
 
@@ -27,23 +31,41 @@ function check(name, condition, detail) {
   failures += 1;
 }
 
-function run(event, payload) {
+function run(event, payload, options = {}) {
+  const env = { ...process.env, HACKATHONKIT_REPO_ROOT: root };
+  for (const [key, value] of Object.entries(options.env || {})) {
+    if (value === undefined) delete env[key];
+    else env[key] = value;
+  }
   const input = payload === undefined ? "" : JSON.stringify(payload);
   try {
     return execFileSync("node", [HOOKS, event], {
       input,
       encoding: "utf8",
-      env: { ...process.env, HACKATHONKIT_REPO_ROOT: root },
+      env,
+      cwd: options.cwd || root,
     });
   } catch (err) {
     return (err.stdout || "") + (err.stderr || "");
   }
 }
 
-function active() {
+function active(projectRoot = root) {
+  const dir = path.join(projectRoot, "data", "control", "sessions");
   try {
     return fs
-      .readFileSync(path.join(root, "data", "control", "sessions.active.jsonl"), "utf8")
+      .readdirSync(dir)
+      .filter((name) => name.endsWith(".json"))
+      .map((name) => JSON.parse(fs.readFileSync(path.join(dir, name), "utf8")));
+  } catch (_) {
+    return [];
+  }
+}
+
+function events(file, projectRoot = root) {
+  try {
+    return fs
+      .readFileSync(path.join(projectRoot, "logs", file), "utf8")
       .split("\n")
       .filter(Boolean)
       .map((line) => JSON.parse(line));
@@ -52,45 +74,78 @@ function active() {
   }
 }
 
-function events(file) {
-  try {
-    return fs
-      .readFileSync(path.join(root, "logs", file), "utf8")
-      .split("\n")
-      .filter(Boolean)
-      .map((line) => JSON.parse(line));
-  } catch (_) {
-    return [];
-  }
-}
+// --- Overlapping sessions keep their own identity ---------------------------
 
-// A starts, then B starts while A is still active.
 const startA = run("session-start", { session_id: "A" });
 check("session-start A exits cleanly", startA.includes("Hackathon Agent Kit session context"), startA.slice(0, 80));
 run("session-start", { session_id: "B" });
 check("both sessions are registered", active().length === 2, JSON.stringify(active()));
 
-// Events with an explicit payload id go to that session, even when B is newest.
 run("tool-use", { session_id: "A", tool_name: "alpha" });
 const alpha = events("session-events.jsonl").find((e) => e.tool === "alpha");
 check("explicit session id owns its event", alpha && alpha.session_id === "A", JSON.stringify(alpha));
 
-// Events without an id fall back to the most recently started active session.
 run("tool-use", { tool_name: "beta" });
 const beta = events("session-events.jsonl").find((e) => e.tool === "beta");
 check("fallback attributes to the newest session", beta && beta.session_id === "B", JSON.stringify(beta));
 
-// Stopping A removes only A.
 run("stop", { session_id: "A" });
 const remaining = active().map((entry) => entry.id);
 check("stop removes only its own session", remaining.length === 1 && remaining[0] === "B", JSON.stringify(remaining));
 const ended = events("sessions.jsonl").find((e) => e.type === "session_end" && e.session_id === "A");
 check("session_end recorded for A", Boolean(ended), JSON.stringify(ended));
 
-// B keeps receiving events after A stopped.
 run("tool-use", { tool_name: "gamma" });
 const gamma = events("session-events.jsonl").find((e) => e.tool === "gamma");
 check("B keeps ownership after A stops", gamma && gamma.session_id === "B", JSON.stringify(gamma));
+
+run("stop", { session_id: "B" });
+check("registry empties after both stop", active().length === 0, JSON.stringify(active()));
+
+// --- Session ids cannot escape the state directory ---------------------------
+
+run("session-start", { session_id: "../../escape" });
+const sessionDir = path.join(root, "data", "control", "sessions");
+const names = fs.readdirSync(sessionDir);
+check("unsafe session id is sanitized on disk", names.length === 1 && !names[0].includes("..") && !names[0].includes("/"), JSON.stringify(names));
+check("no file escaped the state directory", !fs.existsSync(path.join(root, "data", "control", "..", "..", "escape.json")), "escaped file exists");
+run("stop", { session_id: "../../escape" });
+check("sanitized id is removed by stop", active().length === 0, JSON.stringify(active()));
+
+// --- Cached plugin root must not win over the project ------------------------
+
+const project = fs.mkdtempSync(path.join(os.tmpdir(), "hackathonkit-project-"));
+fs.mkdirSync(path.join(project, "configs"), { recursive: true });
+fs.writeFileSync(path.join(project, "configs", "routing.yaml"), "routing:\n  mode: normal\n  version: 3\n");
+const cache = fs.mkdtempSync(path.join(os.tmpdir(), "hackathonkit-cache-"));
+const cachePlugin = path.join(cache, "plugins", "cache", "hackathonkit-local", "hackathonkit", "0.11.1");
+fs.mkdirSync(cachePlugin, { recursive: true });
+
+const cached = run("session-start", { session_id: "cache-1" }, {
+  cwd: project,
+  env: { HACKATHONKIT_REPO_ROOT: undefined, PLUGIN_ROOT: cachePlugin },
+});
+check("cached plugin uses the project as root", cached.includes("routing: normal"), cached.slice(0, 120));
+check("project receives the session state", active(project).length === 1, JSON.stringify(active(project)));
+check("cache receives no logs", !fs.existsSync(path.join(cache, "logs")), "cache/logs exists");
+fs.rmSync(cache, { recursive: true, force: true });
+fs.rmSync(project, { recursive: true, force: true });
+
+// --- Windows .exe binary is probed -------------------------------------------
+
+const exeProject = fs.mkdtempSync(path.join(os.tmpdir(), "hackathonkit-exe-"));
+fs.mkdirSync(path.join(exeProject, "configs"), { recursive: true });
+fs.writeFileSync(path.join(exeProject, "configs", "routing.yaml"), "routing:\n  mode: normal\n  version: 1\n");
+fs.mkdirSync(path.join(exeProject, "bin"), { recursive: true });
+const exePath = path.join(exeProject, "bin", "hackathonkit-mcp.exe");
+fs.writeFileSync(exePath, '#!/bin/sh\necho FAKE_BINARY_CONTEXT\n');
+fs.chmodSync(exePath, 0o755);
+const exeOut = run("session-start", { session_id: "exe-1" }, {
+  cwd: exeProject,
+  env: { HACKATHONKIT_REPO_ROOT: undefined, PLUGIN_ROOT: undefined },
+});
+check(".exe binary context is used", exeOut.includes("FAKE_BINARY_CONTEXT"), exeOut.slice(0, 120));
+fs.rmSync(exeProject, { recursive: true, force: true });
 
 fs.rmSync(root, { recursive: true, force: true });
 if (failures > 0) {

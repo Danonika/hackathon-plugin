@@ -5,8 +5,8 @@
  * Usage: node hooks.js <session-start|tool-use|stop>
  *
  * Hooks must never break a Codex session: every failure is swallowed and the
- * process exits 0. Session state lives in
- * data/control/sessions.active.jsonl (one JSON object per active session) so
+ * process exits 0. Each active session owns one file under
+ * data/control/sessions/<id>.json (no shared read-modify-write), so
  * overlapping sessions keep their own ids; events are appended to
  * logs/sessions.jsonl and logs/session-events.jsonl.
  */
@@ -18,32 +18,52 @@ const { execFileSync } = require("child_process");
 
 const EVENT = process.argv[2] || "";
 
-function repoRoot() {
-  if (process.env.HACKATHONKIT_REPO_ROOT) {
-    return path.resolve(process.env.HACKATHONKIT_REPO_ROOT);
+function looksLikeRepo(dir) {
+  if (!dir) return false;
+  try {
+    return (
+      fs.existsSync(path.join(dir, "configs", "routing.yaml")) ||
+      fs.existsSync(path.join(dir, "docker-compose.yml")) ||
+      fs.existsSync(path.join(dir, ".git"))
+    );
+  } catch (_) {
+    return false;
   }
-  if (process.env.PLUGIN_ROOT) {
-    // Plugin root is <repo>/plugins/hackathonkit.
-    return path.resolve(process.env.PLUGIN_ROOT, "..", "..");
-  }
-  let dir = process.cwd();
+}
+
+function findRepoUp(start) {
+  let dir = start;
   for (let i = 0; i < 8; i += 1) {
-    if (
-      fs.existsSync(path.join(dir, ".git")) ||
-      fs.existsSync(path.join(dir, "configs", "routing.yaml"))
-    ) {
-      return dir;
-    }
+    if (looksLikeRepo(dir)) return dir;
     const parent = path.dirname(dir);
     if (parent === dir) break;
     dir = parent;
   }
-  return process.cwd();
+  return "";
+}
+
+// Resolve the project root from validated candidates: an explicit override,
+// then the working directory tree, then the in-repo plugin location. A cached
+// plugin install (PLUGIN_ROOT under ~/.codex/plugins/cache) must never win over
+// the actual project.
+function repoRoot() {
+  const candidates = [];
+  if (process.env.HACKATHONKIT_REPO_ROOT) {
+    candidates.push(path.resolve(process.env.HACKATHONKIT_REPO_ROOT));
+  }
+  candidates.push(findRepoUp(process.cwd()));
+  if (process.env.PLUGIN_ROOT) {
+    candidates.push(path.resolve(process.env.PLUGIN_ROOT, "..", ".."));
+  }
+  for (const candidate of candidates) {
+    if (looksLikeRepo(candidate)) return candidate;
+  }
+  return candidates.find(Boolean) || process.cwd();
 }
 
 const ROOT = repoRoot();
 const CONTROL_DIR = path.join(ROOT, "data", "control");
-const ACTIVE = path.join(CONTROL_DIR, "sessions.active.jsonl");
+const SESSIONS_DIR = path.join(CONTROL_DIR, "sessions");
 const SESSIONS_LOG = path.join(ROOT, "logs", "sessions.jsonl");
 const EVENTS_LOG = path.join(ROOT, "logs", "session-events.jsonl");
 
@@ -104,40 +124,55 @@ function newSessionID() {
   return "s-" + stamp + "-" + process.pid;
 }
 
-function readActive() {
-  try {
-    return fs
-      .readFileSync(ACTIVE, "utf8")
-      .split("\n")
-      .map((line) => line.trim())
-      .filter(Boolean)
-      .map((line) => {
-        try {
-          return JSON.parse(line);
-        } catch (_) {
-          return null;
-        }
-      })
-      .filter((entry) => entry && typeof entry.id === "string" && entry.id);
-  } catch (_) {
-    return [];
-  }
+// One file per session: concurrent start/stop operations touch different files
+// and can never erase each other's state.
+function safeStem(id) {
+  const stem = String(id)
+    .replace(/[^A-Za-z0-9._-]+/g, "-")
+    .replace(/^[.-]+|[.-]+$/g, "")
+    .slice(0, 80);
+  return stem || "session";
 }
 
-function appendActive(entry) {
+function sessionFile(id) {
+  return path.join(SESSIONS_DIR, safeStem(id) + ".json");
+}
+
+function writeActive(entry) {
   try {
-    fs.mkdirSync(CONTROL_DIR, { recursive: true });
-    fs.appendFileSync(ACTIVE, JSON.stringify(entry) + "\n");
+    fs.mkdirSync(SESSIONS_DIR, { recursive: true });
+    fs.writeFileSync(sessionFile(entry.id), JSON.stringify(entry) + "\n");
   } catch (_) {}
 }
 
 function removeActive(id) {
   if (!id) return;
   try {
-    const kept = readActive().filter((entry) => entry.id !== id);
-    const body = kept.map((entry) => JSON.stringify(entry)).join("\n");
-    fs.writeFileSync(ACTIVE, kept.length ? body + "\n" : "");
+    fs.unlinkSync(sessionFile(id));
   } catch (_) {}
+}
+
+function readActive() {
+  try {
+    const entries = [];
+    for (const name of fs.readdirSync(SESSIONS_DIR)) {
+      if (!name.endsWith(".json")) continue;
+      const full = path.join(SESSIONS_DIR, name);
+      try {
+        const entry = JSON.parse(fs.readFileSync(full, "utf8"));
+        if (!entry || typeof entry.id !== "string" || !entry.id) continue;
+        const stat = fs.statSync(full);
+        entries.push({ entry, mtime: stat.mtimeMs });
+      } catch (_) {}
+    }
+    entries.sort((a, b) => {
+      const byStart = String(a.entry.started_at || "").localeCompare(String(b.entry.started_at || ""));
+      return byStart !== 0 ? byStart : a.mtime - b.mtime;
+    });
+    return entries.map((item) => item.entry);
+  } catch (_) {
+    return [];
+  }
 }
 
 function lastActiveID() {
@@ -157,15 +192,21 @@ function fallbackContext() {
 }
 
 function binaryContext() {
-  const bin = path.join(ROOT, "bin", "hackathonkit-mcp");
-  try {
-    if (fs.existsSync(bin) && fs.statSync(bin).isFile()) {
-      return execFileSync(bin, ["--repo-root", ROOT, "--session-context"], {
-        timeout: 15000,
-        encoding: "utf8",
-      });
-    }
-  } catch (_) {}
+  const names =
+    process.platform === "win32"
+      ? ["hackathonkit-mcp.exe", "hackathonkit-mcp"]
+      : ["hackathonkit-mcp", "hackathonkit-mcp.exe"];
+  for (const name of names) {
+    const bin = path.join(ROOT, "bin", name);
+    try {
+      if (fs.existsSync(bin) && fs.statSync(bin).isFile()) {
+        return execFileSync(bin, ["--repo-root", ROOT, "--session-context"], {
+          timeout: 15000,
+          encoding: "utf8",
+        });
+      }
+    } catch (_) {}
+  }
   try {
     const compose = path.join(ROOT, "docker-compose.yml");
     if (fs.existsSync(compose)) {
@@ -195,7 +236,7 @@ switch (EVENT) {
   case "session-start": {
     const payload = parsePayload(readStdin());
     const id = payloadSessionID(payload) || newSessionID();
-    appendActive({ id, root: ROOT, started_at: new Date().toISOString() });
+    writeActive({ id, root: ROOT, started_at: new Date().toISOString() });
     appendJSONL(SESSIONS_LOG, {
       ts: new Date().toISOString(),
       type: "session_start",

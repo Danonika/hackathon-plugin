@@ -2,7 +2,7 @@
 
 Local Codex plugin backed by a typed MCP capability layer. Codex is the main reasoning engine, Skills define domain workflows, the local MCP server exposes deterministic and AI-powered capabilities, and the experimental Fly router recommends capability routes while Codex keeps the final decision.
 
-Status: v0.11.1. MCP runtime (34 tools), 28 standard-compliant skills (validator-enforced), session hooks, durable learnings, Codex subagents, four harness adapters, a full control plane (SQLite store, daemon, TUI, worktrees, agent runs, risk scoring, session handoff), staged build plans, PDF/XLSX processing, Fly v2 (keyword + embeddings + kNN memory + mushroom-body learning + LLM classifier), Postgres/MinIO backends, demo dashboard, install profiles/repair, a quality gate with a Go-enabled Docker target, a Fly A/B benchmark, plan review, security review and the evaluation subsystem (deterministic aggregation, calibration, loop decisions and bundle freezing) are in place.
+Status: v0.11.2. MCP runtime (34 tools), 28 standard-compliant skills (validator-enforced), session hooks, durable learnings, Codex subagents, four harness adapters, a full control plane (SQLite store, daemon, TUI, worktrees, agent runs, risk scoring, session handoff), staged build plans, PDF/XLSX processing, Fly v2 (keyword + embeddings + kNN memory + mushroom-body learning + LLM classifier), Postgres/MinIO backends, demo dashboard, install profiles/repair, a quality gate with a Go-enabled Docker target, a Fly A/B benchmark, plan review, security review and the evaluation subsystem (deterministic aggregation, calibration, loop decisions and bundle freezing) are in place.
 
 ## Contents
 
@@ -61,7 +61,7 @@ Codex (reasoning, final decisions)
   |
   |-- Storage: data/ (authoritative local files)
         data/index/learnings.json   durable learnings
-        data/control/sessions.active.jsonl  active session registry
+        data/control/sessions/<id>.json     per-session state files
         data/control/control.db     control plane database (generated)
         data/worktrees/             per-session git worktrees
         Postgres  optional: artifacts, routing_runs, fly_predictions, eval_runs
@@ -156,9 +156,9 @@ The standard is enforced mechanically: `hackathonkit-mcp --validate-skills` (or 
 |---|---|
 | `SessionStart` | Injects a compact context block: routing mode, current plan stage, top learnings, pending eval decisions |
 | `PostToolUse` | Appends `{ts, type, session_id, tool}` to `logs/session-events.jsonl` for the control plane |
-| `Stop` | Appends `session_end` to `logs/sessions.jsonl` and removes only that session from `data/control/sessions.active.jsonl` |
+| `Stop` | Appends `session_end` to `logs/sessions.jsonl` and removes only that session's file under `data/control/sessions/` |
 
-The context block comes from `hackathonkit-mcp --session-context` (local binary, then `docker compose`, then a shell fallback). Active sessions live in `data/control/sessions.active.jsonl` (gitignored); events use the session id from the hook payload when present, otherwise the most recently started active session, so overlapping sessions do not steal each other's events. `node plugins/hackathonkit/scripts/hooks.test.js` verifies this behavior and `scripts/doctor.sh` runs it.
+The context block comes from `hackathonkit-mcp --session-context` (local binary, then `docker compose`, then a shell fallback). Active sessions own one file each under `data/control/sessions/` (gitignored, no shared read-modify-write), so overlapping start/stop operations cannot erase each other. Events use the session id from the hook payload when present, otherwise the most recently started active session. The project root is resolved from validated candidates (explicit override, then the working directory tree, then the in-repo plugin), so a cached plugin install never writes into `~/.codex`. `node plugins/hackathonkit/scripts/hooks.test.js` verifies overlap, cached roots, unsafe ids and the Windows `.exe` lookup; `scripts/doctor.sh` runs it.
 
 ## Learnings
 
