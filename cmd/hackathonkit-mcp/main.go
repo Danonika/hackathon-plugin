@@ -31,7 +31,7 @@ import (
 	"hackathonkit.local/agentkit/internal/tools"
 )
 
-const version = "0.16.2"
+const version = "0.16.3"
 
 func main() {
 	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))

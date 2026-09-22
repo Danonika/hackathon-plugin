@@ -74,6 +74,33 @@ func (t *table) columnIndex(name string) int {
 		}
 	}
 	needle := strings.ToLower(name)
+	// Prefer prefix/suffix matches before a loose contains, so "id" does not
+	// silently bind to an unrelated header such as "grid". Ambiguity is still
+	// refused: two headers sharing the prefix return -1.
+	prefixMatch, suffixMatch := -1, -1
+	for i, h := range t.Headers {
+		lower := strings.ToLower(strings.TrimSpace(h))
+		if strings.HasPrefix(lower, needle) {
+			if prefixMatch == -1 {
+				prefixMatch = i
+			} else {
+				prefixMatch = -2
+			}
+		}
+		if strings.HasSuffix(lower, needle) {
+			if suffixMatch == -1 {
+				suffixMatch = i
+			} else {
+				suffixMatch = -2
+			}
+		}
+	}
+	if prefixMatch >= 0 {
+		return prefixMatch
+	}
+	if suffixMatch >= 0 {
+		return suffixMatch
+	}
 	match := -1
 	for i, h := range t.Headers {
 		if strings.Contains(strings.ToLower(h), needle) {
@@ -196,7 +223,13 @@ func registerData(reg *mcp.Registry, d Deps) {
 			if fail != nil {
 				return *fail, nil
 			}
-			profiles := profileColumns(t, argStringSlice(args, "columns"))
+			requested := argStringSlice(args, "columns")
+			profiles := profileColumns(t, requested)
+			for _, name := range requested {
+				if t.columnIndex(name) < 0 {
+					warnings = append(warnings, "unknown column requested: "+name)
+				}
+			}
 			if len(t.Headers) > 64 {
 				warnings = append(warnings, "more than 64 columns detected; consider a column subset")
 			}
@@ -253,8 +286,10 @@ func registerData(reg *mcp.Registry, d Deps) {
 				}
 			}
 			limit := argInt(args, "limit", 20)
-			if limit <= 0 || limit > 200 {
+			if limit <= 0 {
 				limit = 20
+			} else if limit > 200 {
+				limit = 200
 			}
 			out := make([]map[string]string, 0, limit)
 			for i, row := range rows {
@@ -297,7 +332,13 @@ func registerData(reg *mcp.Registry, d Deps) {
 			if fail != nil {
 				return *fail, nil
 			}
-			profiles := profileColumns(t, argStringSlice(args, "columns"))
+			requested := argStringSlice(args, "columns")
+			profiles := profileColumns(t, requested)
+			for _, name := range requested {
+				if t.columnIndex(name) < 0 {
+					warnings = append(warnings, "unknown column requested: "+name)
+				}
+			}
 			numeric := []string{}
 			for _, p := range profiles {
 				if p.Kind == "numeric" {

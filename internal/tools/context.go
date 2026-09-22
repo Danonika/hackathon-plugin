@@ -103,6 +103,11 @@ func toolContextItems(reg *mcp.Registry) []contextItem {
 		}
 		data, err := json.Marshal(payload)
 		if err != nil {
+			items = append(items, contextItem{
+				Kind: "tool",
+				Name: t.Name,
+				Flag: "schema marshal failed: " + err.Error(),
+			})
 			continue
 		}
 		item := contextItem{
@@ -122,7 +127,7 @@ func toolContextItems(reg *mcp.Registry) []contextItem {
 func skillContextItems(root string) []contextItem {
 	base := filepath.Join(root, "plugins", "hackathonkit", "skills")
 	items := []contextItem{}
-	_ = filepath.WalkDir(base, func(path string, entry os.DirEntry, err error) error {
+	walkErr := filepath.WalkDir(base, func(path string, entry os.DirEntry, err error) error {
 		if err != nil || entry.IsDir() {
 			return nil
 		}
@@ -168,6 +173,9 @@ func skillContextItems(root string) []contextItem {
 		items = append(items, item)
 		return nil
 	})
+	if walkErr != nil {
+		items = append(items, contextItem{Kind: "skill", Name: "skills scan", Flag: "walk failed: " + walkErr.Error()})
+	}
 	return items
 }
 
@@ -244,11 +252,35 @@ func estimateTokens(bytes int) int {
 }
 
 func frontmatterDescription(text string) string {
-	for _, line := range strings.Split(text, "\n") {
-		if strings.HasPrefix(line, "description:") {
-			value := strings.TrimSpace(strings.TrimPrefix(line, "description:"))
-			return strings.Trim(value, `"'`)
+	lines := strings.Split(text, "\n")
+	if len(lines) == 0 || strings.TrimSpace(lines[0]) != "---" {
+		return ""
+	}
+	for i := 1; i < len(lines); i++ {
+		line := lines[i]
+		if strings.TrimSpace(line) == "---" {
+			break
 		}
+		if !strings.HasPrefix(line, "description:") {
+			continue
+		}
+		value := strings.TrimSpace(strings.TrimPrefix(line, "description:"))
+		if value == "|" || value == ">" || value == "|-" || value == ">-" {
+			// Block scalar: collect the indented lines that follow.
+			var b strings.Builder
+			for j := i + 1; j < len(lines); j++ {
+				next := lines[j]
+				if strings.TrimSpace(next) == "---" || (strings.TrimSpace(next) != "" && !strings.HasPrefix(next, " ") && !strings.HasPrefix(next, "\t")) {
+					break
+				}
+				if b.Len() > 0 {
+					b.WriteString(" ")
+				}
+				b.WriteString(strings.TrimSpace(next))
+			}
+			return strings.TrimSpace(b.String())
+		}
+		return strings.Trim(value, `"'`)
 	}
 	return ""
 }

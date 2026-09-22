@@ -120,7 +120,10 @@ func xmlEscape(s string) string {
 			b.WriteString("&quot;")
 		case r == '\'':
 			b.WriteString("&apos;")
-		case r == 0x9 || r == 0xA || r == 0xD || (r >= 0x20 && r <= 0xD7FF) || (r >= 0xE000 && r <= 0xFFFD):
+		case r == 0x9 || r == 0xA || r == 0xD ||
+			(r >= 0x20 && r <= 0xD7FF) ||
+			(r >= 0xE000 && r <= 0xFFFD) ||
+			(r >= 0x10000 && r <= 0x10FFFF):
 			b.WriteRune(r)
 		default:
 			// Control characters and surrogates are illegal in XML 1.0.

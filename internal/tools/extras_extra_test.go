@@ -3,7 +3,7 @@ package tools
 import "testing"
 
 func TestParseChartSeriesDefaults(t *testing.T) {
-	parsed, err := parseChartSeries(map[string]any{"series": []any{
+	parsed, _, err := parseChartSeries(map[string]any{"series": []any{
 		map[string]any{"label": "   ", "points": []any{map[string]any{"y": 1.0}}},
 		map[string]any{"label": "named", "points": []any{map[string]any{"y": 2.0}}},
 	}})

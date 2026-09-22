@@ -277,7 +277,7 @@ func TestWorkbookSheetsEdgeCases(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer zr.Close()
-	refs := workbookSheets(zr)
+	refs, _ := workbookSheets(zr)
 	if len(refs) != 2 {
 		t.Fatalf("refs = %+v", refs)
 	}

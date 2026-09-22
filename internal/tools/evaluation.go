@@ -366,9 +366,7 @@ func registerEvaluation(reg *mcp.Registry, d Deps) {
 				}
 				if votes, ok := raw["votes"].(map[string]any); ok {
 					for sha, value := range votes {
-						if count, ok := value.(float64); ok {
-							commission.Votes[sha] = int(count)
-						}
+						commission.Votes[sha] = argInt(map[string]any{"v": value}, "v", 0)
 					}
 				}
 				ranking, err = evaluation.ApplyCommission(ranking, commission)
@@ -525,7 +523,36 @@ func resolveRepoPath(root, rel string) (string, error) {
 	if clean == "." || clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
 		return "", fmt.Errorf("path escapes repository root: %s", rel)
 	}
-	return filepath.Join(root, clean), nil
+	full := filepath.Join(root, clean)
+	if resolvedRoot, err := filepath.EvalSymlinks(root); err == nil {
+		resolved := resolveExistingPath(full)
+		if resolved != resolvedRoot && !strings.HasPrefix(resolved, resolvedRoot+string(filepath.Separator)) {
+			return "", fmt.Errorf("path resolves outside the repository root: %s", rel)
+		}
+	}
+	return full, nil
+}
+
+// resolveExistingPath resolves symlinks on the longest existing prefix of path.
+func resolveExistingPath(path string) string {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return filepath.Clean(path)
+	}
+	current := abs
+	var suffix []string
+	for {
+		if resolved, err := filepath.EvalSymlinks(current); err == nil {
+			parts := append([]string{resolved}, suffix...)
+			return filepath.Join(parts...)
+		}
+		parent := filepath.Dir(current)
+		if parent == current {
+			return abs
+		}
+		suffix = append([]string{filepath.Base(current)}, suffix...)
+		current = parent
+	}
 }
 
 func writeRepoJSON(root, rel string, value any) (string, error) {

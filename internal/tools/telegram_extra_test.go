@@ -140,11 +140,16 @@ func TestParseBotCommands(t *testing.T) {
 		t.Fatal("missing description must fail")
 	}
 	if _, err := parseBotCommands(map[string]any{"commands": []any{"not-a-map"}}); err == nil {
-		t.Fatal("no valid commands must fail")
+		t.Fatal("non-object entries must fail")
+	}
+	if _, err := parseBotCommands(map[string]any{"commands": []any{
+		map[string]any{"command": "status", "description": "Show status"},
+		"oops",
+	}}); err == nil {
+		t.Fatal("a non-object entry must fail even when other entries are valid")
 	}
 	commands, err := parseBotCommands(map[string]any{"commands": []any{
 		map[string]any{"command": "status", "description": "Show status"},
-		"skipped",
 	}})
 	if err != nil || len(commands) != 1 || commands[0].Command != "status" {
 		t.Fatalf("commands = %+v err %v", commands, err)

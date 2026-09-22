@@ -94,9 +94,9 @@ func registerClassification(reg *mcp.Registry, d Deps) {
 					scores[category] = round2(score)
 					sort.Strings(terms)
 					matched[category] = terms
-					if float64(hits) > bestScore {
+					if score > bestScore {
 						best = category
-						bestScore = float64(hits)
+						bestScore = score
 					}
 				}
 			}
@@ -132,7 +132,7 @@ func registerCharts(reg *mcp.Registry, d Deps) {
 		},
 		[]string{"series"},
 		func(ctx context.Context, args map[string]any) (any, error) {
-			series, err := parseChartSeries(args)
+			series, warnings, err := parseChartSeries(args)
 			if err != nil {
 				return mcp.Fail(trace(ctx), err.Error()), nil
 			}
@@ -140,11 +140,18 @@ func registerCharts(reg *mcp.Registry, d Deps) {
 			if kind != "bar" {
 				kind = "line"
 			}
+			if kind == "bar" && len(series) > 1 {
+				warnings = append(warnings, "bar charts draw only the first series")
+			}
 			title := argString(args, "title")
 			if title == "" {
 				title = "Hackathon Agent Kit chart"
 			}
 			svg := renderChartSVG(title, kind, series)
+			drawn := len(series)
+			if kind == "bar" {
+				drawn = 1
+			}
 			stamp := time.Now().UTC().Format("20060102-150405")
 			artifact, werr := d.Store.WriteArtifact(
 				fmt.Sprintf("charts/%s-%s.svg", slugify(title), stamp),
@@ -157,22 +164,29 @@ func registerCharts(reg *mcp.Registry, d Deps) {
 			for _, s := range series {
 				total += len(s.Points)
 			}
-			return mcp.OK(trace(ctx), map[string]any{
-				"artifact_id": artifact,
-				"chart_type":  kind,
-				"series":      len(series),
-				"points":      total,
-			}).WithSources(mcp.Source{ArtifactID: artifact, Block: "chart"}), nil
+			envelope := mcp.OK(trace(ctx), map[string]any{
+				"artifact_id":  artifact,
+				"chart_type":   kind,
+				"series":       len(series),
+				"series_drawn": drawn,
+				"points":       total,
+			}).WithSources(mcp.Source{ArtifactID: artifact, Block: "chart"})
+			if len(warnings) > 0 {
+				envelope = envelope.WithWarnings(warnings...)
+			}
+			return envelope, nil
 		},
 	))
 }
 
-func parseChartSeries(args map[string]any) ([]chartSeries, error) {
+func parseChartSeries(args map[string]any) ([]chartSeries, []string, error) {
 	raw, _ := args["series"].([]any)
 	out := []chartSeries{}
-	for _, item := range raw {
+	warnings := []string{}
+	for i, item := range raw {
 		m, ok := item.(map[string]any)
 		if !ok {
+			warnings = append(warnings, fmt.Sprintf("series[%d] is not an object and was skipped", i))
 			continue
 		}
 		label := "series"
@@ -181,14 +195,15 @@ func parseChartSeries(args map[string]any) ([]chartSeries, error) {
 		}
 		points := parseChartPoints(m["points"])
 		if len(points) == 0 {
+			warnings = append(warnings, fmt.Sprintf("series %q has no usable points and was skipped", label))
 			continue
 		}
 		out = append(out, chartSeries{Label: label, Points: points})
 	}
 	if len(out) == 0 {
-		return nil, fmt.Errorf("series with at least one point is required")
+		return nil, warnings, fmt.Errorf("series with at least one point is required")
 	}
-	return out, nil
+	return out, warnings, nil
 }
 
 func parseChartPoints(raw any) []chartPoint {
@@ -229,6 +244,29 @@ func parseChartPoints(raw any) []chartPoint {
 	return out
 }
 
+// chartXValues returns a numeric X value per point (numbers or timestamps) when
+// every point has one, so line charts honour real spacing instead of indices.
+func chartXValues(series []chartSeries) ([]float64, bool) {
+	values := []float64{}
+	for _, s := range series {
+		for _, p := range s.Points {
+			if p.X == "" {
+				return nil, false
+			}
+			if v, ok := parseNumber(p.X); ok {
+				values = append(values, v)
+				continue
+			}
+			if ts, ok := parseTimeValue(p.X); ok {
+				values = append(values, float64(ts.Unix()))
+				continue
+			}
+			return nil, false
+		}
+	}
+	return values, len(values) > 0
+}
+
 func renderChartSVG(title, kind string, series []chartSeries) string {
 	const w, h = 900, 420
 	const left, right, top, bottom = 70.0, 30.0, 60.0, 50.0
@@ -258,6 +296,25 @@ func renderChartSVG(title, kind string, series []chartSeries) string {
 			return left + plotW/2
 		}
 		return left + float64(i)*plotW/float64(n-1)
+	}
+	xVals, useX := chartXValues(series)
+	xMinV, xMaxV := 0.0, 0.0
+	if useX {
+		xMinV, xMaxV = xVals[0], xVals[0]
+		for _, v := range xVals {
+			if v < xMinV {
+				xMinV = v
+			}
+			if v > xMaxV {
+				xMaxV = v
+			}
+		}
+	}
+	xPosValue := func(v float64) float64 {
+		if xMaxV == xMinV {
+			return left + plotW/2
+		}
+		return left + (v-xMinV)/(xMaxV-xMinV)*plotW
 	}
 	yPos := func(v float64) float64 {
 		return top + plotH - (v-yMin)/(yMax-yMin)*plotH
@@ -297,12 +354,18 @@ func renderChartSVG(title, kind string, series []chartSeries) string {
 			}
 		}
 	} else {
+		offset := 0
 		for si, s := range series {
 			color := colors[si%len(colors)]
 			pts := make([]string, 0, len(s.Points))
 			for i, p := range s.Points {
-				pts = append(pts, fmt.Sprintf("%.1f,%.1f", xPos(i, len(s.Points)), yPos(p.Y)))
+				x := xPos(i, len(s.Points))
+				if useX && offset+i < len(xVals) {
+					x = xPosValue(xVals[offset+i])
+				}
+				pts = append(pts, fmt.Sprintf("%.1f,%.1f", x, yPos(p.Y)))
 			}
+			offset += len(s.Points)
 			fmt.Fprintf(&b, `<polyline fill="none" stroke="%s" stroke-width="2" points="%s"/>`+"\n", color, strings.Join(pts, " "))
 		}
 	}

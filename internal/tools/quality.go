@@ -14,11 +14,15 @@ func registerQuality(reg *mcp.Registry, d Deps) {
 		map[string]any{},
 		nil,
 		func(ctx context.Context, args map[string]any) (any, error) {
-			report, ok := quality.Latest(d.Cfg.Root())
+			report, ok, evidenceErr := quality.LatestReport(d.Cfg.Root())
 			if !ok {
+				warnings := []string{"no gate evidence found; run scripts/quality-gate.sh (or docker compose run --rm quality)"}
+				if evidenceErr != nil {
+					warnings = append(warnings, "evidence could not be read: "+evidenceErr.Error())
+				}
 				return mcp.Partial(trace(ctx), map[string]any{
 					"available": false,
-				}, "no gate evidence found; run scripts/quality-gate.sh (or docker compose run --rm quality)"), nil
+				}, warnings...), nil
 			}
 			failed := quality.FailedChecks(report)
 			data := map[string]any{

@@ -61,14 +61,18 @@ func TestColumnIndexRejectsEmptyAndAmbiguous(t *testing.T) {
 	if got := tbl.columnIndex(""); got != -1 {
 		t.Fatalf("empty name = %d, want -1", got)
 	}
-	if got := tbl.columnIndex("id"); got != -1 {
-		t.Fatalf("ambiguous partial name = %d, want -1", got)
+	if got := tbl.columnIndex("id"); got != 1 {
+		t.Fatalf("unique prefix match = %d, want 1", got)
 	}
 	if got := tbl.columnIndex("value"); got != 2 {
 		t.Fatalf("exact name = %d, want 2", got)
 	}
 	if got := tbl.columnIndex("id_value"); got != 1 {
 		t.Fatalf("exact second name = %d, want 1", got)
+	}
+	ambiguous := &table{Headers: []string{"id_a", "id_b"}}
+	if got := ambiguous.columnIndex("id"); got != -1 {
+		t.Fatalf("ambiguous prefix = %d, want -1", got)
 	}
 }
 
@@ -167,8 +171,8 @@ func TestDataQueryProjectionLimitAndErrors(t *testing.T) {
 	}
 
 	defaulted := call(t, reg, "data.query", map[string]any{"path": "many.csv", "limit": float64(1000)})
-	if got := defaulted.Data.(map[string]any)["returned"].(int); got != 20 {
-		t.Fatalf("out-of-range limit must default to 20, got %d", got)
+	if got := defaulted.Data.(map[string]any)["returned"].(int); got != 30 {
+		t.Fatalf("oversized limit must clamp to the 200 maximum (30 rows here), got %d", got)
 	}
 
 	filtered := call(t, reg, "data.query", map[string]any{"path": "many.csv", "where": "value >= 28"})

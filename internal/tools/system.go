@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
 	"time"
 
@@ -170,6 +171,11 @@ func registerSystem(reg *mcp.Registry, d Deps) {
 			source := argString(args, "source")
 			if source == "" {
 				source = "accepted"
+			}
+			switch source {
+			case "accepted", "codex-correction", "normal-teacher", "fallback":
+			default:
+				return mcp.Fail(trace(ctx), fmt.Sprintf("invalid source %q (expected accepted, codex-correction, normal-teacher or fallback)", source)), nil
 			}
 			recommended := []fly.Recommendation{}
 			for _, name := range argStringSlice(args, "recommended") {

@@ -160,34 +160,57 @@ func Save(root string, report Report) (string, error) {
 
 // Latest returns the most recently written gate report.
 func Latest(root string) (Report, bool) {
+	report, ok, _ := LatestReport(root)
+	return report, ok
+}
+
+// LatestReport also surfaces why evidence is missing or partially unreadable,
+// so callers can distinguish "never ran" from "corrupt evidence".
+func LatestReport(root string) (Report, bool, error) {
 	entries, err := os.ReadDir(Dir(root))
 	if err != nil {
-		return Report{}, false
+		if os.IsNotExist(err) {
+			return Report{}, false, nil
+		}
+		return Report{}, false, err
 	}
 	var best Report
 	var bestTime time.Time
+	var firstErr error
 	for _, entry := range entries {
 		if !entry.IsDir() {
 			continue
 		}
 		info, infoErr := entry.Info()
-		if infoErr != nil || info.ModTime().Before(bestTime) {
+		if infoErr != nil {
+			if firstErr == nil {
+				firstErr = infoErr
+			}
+			continue
+		}
+		if info.ModTime().Before(bestTime) {
 			continue
 		}
 		data, readErr := os.ReadFile(filepath.Join(Dir(root), entry.Name(), "gate.json"))
 		if readErr != nil {
+			if firstErr == nil {
+				firstErr = readErr
+			}
 			continue
 		}
 		var report Report
 		if json.Unmarshal(data, &report) != nil {
+			if firstErr == nil {
+				firstErr = fmt.Errorf("gate evidence for %s is corrupt", entry.Name())
+			}
 			continue
 		}
 		best, bestTime = report, info.ModTime()
 	}
 	if bestTime.IsZero() {
-		return Report{}, false
+		return Report{}, false, firstErr
 	}
-	return best, true
+	return best, true, firstErr
 }
 
 // GitSHA resolves HEAD without requiring a git binary.

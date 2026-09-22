@@ -16,6 +16,7 @@ func registerPlans(reg *mcp.Registry, d Deps) {
 		"Create a staged build plan (S0 outcome .. S6 freeze) stored under evals/plans/. The plan's mandatory scenario and stage gates drive the improvement loops.",
 		map[string]any{
 			"slug":               strProp("Short plan name, e.g. telemetry-anomalies"),
+			"overwrite":          boolProp("Replace an existing plan with this slug (default false)"),
 			"task":               strProp("Task statement: input -> expected output"),
 			"mandatory_scenario": objProp("Mandatory scenario: {input, command, expected}"),
 			"stages": arrProp("Optional stages: [{id, goal, status, timebox_minutes}]", map[string]any{
@@ -34,6 +35,11 @@ func registerPlans(reg *mcp.Registry, d Deps) {
 			slug := plans.Slug(rawSlug)
 			if rawSlug == "" || (slug == "plan" && strings.ToLower(strings.TrimSpace(rawSlug)) != "plan") {
 				return mcp.Fail(trace(ctx), "slug must contain at least one letter or digit"), nil
+			}
+			if !argBool(args, "overwrite", false) {
+				if existing, err := plans.Load(d.Cfg.Root(), slug); err == nil && existing.Slug != "" {
+					return mcp.Fail(trace(ctx), fmt.Sprintf("plan %q already exists (revision %d); use plan.update or pass overwrite=true", slug, existing.Revision)), nil
+				}
 			}
 			warnings := []string{}
 			stages := []plans.Stage{}
@@ -59,7 +65,7 @@ func registerPlans(reg *mcp.Registry, d Deps) {
 					if !plans.ValidStatus(status) {
 						return mcp.Fail(trace(ctx), fmt.Sprintf("invalid stage status %q", status)), nil
 					}
-					timebox := int(argFloat(m, "timebox_minutes", 0))
+					timebox := argInt(m, "timebox_minutes", 0)
 					stages = append(stages, plans.Stage{ID: id, Goal: goal, Status: status, TimeboxMinute: timebox})
 				}
 				if skipped > 0 {

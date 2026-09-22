@@ -134,6 +134,8 @@ func tableAsText(t *table) string {
 	return b.String()
 }
 
+const maxDocxXMLBytes = 64 << 20
+
 func docxText(path string) (string, error) {
 	zr, err := zip.OpenReader(path)
 	if err != nil {
@@ -155,7 +157,8 @@ func docxText(path string) (string, error) {
 		return "", err
 	}
 	defer rc.Close()
-	dec := xml.NewDecoder(rc)
+	limited := io.LimitReader(rc, maxDocxXMLBytes+1)
+	dec := xml.NewDecoder(limited)
 	var b strings.Builder
 	for {
 		tok, err := dec.Token()

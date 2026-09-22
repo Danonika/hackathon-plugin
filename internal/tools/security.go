@@ -119,7 +119,11 @@ func securitySource(d Deps, args map[string]any) (string, string, error) {
 		return "input:" + path, string(data), nil
 	}
 	if artifact := argString(args, "artifact_id"); artifact != "" {
-		data, err := d.Store.ReadArtifact(artifact)
+		full, err := d.Store.ArtifactPath(artifact, false)
+		if err != nil {
+			return "", "", err
+		}
+		data, err := readCapped(full, int64(securityScanLimit)+1)
 		if err != nil {
 			return "", "", err
 		}
@@ -184,7 +188,7 @@ func invisibleUnicode(text string) (int, int) {
 
 func isInvisible(r rune) bool {
 	switch {
-	case r >= 0x200B && r <= 0x200F: // zero-width and direction marks
+	case r == 0x200B || r == 0x200E || r == 0x200F: // zero-width space and direction marks
 		return true
 	case r >= 0x202A && r <= 0x202E: // bidi embedding/override
 		return true

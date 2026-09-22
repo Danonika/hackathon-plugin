@@ -166,7 +166,7 @@ func parseBotCommands(args map[string]any) ([]telegram.BotCommand, error) {
 	for _, item := range raw {
 		m, ok := item.(map[string]any)
 		if !ok {
-			continue
+			return nil, fmt.Errorf("every command entry must be an object")
 		}
 		command, _ := m["command"].(string)
 		description, _ := m["description"].(string)

@@ -237,12 +237,14 @@ func resourcesEnvelope(ctx context.Context, d Deps, task, trackRef string) mcp.E
 	if ref != "" {
 		if track, ok := resources.LookupTrack(ref); ok {
 			data["track"] = track
-			if matrix, err := resources.LoadMatrix(d.Cfg.Root()); err == nil {
-				if plan, decisions, err := resources.Plan(matrix, statuses, track.ID); err == nil {
-					data["track_plan"] = plan
-					data["variants"] = decisions
-					data["variant_summary"] = resources.DecisionSummary(decisions)
-				}
+			if matrix, err := resources.LoadMatrix(d.Cfg.Root()); err != nil {
+				warnings = append(warnings, "resource matrix could not be loaded: "+err.Error())
+			} else if plan, decisions, err := resources.Plan(matrix, statuses, track.ID); err != nil {
+				warnings = append(warnings, "variant plan unavailable: "+err.Error())
+			} else {
+				data["track_plan"] = plan
+				data["variants"] = decisions
+				data["variant_summary"] = resources.DecisionSummary(decisions)
 			}
 		} else {
 			warnings = append(warnings, fmt.Sprintf("unknown track %q", ref))

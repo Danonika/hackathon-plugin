@@ -86,17 +86,25 @@ func argString(args map[string]any, key string) string {
 }
 
 func argFloat(args map[string]any, key string, def float64) float64 {
+	var value float64
 	switch v := args[key].(type) {
 	case float64:
-		return v
+		value = v
 	case int:
-		return float64(v)
+		value = float64(v)
 	case string:
-		if f, err := strconv.ParseFloat(v, 64); err == nil {
-			return f
+		parsed, err := strconv.ParseFloat(v, 64)
+		if err != nil {
+			return def
 		}
+		value = parsed
+	default:
+		return def
 	}
-	return def
+	if math.IsNaN(value) || math.IsInf(value, 0) {
+		return def
+	}
+	return value
 }
 
 func argInt(args map[string]any, key string, def int) int {
