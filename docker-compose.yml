@@ -11,6 +11,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      # MinIO publishes no healthcheck in the upstream image; the MCP server
+      # treats object storage as optional and reconnects on first use.
       minio:
         condition: service_started
     environment:
@@ -25,6 +27,8 @@ services:
       MINIO_ACCESS_KEY: hackathonkit
       MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD:?set MINIO_ROOT_PASSWORD in .env}
       MINIO_BUCKET: hackathonkit
+    # data/logs/evals are shared read-write with demo-api by design: the MCP
+    # writes artifacts/calls, the demo dashboard writes plan approvals.
     volumes:
       - ./configs:/workspace/configs
       - ./data:/workspace/data

@@ -7,44 +7,69 @@ if ! command -v codex >/dev/null 2>&1; then
   echo "[plugin-check] codex CLI is unavailable; skipping" >&2
   exit 2
 fi
-JSON="$(codex plugin list --json 2>/dev/null || true)"
-if [ -z "$JSON" ]; then
-  echo "[plugin-check] codex plugin list is unavailable" >&2
-  exit 1
-fi
 
 if ! command -v python3 >/dev/null 2>&1; then
   echo "[plugin-check] python3 is required for this check; skipping" >&2
   exit 2
 fi
 
-printf '%s' "$JSON" | python3 -c '
+JSON_FILE=$(mktemp "${TMPDIR:-/tmp}/hackathonkit-plugin-list.XXXXXX")
+ERR_FILE=$(mktemp "${TMPDIR:-/tmp}/hackathonkit-plugin-list-err.XXXXXX")
+trap 'rm -f "$JSON_FILE" "$ERR_FILE"' EXIT INT TERM
+if ! codex plugin list --json >"$JSON_FILE" 2>"$ERR_FILE"; then
+  status=$?
+  echo "[plugin-check] codex plugin list failed (exit $status):" >&2
+  tail -3 "$ERR_FILE" >&2 || true
+  exit 1
+fi
+
+python3 - "$JSON_FILE" <<'PY'
 import json
 import os
+import stat
 import subprocess
 import sys
 import tempfile
 
-raw = sys.stdin.read()
+path = sys.argv[1]
+with open(path, "r", encoding="utf-8") as fh:
+    raw = fh.read()
 try:
     data = json.loads(raw)
-except ValueError:
-    print("[plugin-check] cannot parse codex plugin list output", file=sys.stderr)
+except ValueError as exc:
+    print("[plugin-check] cannot parse codex plugin list output: %s" % exc, file=sys.stderr)
+    sys.exit(1)
+if not isinstance(data, dict) or not isinstance(data.get("installed"), list):
+    print("[plugin-check] unexpected codex plugin list shape (expected an 'installed' array)", file=sys.stderr)
     sys.exit(1)
 
 entry = None
-for plugin in data.get("installed", []):
-    if plugin.get("name") == "hackathonkit":
+for plugin in data["installed"]:
+    if isinstance(plugin, dict) and plugin.get("name") == "hackathonkit":
         entry = plugin
         break
-if not entry:
+if entry is None:
     print("[plugin-check] hackathonkit plugin is not installed", file=sys.stderr)
     sys.exit(1)
 
-source = (entry.get("source") or {}).get("path") or ""
+source = ""
+if isinstance(entry.get("source"), dict):
+    source = entry["source"].get("path") or ""
+source = os.path.abspath(str(source)) if source else ""
 if not source:
     print("[plugin-check] installed plugin has no source.path; re-run scripts/setup.sh", file=sys.stderr)
     sys.exit(1)
+
+# The manifest is about to be executed: refuse a world-writable plugin tree.
+try:
+    mode = os.stat(source).st_mode
+    if mode & stat.S_IWOTH:
+        print("[plugin-check] refusing to execute a world-writable plugin directory: %s" % source, file=sys.stderr)
+        sys.exit(1)
+except OSError as exc:
+    print("[plugin-check] cannot inspect the plugin directory: %s" % exc, file=sys.stderr)
+    sys.exit(1)
+
 mcp_path = os.path.join(source, ".mcp.json")
 if not os.path.isfile(mcp_path):
     print("[plugin-check] .mcp.json is missing in the installed plugin; run scripts/setup.sh", file=sys.stderr)
@@ -55,25 +80,34 @@ try:
 except (OSError, ValueError) as exc:
     print("[plugin-check] cannot read .mcp.json: %s" % exc, file=sys.stderr)
     sys.exit(1)
+if not isinstance(manifest, dict) or not isinstance(manifest.get("mcpServers"), dict):
+    print("[plugin-check] .mcp.json has no mcpServers object", file=sys.stderr)
+    sys.exit(1)
 
-server = (manifest.get("mcpServers") or {}).get("hackathonkit")
-if not server or not server.get("command"):
+server = manifest["mcpServers"].get("hackathonkit")
+if not isinstance(server, dict) or not isinstance(server.get("command"), str) or not server["command"]:
     print("[plugin-check] hackathonkit server is missing in .mcp.json", file=sys.stderr)
+    sys.exit(1)
+args = server.get("args") or []
+if not isinstance(args, list):
+    print("[plugin-check] hackathonkit server args must be an array", file=sys.stderr)
     sys.exit(1)
 
 requests = "\n".join([
     json.dumps({"jsonrpc": "2.0", "id": 1, "method": "initialize",
                 "params": {"protocolVersion": "2025-06-18",
                            "clientInfo": {"name": "plugin-check", "version": "0"}}}),
+    json.dumps({"jsonrpc": "2.0", "method": "notifications/initialized"}),
     json.dumps({"jsonrpc": "2.0", "id": 2, "method": "tools/list"}),
     json.dumps({"jsonrpc": "2.0", "id": 3, "method": "tools/call",
                 "params": {"name": "system.context", "arguments": {}}}),
 ]) + "\n"
 
-cmd = [str(server["command"])] + [str(arg) for arg in (server.get("args") or [])]
+cmd = [server["command"]] + [str(arg) for arg in args]
 with tempfile.TemporaryDirectory(prefix="hackathonkit-plugin-check-") as tmp:
     try:
-        proc = subprocess.run(cmd, input=requests, text=True, capture_output=True, cwd=tmp, timeout=120)
+        proc = subprocess.run(cmd, input=requests, text=True, errors="replace",
+                              capture_output=True, cwd=tmp, timeout=120)
     except subprocess.TimeoutExpired:
         print("[plugin-check] FAIL: MCP command timed out after 120s", file=sys.stderr)
         sys.exit(1)
@@ -82,30 +116,43 @@ with tempfile.TemporaryDirectory(prefix="hackathonkit-plugin-check-") as tmp:
         sys.exit(1)
 
 stderr_tail = "\n".join(line for line in (proc.stderr or "").splitlines()[-5:] if line.strip())
-lines = [line for line in proc.stdout.splitlines() if line.strip()]
-if len(lines) != 3:
-    message = "[plugin-check] FAIL: expected 3 JSON-RPC responses from a foreign working directory, got %d" % len(lines)
+
+# Correlate responses by id; servers may interleave notifications or logs.
+responses = {}
+for line in (proc.stdout or "").splitlines():
+    line = line.strip()
+    if not line:
+        continue
+    try:
+        obj = json.loads(line)
+    except ValueError:
+        continue
+    if isinstance(obj, dict) and obj.get("id") in (1, 2, 3):
+        responses[obj["id"]] = obj
+    if isinstance(obj, dict) and obj.get("id") in (1, 2, 3) and obj.get("error"):
+        message = (obj.get("error") or {}).get("message", "unknown error")
+        print("[plugin-check] FAIL: error response for id=%s: %s" % (obj["id"], message), file=sys.stderr)
+        sys.exit(1)
+
+missing = [i for i in (1, 2, 3) if i not in responses]
+if missing:
+    message = "[plugin-check] FAIL: missing JSON-RPC responses for id(s) %s from a foreign working directory" % missing
     if stderr_tail:
         message += "\n[plugin-check] server stderr:\n" + stderr_tail
     print(message, file=sys.stderr)
     sys.exit(1)
-for line, want in zip(lines, [1, 2, 3]):
-    try:
-        obj = json.loads(line)
-    except ValueError:
-        print("[plugin-check] FAIL: non-JSON output detected: %s" % line, file=sys.stderr)
+
+for want in (1, 2, 3):
+    obj = responses[want]
+    # 'result' may legitimately be falsy (an empty object or false), so the
+    # key must exist rather than be truthy.
+    if "result" not in obj:
+        print("[plugin-check] FAIL: response for id=%s has no result" % want, file=sys.stderr)
         sys.exit(1)
-    if obj.get("error"):
-        message = (obj.get("error") or {}).get("message", "unknown error")
-        print("[plugin-check] FAIL: error response for id=%s: %s" % (want, message), file=sys.stderr)
-        sys.exit(1)
-    if obj.get("id") != want or "result" not in obj:
-        print("[plugin-check] FAIL: unexpected response for id=%s" % want, file=sys.stderr)
-        sys.exit(1)
-    result = obj.get("result")
+    result = obj["result"]
     if isinstance(result, dict) and result.get("isError"):
         print("[plugin-check] FAIL: tool call id=%s reported isError" % want, file=sys.stderr)
         sys.exit(1)
 
 print("[plugin-check] ok: installed plugin starts the MCP from a foreign working directory")
-'
+PY
