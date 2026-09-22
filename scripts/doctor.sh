@@ -132,6 +132,12 @@ else
   check "session hooks" 0 "missing plugins/hackathonkit/hooks/codex-hooks.json"
 fi
 
+if [ -f "$ROOT/plugins/hackathonkit/commands/verify.md" ]; then
+  check "verify command" 1 "/verify runs 7 checks incl. coverage"
+else
+  check "verify command" 0 "missing plugins/hackathonkit/commands/verify.md; run scripts/repair.sh"
+fi
+
 AGENT_COUNT=0
 if [ -d "$ROOT/.codex/agents" ]; then
   AGENT_COUNT=$(find "$ROOT/.codex/agents" -name '*.toml' | wc -l | tr -d ' ')

@@ -34,6 +34,7 @@ jobs:
         run: |
           sh scripts/env-set.test.sh
           sh scripts/smoke.test.sh
+          sh scripts/verify-command.test.sh
       - name: quality gate
         run: ./scripts/quality-gate.sh
       - name: clean-checkout rehearsal

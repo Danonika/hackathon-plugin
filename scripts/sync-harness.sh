@@ -81,6 +81,22 @@ CLAUDE_LOCKED=0
 rm -rf "$CLAUDE_LOCK"
 trap - EXIT INT TERM
 
+# Mirror the plugin commands into the harness project command directories:
+# OpenCode reads .opencode/commands/<name>.md and Claude Code reads
+# .claude/commands/. The plugin directory is the single source of truth.
+CMDS_SRC="$ROOT/plugins/hackathonkit/commands"
+if [ ! -d "$CMDS_SRC" ]; then
+  echo "[sync-harness] commands source not found: $CMDS_SRC" >&2
+  exit 1
+fi
+for dest in "$ROOT/.opencode/commands" "$ROOT/.claude/commands"; do
+  mkdir -p "$dest"
+  for f in "$CMDS_SRC"/*.md; do
+    [ -f "$f" ] || continue
+    cp "$f" "$dest/$(basename -- "$f")"
+  done
+done
+
 MISSING=0
 INVALID=0
 ADAPTERS="AGENTS.md
@@ -93,7 +109,9 @@ ADAPTERS="AGENTS.md
 .claude-plugin/marketplace.json
 .opencode/opencode.json
 .cursor/rules/hackathonkit.mdc
-plugins/hackathonkit/hooks/codex-hooks.json"
+plugins/hackathonkit/hooks/codex-hooks.json
+plugins/hackathonkit/commands/verify.md
+.codex/prompts/verify.md"
 JSON_MANIFESTS=".claude-plugin/plugin.json
 .claude-plugin/marketplace.json
 .opencode/opencode.json
@@ -131,4 +149,5 @@ if [ "$MISSING" -ne 0 ] || [ "$INVALID" -ne 0 ]; then
 fi
 
 COUNT=$(find "$ROOT/.claude/skills" -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')
-echo "[sync-harness] adapters ready: codex, opencode, claude, cursor ($COUNT skills mirrored to .claude/skills)"
+CMDS_COUNT=$(find "$ROOT/.opencode/commands" -mindepth 1 -maxdepth 1 -type f -name '*.md' 2>/dev/null | wc -l | tr -d ' ')
+echo "[sync-harness] adapters ready: codex, opencode, claude, cursor ($COUNT skills mirrored to .claude/skills, $CMDS_COUNT command(s) mirrored)"

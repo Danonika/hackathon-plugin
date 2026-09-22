@@ -84,6 +84,9 @@ Check "skills mirror" $mirrorOk "plugin=$($srcFiles.Count) files fallback=$($dst
 $hooksFile = Join-Path $root "plugins\hackathonkit\hooks\codex-hooks.json"
 Check "session hooks" (Test-Path -LiteralPath $hooksFile) $(if (Test-Path -LiteralPath $hooksFile) { "codex-hooks.json" } else { "missing plugins/hackathonkit/hooks/codex-hooks.json" })
 
+$verifyCmd = Join-Path $root "plugins\hackathonkit\commands\verify.md"
+Check "verify command" (Test-Path -LiteralPath $verifyCmd) $(if (Test-Path -LiteralPath $verifyCmd) { "/verify runs 7 checks incl. coverage" } else { "missing plugins/hackathonkit/commands/verify.md; run scripts/repair.ps1" })
+
 $agentCount = 0
 $agentsDir = Join-Path $root ".codex\agents"
 if (Test-Path -LiteralPath $agentsDir) {

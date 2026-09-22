@@ -1,6 +1,6 @@
 ---
 name: verification-loop
-description: "Use when about to claim work is done, passing or demo-ready: run the pre-claim phases (gofmt/build/vet/test/selftest/skills via quality.gate, the plan's mandatory scenario, artifact existence, warnings review) and report per-check evidence. Do not use for writing tests or implementing fixes ($tdd-workflow), planning stages ($build-planner), or judge/project-cost scoring; call eval.compare only when a scored decision is genuinely required."
+description: "Use when about to claim work is done, passing or demo-ready: run the pre-claim phases (gofmt/build/vet/test/coverage/selftest/skills via quality.gate, the plan's mandatory scenario, artifact existence, warnings review) and report per-check evidence. Do not use for writing tests or implementing fixes ($tdd-workflow), planning stages ($build-planner), or judge/project-cost scoring; call eval.compare only when a scored decision is genuinely required."
 metadata:
   version: "1.0.0"
   origin: hackathonkit
@@ -30,7 +30,7 @@ Prove work before claiming it: fresh gate evidence, the mandatory scenario, arti
 
 1. **No fresh evidence, no claim.** A claim points at a check that ran against the current tree, not at a memory of a check that passed earlier.
 2. **Fresh means the gate `sha` matches the tree.** Stale gate evidence is a failure, not a pass; regenerate before reading.
-3. **Report per-check, not in aggregate.** "All green" without the six check names and their statuses is not a report.
+3. **Report per-check, not in aggregate.** "All green" without the seven check names (including coverage) and their statuses is not a report.
 4. **The mandatory scenario is the contract.** If it fails, nothing else can make the claim true.
 5. **Fix, then rerun the whole loop.** Never waive a failed check, and never retry until green without fixing the cause.
 6. **Scored decisions belong to `eval.compare`.** Never write accept, rollback or stop in prose.
@@ -41,10 +41,11 @@ Prove work before claiming it: fresh gate evidence, the mandatory scenario, arti
    - `status: ok` - the scenario and stage come from the plan.
    - `status: partial` with `plan: null` - state that no plan exists and verify against the scenario the user stated; do not invent one.
 2. **Phase 1 - static checks.** Confirm `gofmt -l internal cmd` prints nothing and that `go build ./...` and `go vet ./...` exit 0. These are the gate's first three checks; when the tree changed since the last gate, run `scripts/quality-gate.sh` (or `docker compose run --rm quality`) before reading.
-3. **Phase 2 - tests and selftest.** Run `go test ./...` and `go run ./cmd/hackathonkit-mcp --selftest`. The gate's `test` and `selftest` checks carry the output tails; a focused test is not a substitute for the package-wide run.
+3. **Phase 2 - tests, coverage and selftest.** Run `go test ./...` and `go run ./cmd/hackathonkit-mcp --selftest`. The gate's `test`, `coverage` and `selftest` checks carry the output tails; a focused test is not a substitute for the package-wide run, and a below-target coverage total fails the gate.
 4. **Phase 3 - skills.** Run `go run ./cmd/hackathonkit-mcp --validate-skills`; every skill must pass with an empty problems list. This validates the skill catalog you are touching as part of the same claim.
 5. **Phase 4 - read the gate.** Call `quality.gate` with no arguments. Keep `sha`, `ok`, `summary`, `failed[]` and `checks[]`.
-   - Report every check by name with its `status` and `duration_ms`: `gofmt`, `build`, `vet`, `test`, `selftest`, `skills`.
+   - Report every check by name with its `status` and `duration_ms`: `gofmt`, `build`, `vet`, `test`, `coverage`, `selftest`, `skills`.
+   - For `coverage`, quote the percentage and target from the check output (`[coverage] total X% (target N%)`). The target defaults to 80 and is overridable with `HACKATHONKIT_COVERAGE_TARGET` (or `/verify --target N`).
    - For a failed check, quote the tail of `checks[].output`.
    - `status: partial` with `available: false` means no evidence exists: run the gate script and re-read; if no runtime is available, mark the claim `unverified` and say why.
 6. **Phase 5 - mandatory scenario.** Execute `mandatory_scenario.command` against `mandatory_scenario.input` and compare the observed output to `expected`. Keep the run log or artifact id. A scenario that is only described is not verified.
@@ -64,7 +65,7 @@ The loop is only as strong as its weakest phase; each phase has one pass conditi
 | Phase | Pass condition | Evidence pointer |
 |---|---|---|
 | 1 static | `gofmt -l internal cmd` empty; build and vet exit 0 | command outputs |
-| 2 tests | `go test ./...` and selftest exit 0 | output tails |
+| 2 tests | `go test ./...`, coverage >= target and selftest exit 0 | output tails |
 | 3 skills | validator summary `failed: 0` | failing skill names if any |
 | 4 gate | `quality.gate` `ok: true`, `sha` matches tree | `sha`, `summary`, `checks[]` |
 | 5 scenario | observed output equals `mandatory_scenario.expected` | run log or artifact id |
@@ -83,7 +84,7 @@ Keep one ledger for the claim; every line must resolve to a command output or an
 |---|---|---|
 | tree | current working tree | branch/worktree, dirty or clean |
 | gate | `quality.gate` | `sha`, `ok`, `summary` |
-| checks | `quality.gate` | six names with `status` and `duration_ms` |
+| checks | `quality.gate` | seven names with `status` and `duration_ms` |
 | scenario | scenario run | input, command, expected, observed |
 | artifacts | producing envelopes | id, `status` |
 | warnings | all envelopes | verbatim list |
@@ -128,7 +129,7 @@ Task: a fix landed in `internal/tools`; the answer wants to say "done".
 2. Static: `gofmt -l internal cmd` prints nothing; `go build ./...` and `go vet ./...` exit 0.
 3. Tests: `go test ./... -count=1` -> `ok`; `--selftest` -> handshake ok.
 4. Skills: `--validate-skills` -> summary `failed: 0`.
-5. `quality.gate` -> `sha: 9f2c41a`, `ok: true`, all six checks `ok` (durations kept).
+5. `quality.gate` -> `sha: 9f2c41a`, `ok: true`, all seven checks `ok` (durations kept), coverage `83% (target 80%)`.
 6. Scenario run -> observed matches `expected`; artifact `reports/telemetry.md` resolves and
    the report envelope returned `status: ok`.
 7. Warnings: `documents.extract` warned about truncation; restated in the answer.
@@ -141,7 +142,7 @@ If step 5 had returned `ok: false` with `test (failed)`, the answer would stop a
 
 - Every phase result comes from the current tree; no phase is skipped silently.
 - The gate `sha` matches the working tree, or the evidence was regenerated, not explained away.
-- `checks[]` contains all six names and each status is reported; none is merged into "all green".
+- `checks[]` contains all seven names (including `coverage`) and each status is reported; none is merged into "all green".
 - The mandatory scenario ran and its observed output is quoted against `expected`.
 - Every artifact id resolves and every producing envelope returned `status != "error"`.
 - Warnings from all envelopes appear in the answer.
@@ -156,7 +157,7 @@ If step 5 had returned `ok: false` with `test (failed)`, the answer would stop a
 | Gate has a failing check | Name it from `failed[]`, read `checks[].output`, fix, rerun all phases |
 | `quality.gate` returns `partial` | No evidence found: run the script or mark the claim `unverified` |
 | Mandatory scenario passes ad hoc but not from the plan | Copy `mandatory_scenario` verbatim; never paraphrase the command |
-| Selftest passes but the skills check fails | Fix the skill-standard problem first; the gate is not green until all six pass |
+| Selftest passes but the skills check fails | Fix the skill-standard problem first; the gate is not green until all seven pass |
 | Artifact missing | Check the producing envelope and `data/artifacts`; re-create or drop the claim |
 | Warning hidden in a `partial` envelope | Surface it; warnings are part of the output contract |
 | Check `timeout` | Report `timeout` with its duration, rerun focused; do not call it a pass |
@@ -180,3 +181,4 @@ If step 5 had returned `ok: false` with `test (failed)`, the answer would stop a
 ## References
 
 - `references/verification-checklist.md` - phase-by-phase commands, pass criteria and the evidence to keep for each phase.
+- `/verify` (plugin command) - runs the gate and reports the seven checks including coverage; `/verify --target N` overrides the threshold.
