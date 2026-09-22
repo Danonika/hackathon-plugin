@@ -9,6 +9,7 @@ tools:
   - system.context
   - system.resources
   - system.resources_set
+  - routing.variant
   - system.capabilities
   - system.context_budget
   - routing.fly_recommend
@@ -42,7 +43,7 @@ Entry point for every Hackathon Agent Kit task with tool work: read the live rou
 ## Workflow
 
 1. Call `system.context` (no arguments). Read `routing_mode`, `routing_config_version` and the live `capabilities` list. Keep the returned `trace_id`.
-2. Call `system.resources`. When `profile.present` is false, ask the user once which API resources they have (OpenAI API key, NVIDIA API key, Telegram bot, Codex Pro subscription) and which hackathon track they build, then call `system.resources_set` with booleans only - never ask for or echo raw keys. When the response lists `missing` keys, hand the user the returned `next_steps` command (`scripts/env-set.sh .env KEY <value>`) instead of continuing as if the provider were available.
+2. Call `system.resources`. When `profile.present` is false, ask the user once which API resources they have (OpenAI API key, NVIDIA API key, Telegram bot, Codex Pro subscription) and which hackathon track they build, then call `system.resources_set` with booleans only - never ask for or echo raw keys. When the response lists `missing` keys, hand the user the returned `next_steps` command (`scripts/env-set.sh .env KEY <value>`) instead of continuing as if the provider were available. Once a track is known, call `routing.variant` to map its capabilities to the best ready variants (deterministic fallbacks when keys are missing) and follow `degraded[]`/`missing[]` in the plan.
 3. Call `learning.recall` with `query` = the task in one sentence, `limit` 5 and `scope` `project` (the default; it includes global learnings). Apply relevant matches to tool choice. A `partial` envelope with `count: 0` means no history - continue normally.
 4. When the capability map is unclear, call `system.capabilities` for capability groups and the experimental `fly_router` flag. When the task will load context-heavy components (large skills, many references, long reports), call `system.context_budget` first and follow its `recommendations` before adding context.
 5. Inventory the inputs with `files.describe` for each candidate path in `data/input`. Capture `types`, `rows`, `columns`, `has_timestamp` and XLSX `sheets`. These values become the `input_metadata` for routing.

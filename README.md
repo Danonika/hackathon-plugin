@@ -2,7 +2,7 @@
 
 Local Codex plugin backed by a typed MCP capability layer. Codex is the main reasoning engine, Skills define domain workflows, the local MCP server exposes deterministic and AI-powered capabilities, and the experimental Fly router recommends capability routes while Codex keeps the final decision.
 
-Status: v0.14.0. MCP runtime (40 tools), 29 standard-compliant skills (validator-enforced), 88% Go test coverage with an 80% gate, session hooks, durable learnings, Codex subagents, four harness adapters, a full control plane (SQLite store, daemon, TUI, worktrees, agent runs, risk scoring, session handoff), staged build plans, PDF/XLSX processing, Fly v2 (keyword + embeddings + kNN memory + mushroom-body learning + LLM classifier), Postgres/MinIO backends, demo dashboard, install profiles/repair, a quality gate with a Go-enabled Docker target, a Fly A/B benchmark, plan review, security review, a clean-checkout rehearsal command, a resource-aware planner (API resource questionnaire, provider probes, per-track variants), a Telegram integration capability for built projects and the evaluation subsystem (deterministic aggregation, calibration, loop decisions and bundle freezing) are in place.
+Status: v0.15.0. MCP runtime (41 tools), 29 standard-compliant skills (validator-enforced), 88% Go test coverage with an 80% gate, session hooks, durable learnings, Codex subagents, four harness adapters, a full control plane (SQLite store, daemon, TUI, worktrees, agent runs, risk scoring, session handoff), staged build plans, PDF/XLSX processing, Fly v2 (keyword + embeddings + kNN memory + mushroom-body learning + LLM classifier), Postgres/MinIO backends, demo dashboard, install profiles/repair, a quality gate with a Go-enabled Docker target, a Fly A/B benchmark, plan review, security review, a clean-checkout rehearsal command, a resource-aware planner (API resource questionnaire, provider probes, per-track variants), a Telegram integration capability for built projects and the evaluation subsystem (deterministic aggregation, calibration, loop decisions and bundle freezing) are in place.
 
 ## Contents
 
@@ -46,7 +46,7 @@ Codex (reasoning, final decisions)
   |     search-first, codebase-onboarding, context-management, git-workflow, tdd-workflow,
   |     learning-loop, security-review
   |
-  |-- MCP server (stdio JSON-RPC, 40 tools, one shared envelope per call)
+  |-- MCP server (stdio JSON-RPC, 41 tools, one shared envelope per call)
         system.*            context, resources, capabilities, context budget
         routing.fly_*       capability recommendation + learning feedback
         learning.*          durable trigger/insight learnings with confidence
@@ -232,6 +232,7 @@ sh scripts/setup-resources.sh                     # interactive questionnaire; k
 - Providers: `openai_api`, `nvidia_api`, `telegram`, `postgres`, `minio` (detected from `.env`) and `codex_pro` (manual subscription flag). `system.resources` reports `detected`, `claimed` and `ready` per provider.
 - `system.resources` is the agent entry point: when the profile is missing it returns `partial` with an ask-the-user warning; `system.resources_set` records the answers; claimed-but-missing keys come back as `missing[]` plus exact `scripts/env-set.sh` commands. Keys never transit chat or the MCP layer.
 - `system.resources_probe` checks reachability: presence-only by default; `live: true` makes 5s `GET /models` calls (OpenAI, NVIDIA) and a Telegram `getMe`. Errors are redacted and keys never appear in the output.
+- `routing.variant` maps a track's capabilities (from `configs/resource-matrix.yaml`) to the best ready variant: deterministic tools when no keys exist, OpenAI/NVIDIA-backed variants when ready. Degraded capabilities and the keys that would upgrade them come back as `degraded[]` and `missing[]`.
 - `--session-context` and the SessionStart hook print a `resources:` line, so every session starts with the known profile or an explicit ask-the-user marker.
 
 ## MCP tools
@@ -249,6 +250,7 @@ Every tool returns the shared envelope: `status` (`ok` | `partial` | `error`), `
 | `system.capabilities` | - | capability groups (documents, rag, speech, vision, data_analysis, timeseries, classification, charts, reports, evaluation), experimental `fly_router`, tool list |
 | `routing.fly_recommend` | `task` (required), `input_metadata`, `available_capabilities` | `route`, ranked `recommendations`, metrics `max_score`, `threshold`, `encoder`, `category_scores` |
 | `routing.fly_feedback` | `task`, `chosen` (both required), `recommended`, `source` (`accepted`/`codex-correction`/`normal-teacher`/`fallback`), `input_metadata` | `stored`, `learned`, `memory_size` |
+| `routing.variant` | `task`, `track` (defaults to the profile track), `capabilities[]` (optional override) | `track` playbook, `decisions[]` (chosen variant, reason, degraded flag, alternatives, missing keys), `summary`, `degraded[]`, `missing[]`; `partial` when capabilities fall back to deterministic variants |
 | `system.context_budget` | - | per-item token estimates for tool schemas, skills, references and manifests, flags and recommendations |
 
 ### Evaluation
@@ -574,7 +576,7 @@ Sample dataset: `data/input/sample-telemetry.csv` (72 hourly readings with two p
 
 ## Testing
 
-`go test ./...` covers the JSON-RPC handshake, notification suppression, panic containment, live routing and evaluation config re-reads, path sanitization and backend fallback, observability append/tail, judge aggregation/calibration/decisions, the bundle freezer, the eval and plan tool handlers, learning confidence/recall/promotion, the context-budget estimator, control-plane ingest idempotency, deterministic risk scoring, handoff rendering, the daemon HTTP handlers, the quality-gate store/reader, the Fly benchmark metrics, the security scanner, the Telegram client and tools (fake Bot API; no live calls in CI), the rehearsal driver, the resource profile/detection and provider probe tools, and the skill-standard validator (including a catalog-wide regression test). Total coverage is 88% of statements (enforced at 80% by `scripts/coverage-check.sh`; override with `HACKATHONKIT_COVERAGE_TARGET`). Run `go run ./cmd/hackathonkit-mcp --selftest` for the end-to-end handshake and `scripts/smoke.sh` for the process-level check.
+`go test ./...` covers the JSON-RPC handshake, notification suppression, panic containment, live routing and evaluation config re-reads, path sanitization and backend fallback, observability append/tail, judge aggregation/calibration/decisions, the bundle freezer, the eval and plan tool handlers, learning confidence/recall/promotion, the context-budget estimator, control-plane ingest idempotency, deterministic risk scoring, handoff rendering, the daemon HTTP handlers, the quality-gate store/reader, the Fly benchmark metrics, the security scanner, the Telegram client and tools (fake Bot API; no live calls in CI), the rehearsal driver, the resource profile/detection and provider probe tools, the variant planner (matrix parsing, deterministic fallbacks), and the skill-standard validator (including a catalog-wide regression test). Total coverage is 88% of statements (enforced at 80% by `scripts/coverage-check.sh`; override with `HACKATHONKIT_COVERAGE_TARGET`). Run `go run ./cmd/hackathonkit-mcp --selftest` for the end-to-end handshake and `scripts/smoke.sh` for the process-level check.
 
 `go run ./cmd/hackathonkit-rehearse` is the clean-checkout rehearsal: it clones the repository into a temporary directory, builds the MCP server there, drives the mandatory telemetry scenario (describe, analyze, detect anomalies, chart, report, index/search, plan, learning, eval, security, context budget, resource profile/probe, gate and Telegram preconditions) over stdio JSON-RPC and stores a per-step report with durations at `evals/rehearsal/<sha>/rehearsal-<timestamp>.json`. It exits non-zero on the first failed step; `--keep` keeps the checkout, `--json` prints the report only.
 

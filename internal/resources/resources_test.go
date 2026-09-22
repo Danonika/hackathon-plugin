@@ -7,6 +7,16 @@ import (
 	"testing"
 )
 
+func clearProviderEnv(t *testing.T) {
+	t.Helper()
+	for _, key := range []string{
+		"OPENAI_API_KEY", "NVIDIA_API_KEY", "TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID",
+		"POSTGRES_DSN", "MINIO_ENDPOINT", "MINIO_ACCESS_KEY", "MINIO_SECRET_KEY",
+	} {
+		t.Setenv(key, "")
+	}
+}
+
 func TestDefsAndTracks(t *testing.T) {
 	if len(Defs()) != 6 {
 		t.Fatalf("defs = %d, want 6", len(Defs()))
@@ -39,10 +49,10 @@ func TestDefsAndTracks(t *testing.T) {
 }
 
 func TestStatusesMergeDetectionAndAnswers(t *testing.T) {
+	clearProviderEnv(t)
 	t.Setenv("OPENAI_API_KEY", "sk-test")
 	t.Setenv("TELEGRAM_BOT_TOKEN", "bot-token")
 	t.Setenv("TELEGRAM_CHAT_ID", "123")
-	os.Unsetenv("NVIDIA_API_KEY")
 
 	profile := Profile{Claimed: map[string]bool{
 		"openai_api": true,

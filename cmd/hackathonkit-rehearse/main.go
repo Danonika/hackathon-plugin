@@ -657,6 +657,19 @@ func (r *rehearsal) run() {
 		return "profile=present track=" + str(profile, "track"), nil
 	}) && ok
 
+	ok = r.step("routing.variant", "routing.variant", map[string]any{"track": "08", "task": "rehearsal multimodal plan"}, true, func(env map[string]any) (string, error) {
+		d := data(env)
+		decisions := arr(d, "decisions")
+		if len(decisions) != 5 {
+			return "", fail("decisions=%d, want 5", len(decisions))
+		}
+		degraded := arr(d, "degraded")
+		if len(degraded) != 3 {
+			return "", fail("degraded=%d, want 3 (vision, reasoning, artifacts without keys)", len(degraded))
+		}
+		return fmt.Sprintf("capabilities=%d degraded=%d", len(decisions), len(degraded)), nil
+	}) && ok
+
 	ok = r.step("quality.gate (no evidence yet)", "quality.gate", map[string]any{}, true, func(env map[string]any) (string, error) {
 		warnings, _ := env["warnings"].([]any)
 		return fmt.Sprintf("warnings=%d", len(warnings)), nil

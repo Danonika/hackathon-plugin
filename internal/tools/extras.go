@@ -468,7 +468,7 @@ func registerMedia(reg *mcp.Registry, d Deps) {
 				return mcp.Fail(trace(ctx), err.Error()), nil
 			}
 			if !d.OpenAI.Available() {
-				return mcp.Fail(trace(ctx), "OPENAI_API_KEY is not configured; audio.transcribe requires OpenAI"), nil
+				return mcp.Fail(trace(ctx), "OPENAI_API_KEY is not configured; audio.transcribe requires OpenAI. Set it with: sh scripts/env-set.sh .env OPENAI_API_KEY <value> (see system.resources for the asr variant)"), nil
 			}
 			text, terr := d.OpenAI.Transcribe(ctx, full, argString(args, "language"))
 			if terr != nil {
@@ -509,7 +509,7 @@ func registerMedia(reg *mcp.Registry, d Deps) {
 				return mcp.Fail(trace(ctx), err.Error()), nil
 			}
 			if !d.OpenAI.Available() {
-				return mcp.Fail(trace(ctx), "OPENAI_API_KEY is not configured; vision.analyze requires OpenAI"), nil
+				return mcp.Fail(trace(ctx), "OPENAI_API_KEY is not configured; vision.analyze requires OpenAI. Set it with: sh scripts/env-set.sh .env OPENAI_API_KEY <value> (see system.resources for the vision variant)"), nil
 			}
 			st, serr := os.Stat(full)
 			if serr != nil {

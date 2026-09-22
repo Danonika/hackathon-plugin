@@ -191,3 +191,64 @@ func TestSystemResourcesProbeTelegram(t *testing.T) {
 		t.Fatalf("result = %+v", first)
 	}
 }
+
+func TestRoutingVariant(t *testing.T) {
+	clearResourceEnv(t)
+	reg, root := testRegistry(t)
+
+	env := call(t, reg, "routing.variant", map[string]any{})
+	if env.Status != "partial" || !strings.Contains(strings.Join(env.Warnings, " "), "no track selected") {
+		t.Fatalf("no track: status=%s warnings=%v", env.Status, env.Warnings)
+	}
+
+	env = call(t, reg, "routing.variant", map[string]any{"track": "08", "task": "multimodal diagnosis"})
+	if env.Status != "partial" {
+		t.Fatalf("status = %s data=%+v", env.Status, env.Data)
+	}
+	data := env.Data.(map[string]any)
+	track := data["track"].(resources.TrackPlan)
+	if track.ID != "08-innovation" || !strings.Contains(track.Scenario, "photo") {
+		t.Fatalf("track = %+v", track)
+	}
+	decisions := data["decisions"].([]resources.Decision)
+	if len(decisions) != 5 {
+		t.Fatalf("decisions = %d, want 5", len(decisions))
+	}
+	if degraded := data["degraded"].([]string); len(degraded) != 3 {
+		t.Fatalf("degraded = %v", degraded)
+	}
+	if summary := data["summary"].(string); !strings.Contains(summary, "reasoning=deterministic") {
+		t.Fatalf("summary = %q", summary)
+	}
+	if task := data["task"].(string); task != "multimodal diagnosis" {
+		t.Fatalf("task = %q", task)
+	}
+
+	env = call(t, reg, "routing.variant", map[string]any{"track": "08", "capabilities": []any{"reasoning"}})
+	if got := len(env.Data.(map[string]any)["decisions"].([]resources.Decision)); got != 1 {
+		t.Fatalf("override decisions = %d, want 1", got)
+	}
+	if env := call(t, reg, "routing.variant", map[string]any{"track": "08", "capabilities": []any{"nope"}}); env.Status != "error" {
+		t.Fatalf("unknown capability: status = %s, want error", env.Status)
+	}
+	if env := call(t, reg, "routing.variant", map[string]any{"track": "99-nope"}); env.Status != "error" {
+		t.Fatalf("unknown track: status = %s, want error", env.Status)
+	}
+
+	t.Setenv("OPENAI_API_KEY", "sk-test")
+	env = call(t, reg, "routing.variant", map[string]any{"track": "02"})
+	if env.Status != "ok" {
+		t.Fatalf("openai track 02: status = %s data=%+v", env.Status, env.Data)
+	}
+
+	if err := resources.Save(root, resources.Profile{Track: "09"}); err != nil {
+		t.Fatal(err)
+	}
+	env = call(t, reg, "routing.variant", map[string]any{})
+	if env.Status != "partial" {
+		t.Fatalf("profile track fallback: status = %s, want partial", env.Status)
+	}
+	if track := env.Data.(map[string]any)["track"].(resources.TrackPlan); track.ID != "09-communications" {
+		t.Fatalf("track = %+v", track)
+	}
+}

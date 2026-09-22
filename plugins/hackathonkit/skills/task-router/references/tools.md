@@ -1,6 +1,6 @@
 # Hackathon Agent Kit MCP Tool Catalogue
 
-All 40 tools return the shared envelope:
+All 41 tools return the shared envelope:
 `status` (`ok` | `partial` | `error`), `data`, `sources`, `warnings`, `metrics`, `trace_id`.
 Read `warnings` before trusting `data`; keep `sources` for citations.
 
@@ -22,6 +22,7 @@ Call the smallest set that finishes the task. Do not list or call tools "just in
 | `system.capabilities` | - | capability groups, experimental `fly_router`, tool list |
 | `routing.fly_recommend` | `task` (required), `input_metadata`, `available_capabilities` | `route`, ranked `recommendations`, metrics `max_score`, `threshold`, `encoder`, `category_scores` |
 | `routing.fly_feedback` | `task` (required), `chosen` (required), `recommended`, `source` (`accepted`/`codex-correction`/`normal-teacher`/`fallback`), `input_metadata` | `stored`, `learned`, `memory_size` |
+| `routing.variant` | `task`, `track` (defaults to the profile track), `capabilities[]` (optional override) | `track` plan, `decisions[]` (chosen variant, reason, degraded, alternatives, missing keys), `summary`, `degraded[]`, `missing[]` |
 | `system.context_budget` | - | per-item token estimates for tools, skills, references and manifests, flags, recommendations |
 
 ## Learning

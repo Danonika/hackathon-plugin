@@ -1,0 +1,140 @@
+# Execution variants per capability and playbooks per hackathon track.
+#
+# The planner (routing.variant / system.resources) picks the first variant
+# whose provider is ready; variants without a provider are always available and
+# act as deterministic fallbacks. Providers map to the answers recorded in
+# configs/resources.json and the keys detected in .env.
+#
+# Keep this file in sync with resources.DefaultMatrix() (a regression test
+# compares the two).
+
+capabilities:
+  arithmetic:
+    - id: deterministic
+      note: data.query / data.analyze compute; never use an LLM for arithmetic
+  tabular:
+    - id: deterministic
+      note: data.inspect / data.query / classification.classify
+    - id: openai
+      provider: openai_api
+      note: optional LLM classification and extraction of messy columns
+  timeseries:
+    - id: deterministic
+      note: timeseries.analyze / timeseries.detect_anomalies
+    - id: openai
+      provider: openai_api
+      note: optional LLM interpretation of anomaly context
+  classification:
+    - id: deterministic
+      note: classification.classify keyword rules
+    - id: openai
+      provider: openai_api
+      note: optional LLM classification for ambiguous cases
+  retrieval:
+    - id: deterministic
+      note: knowledge.index / knowledge.search (TF-IDF)
+    - id: openai
+      provider: openai_api
+      note: embedding-backed retrieval via the Fly chain embedder
+  reasoning:
+    - id: openai
+      provider: openai_api
+      note: gpt-4o-mini summaries, causes and next-step instructions
+    - id: nvidia
+      provider: nvidia_api
+      note: NVIDIA NIM chat endpoint
+    - id: deterministic
+      note: templates and rules only; no generated explanations
+  embeddings:
+    - id: openai
+      provider: openai_api
+      note: text-embedding-3-small
+    - id: nvidia
+      provider: nvidia_api
+      note: NVIDIA embedding NIM
+    - id: deterministic
+      note: hash encoder + TF-IDF
+  asr:
+    - id: openai
+      provider: openai_api
+      note: whisper-1 transcription (audio.transcribe)
+    - id: nvidia
+      provider: nvidia_api
+      note: NVIDIA Parakeet/Riva ASR (adapter after the probe confirms the endpoint)
+    - id: deterministic
+      note: no transcription without a provider; keep the audio step as a gap
+  vision:
+    - id: openai
+      provider: openai_api
+      note: gpt-4o-mini vision (vision.analyze)
+    - id: nvidia
+      provider: nvidia_api
+      note: NVIDIA vision NIM
+    - id: deterministic
+      note: no image analysis without a provider
+  tts:
+    - id: nvidia
+      provider: nvidia_api
+      note: NVIDIA Riva TTS / voices
+    - id: deterministic
+      note: text-only output
+  notifications:
+    - id: telegram
+      provider: telegram
+      note: telegram.send alerts and digests
+    - id: deterministic
+      note: include the message in the report instead
+  metadata:
+    - id: postgres
+      provider: postgres
+      note: control-plane mirroring to Postgres
+    - id: deterministic
+      note: local SQLite control plane
+  artifacts:
+    - id: minio
+      provider: minio
+      note: artifact mirroring to MinIO
+    - id: deterministic
+      note: local data/artifacts only
+
+tracks:
+  01-energy:
+    label: Energy - early equipment fault detection
+    scenario: telemetry -> anomalies -> probable cause -> operator checklist
+    capabilities: [timeseries, tabular, reasoning, notifications]
+  02-finance:
+    label: Finance - bank employee AI assistant
+    scenario: regulations -> answers with citations; documents -> field extraction and contradictions
+    capabilities: [retrieval, tabular, reasoning]
+  03-management:
+    label: Management - executive AI assistant
+    scenario: documents and reports -> problems -> tasks with owners, deadlines and risks
+    capabilities: [retrieval, reasoning, notifications]
+  04-telecom:
+    label: Telecom - client problem diagnosis
+    scenario: complaint + metrics -> probable cause -> checks -> operator recommendation
+    capabilities: [tabular, timeseries, classification, reasoning]
+  05-logistics:
+    label: Logistics - delay forecast and dispatcher assistant
+    scenario: shipment history -> delay risk -> affected shipments -> alternative plan
+    capabilities: [timeseries, tabular, reasoning]
+  06-creative-media:
+    label: Creative media - Kazakh/Russian speech, subtitles, summaries
+    scenario: video/audio -> transcription -> subtitles -> summary -> archive search
+    capabilities: [asr, retrieval, reasoning, artifacts]
+  07-education:
+    label: Education - personal AI tutor
+    scenario: student solution -> error -> explanation -> generated exercise
+    capabilities: [reasoning, retrieval, classification]
+  08-innovation:
+    label: Innovation - universal multimodal industry agent
+    scenario: photo + documents + data -> problem -> research -> solution
+    capabilities: [vision, retrieval, tabular, reasoning, artifacts]
+  09-communications:
+    label: Communications - call/chat analytics
+    scenario: calls/chats -> transcription -> topic -> sentiment -> summary -> recommendations
+    capabilities: [asr, classification, reasoning, notifications]
+  10-retail:
+    label: Retail - demand forecast and assortment
+    scenario: sales + stock + expiry -> forecast -> recommended order
+    capabilities: [timeseries, tabular, reasoning]

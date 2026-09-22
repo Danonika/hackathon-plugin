@@ -144,6 +144,73 @@ func registerResources(reg *mcp.Registry, d Deps) {
 			}), nil
 		},
 	))
+	reg.Register(tool(
+		"routing.variant",
+		"Choose the optimal execution variant per capability for a hackathon track: deterministic tools when no keys are configured, OpenAI/NVIDIA-backed variants when the resource profile is ready. Degraded capabilities list the deterministic fallbacks and missing[] the keys that would upgrade them.",
+		map[string]any{
+			"task":         strProp("Optional task description (recorded for context)"),
+			"track":        strProp("Track reference; defaults to the profile track"),
+			"capabilities": arrProp("Optional capability override list", map[string]any{"type": "string"}),
+		},
+		nil,
+		func(ctx context.Context, args map[string]any) (any, error) {
+			profile, present, err := resources.Load(d.Cfg.Root())
+			if err != nil {
+				return mcp.Fail(trace(ctx), err.Error()), nil
+			}
+			statuses := resources.Statuses(profile)
+			matrix, err := resources.LoadMatrix(d.Cfg.Root())
+			if err != nil {
+				return mcp.Fail(trace(ctx), err.Error()), nil
+			}
+			ref := strings.TrimSpace(argString(args, "track"))
+			if ref == "" {
+				ref = profile.Track
+			}
+			if ref == "" {
+				return mcp.Partial(trace(ctx), map[string]any{
+					"tracks": resources.Tracks(),
+					"hint":   "pass track or record one with system.resources_set",
+				}, "no track selected - pass track or set one with system.resources_set"), nil
+			}
+			track, decisions, err := resources.Plan(matrix, statuses, ref)
+			if err != nil {
+				return mcp.Fail(trace(ctx), err.Error()), nil
+			}
+			if override := argStringSlice(args, "capabilities"); len(override) > 0 {
+				for _, capability := range override {
+					if len(matrix.Capabilities[capability]) == 0 {
+						return mcp.Fail(trace(ctx), fmt.Sprintf("unknown capability %q", capability)), nil
+					}
+				}
+				plan := matrix.Tracks[track.ID]
+				plan.Capabilities = override
+				matrix.Tracks[track.ID] = plan
+				track, decisions, err = resources.Plan(matrix, statuses, track.ID)
+				if err != nil {
+					return mcp.Fail(trace(ctx), err.Error()), nil
+				}
+			}
+			data := map[string]any{
+				"track":           track,
+				"decisions":       decisions,
+				"summary":         resources.DecisionSummary(decisions),
+				"degraded":        resources.DegradedCapabilities(decisions),
+				"missing":         resources.Missing(statuses),
+				"profile_present": present,
+				"tracks":          resources.Tracks(),
+			}
+			if task := argString(args, "task"); task != "" {
+				data["task"] = task
+			}
+			degraded := resources.DegradedCapabilities(decisions)
+			metrics := map[string]any{"capabilities": len(decisions), "degraded": len(degraded)}
+			if len(degraded) > 0 {
+				return mcp.Partial(trace(ctx), data, "capabilities on deterministic fallbacks: "+strings.Join(degraded, ", ")).WithMetrics(metrics), nil
+			}
+			return mcp.OK(trace(ctx), data).WithMetrics(metrics), nil
+		},
+	))
 }
 
 func resourcesEnvelope(ctx context.Context, d Deps, task, trackRef string) mcp.Envelope {
@@ -167,6 +234,13 @@ func resourcesEnvelope(ctx context.Context, d Deps, task, trackRef string) mcp.E
 	if ref != "" {
 		if track, ok := resources.LookupTrack(ref); ok {
 			data["track"] = track
+			if matrix, err := resources.LoadMatrix(d.Cfg.Root()); err == nil {
+				if plan, decisions, err := resources.Plan(matrix, statuses, track.ID); err == nil {
+					data["track_plan"] = plan
+					data["variants"] = decisions
+					data["variant_summary"] = resources.DecisionSummary(decisions)
+				}
+			}
 		} else {
 			warnings = append(warnings, fmt.Sprintf("unknown track %q", ref))
 		}
