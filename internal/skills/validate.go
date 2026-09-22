@@ -94,6 +94,13 @@ func Validate(root string) (Report, error) {
 	for _, entry := range entries {
 		if entry.IsDir() {
 			names = append(names, entry.Name())
+			continue
+		}
+		// Follow a symlink to a directory so symlinked skills are validated.
+		if entry.Type()&os.ModeSymlink != 0 {
+			if info, statErr := os.Stat(filepath.Join(base, entry.Name())); statErr == nil && info.IsDir() {
+				names = append(names, entry.Name())
+			}
 		}
 	}
 	sort.Strings(names)
@@ -176,8 +183,17 @@ func validateSkill(base, name string) SkillReport {
 			item.Problems = append(item.Problems, fmt.Sprintf("reference escapes the skill directory: %s", ref))
 			continue
 		}
-		if _, err := os.Stat(filepath.Join(dir, clean)); err != nil {
+		target := filepath.Join(dir, clean)
+		if _, err := os.Stat(target); err != nil {
 			item.Problems = append(item.Problems, fmt.Sprintf("referenced file does not exist: %s", ref))
+			continue
+		}
+		if dirReal, derr := filepath.EvalSymlinks(dir); derr == nil {
+			if targetReal, terr := filepath.EvalSymlinks(target); terr == nil {
+				if targetReal != dirReal && !strings.HasPrefix(targetReal, dirReal+string(filepath.Separator)) {
+					item.Problems = append(item.Problems, fmt.Sprintf("reference resolves outside the skill directory: %s", ref))
+				}
+			}
 		}
 	}
 

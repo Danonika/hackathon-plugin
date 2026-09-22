@@ -64,17 +64,9 @@ func (s *Store) report(err error) {
 func (s *Store) ensureWithin(full string) error {
 	rootReal, err := filepath.EvalSymlinks(s.root)
 	if err != nil {
-		// Root resolution failed (not created yet, broken symlink): fall back
-		// to a lexical containment check instead of failing open.
-		rootAbs, absErr := filepath.Abs(s.root)
-		fullAbs, fullErr := filepath.Abs(full)
-		if absErr != nil || fullErr != nil {
-			return fmt.Errorf("cannot validate path containment for %s", full)
-		}
-		if fullAbs != rootAbs && !strings.HasPrefix(fullAbs, rootAbs+string(filepath.Separator)) {
-			return fmt.Errorf("path escapes repository root: %s", full)
-		}
-		return nil
+		// Root resolution failed (not created yet, permission error, symlink
+		// loop): fail closed rather than trusting a lexical comparison.
+		return fmt.Errorf("cannot resolve storage root for containment check: %w", err)
 	}
 	p := full
 	for {

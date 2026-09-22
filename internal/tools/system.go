@@ -130,8 +130,6 @@ func registerSystem(reg *mcp.Registry, d Deps) {
 					"recommendations": res.Recommendations,
 					"task":            snippet(task, 200),
 				})
-			}
-			if d.Store != nil {
 				snapshot := d.Router.ActivationSnapshot(ctx, task, 64)
 				_ = observability.AppendJSONL(filepath.Join(d.Store.Root(), "logs", "fly-neuron-events.jsonl"), map[string]any{
 					"ts":        time.Now().UTC().Format(time.RFC3339Nano),

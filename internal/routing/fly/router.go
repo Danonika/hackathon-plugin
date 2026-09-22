@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"hackathonkit.local/agentkit/internal/config"
 )
@@ -44,6 +45,9 @@ type Router struct {
 	embedCacheTask string
 	embedCacheVec  []float64
 	embedCacheOK   bool
+	embedCacheSet  bool
+
+	centroidFailAt time.Time
 }
 
 func NewRouter(settings config.RoutingSettings) *Router {
@@ -304,10 +308,16 @@ func boost(scores map[string]float64, category string, delta float64) {
 }
 
 func categoryAvailable(category string, avail map[string]bool) bool {
+	caps, known := categoryCapabilities[category]
+	if !known {
+		// A dynamic encoder/MBrain category with no capability mapping is not
+		// filtered by capability availability.
+		return true
+	}
 	if len(avail) == 0 {
 		return true
 	}
-	for _, cap := range categoryCapabilities[category] {
+	for _, cap := range caps {
 		if avail[cap] {
 			return true
 		}

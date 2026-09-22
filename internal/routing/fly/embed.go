@@ -10,6 +10,7 @@ import (
 	"math"
 	"os"
 	"sort"
+	"time"
 
 	"hackathonkit.local/agentkit/internal/atomicfile"
 )
@@ -117,7 +118,7 @@ func (r *Router) embedTask(ctx context.Context, task string) ([]float64, bool) {
 	// One-entry cache: Recommend embeds the same task for the embedding, kNN
 	// and mushroom-body signals, which would otherwise be three provider calls.
 	r.embedCacheMu.Lock()
-	if r.embedCacheTask == task && (r.embedCacheOK || r.embedCacheVec == nil) {
+	if r.embedCacheSet && r.embedCacheTask == task {
 		vec, ok := r.embedCacheVec, r.embedCacheOK
 		r.embedCacheMu.Unlock()
 		return vec, ok
@@ -133,7 +134,7 @@ func (r *Router) embedTask(ctx context.Context, task string) ([]float64, bool) {
 		vec = normalizeVector(vectors[0])
 	}
 	r.embedCacheMu.Lock()
-	r.embedCacheTask, r.embedCacheVec, r.embedCacheOK = task, vec, ok
+	r.embedCacheTask, r.embedCacheVec, r.embedCacheOK, r.embedCacheSet = task, vec, ok, true
 	r.embedCacheMu.Unlock()
 	return vec, ok
 }
@@ -217,6 +218,12 @@ func (r *Router) ensureCentroids(ctx context.Context) (map[string][]float64, boo
 		r.mu.Unlock()
 		return cached, true
 	}
+	// Negative cache: do not re-run the full exemplar batch on every call while
+	// the embedder is failing.
+	if !r.centroidFailAt.IsZero() && time.Since(r.centroidFailAt) < 30*time.Second {
+		r.mu.Unlock()
+		return nil, false
+	}
 	if r.building != nil {
 		wait := r.building
 		r.mu.Unlock()
@@ -248,6 +255,9 @@ func (r *Router) ensureCentroids(ctx context.Context) (map[string][]float64, boo
 	r.mu.Lock()
 	if ok {
 		r.centroids = centroids
+		r.centroidFailAt = time.Time{}
+	} else {
+		r.centroidFailAt = time.Now()
 	}
 	close(r.building)
 	r.building = nil
