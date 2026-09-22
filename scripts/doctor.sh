@@ -87,7 +87,11 @@ else
   check "codex CLI" 0 "not found"
 fi
 
+DOCKER_OK=0
 if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
+  DOCKER_OK=1
+fi
+if [ "$DOCKER_OK" = "1" ]; then
   check "docker engine" 1 "running"
 else
   check "docker engine" 0 "not running"
@@ -95,7 +99,7 @@ fi
 
 if [ -x "$ROOT/bin/hackathonkit-mcp" ]; then
   check "mcp runtime" 1 "local binary"
-elif command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1 && docker images --format '{{.Repository}}' 2>/dev/null | grep -q -E '(^|/)hackathon-agent-kit-hackathonkit-mcp$'; then
+elif [ "$DOCKER_OK" = "1" ] && docker images --format '{{.Repository}}' 2>/dev/null | grep -q -E '(^|/)hackathon-agent-kit-hackathonkit-mcp$'; then
   check "mcp runtime" 1 "docker image"
 else
   check "mcp runtime" 0 "run scripts/setup.sh"
@@ -188,10 +192,11 @@ else
   check "node (hooks)" 0 "not found; session hooks require Node 18+"
 fi
 
-if sh "$ROOT/scripts/smoke.sh" >/dev/null 2>&1; then
+SMOKE_OUT=$(sh "$ROOT/scripts/smoke.sh" 2>&1) && SMOKE_STATUS=0 || SMOKE_STATUS=$?
+if [ "$SMOKE_STATUS" = "0" ]; then
   check "mcp handshake" 1 "initialize / tools/list / system.context"
 else
-  check "mcp handshake" 0 "scripts/smoke.sh"
+  check "mcp handshake" 0 "$(printf '%s' "$SMOKE_OUT" | tail -n 1)"
 fi
 
 if [ "$FAIL" = "0" ]; then

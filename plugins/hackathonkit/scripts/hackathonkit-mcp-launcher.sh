@@ -28,4 +28,7 @@ if ! docker compose version >/dev/null 2>&1; then
 fi
 
 cd "$REPO_ROOT"
-exec docker compose -f "$REPO_ROOT/docker-compose.yml" run --rm -T hackathonkit-mcp
+if ! docker compose -f "$REPO_ROOT/docker-compose.yml" run --rm -T hackathonkit-mcp; then
+  echo "Hackathon Agent Kit launcher: docker compose run failed (check the daemon and required .env values)" >&2
+  exit 1
+fi

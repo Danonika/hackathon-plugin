@@ -33,7 +33,7 @@ file_mode() {
   exit 1
 }
 check "existing 0600 .env keeps its mode" "$([ "$(file_mode "$TMP/private.env")" = "600" ] && echo 1 || echo 0)" "mode=$(file_mode "$TMP/private.env")"
-check "existing key is replaced" "$(grep -q '^A=2$' "$TMP/private.env" && echo 1 || echo 0)"
+check "existing key is replaced" "$(grep -q '^A=2$' "$TMP/private.env" && echo 1 || echo 0)" "got: $(cat "$TMP/private.env")"
 check "no stray keys" "$([ "$(grep -c '^' "$TMP/private.env")" = "1" ] && echo 1 || echo 0)"
 
 # A new file is created private even under umask 022.
@@ -42,7 +42,7 @@ check "no stray keys" "$([ "$(grep -c '^' "$TMP/private.env")" = "1" ] && echo 1
   exit 1
 }
 check "new .env is created 0600" "$([ "$(file_mode "$TMP/new.env")" = "600" ] && echo 1 || echo 0)" "mode=$(file_mode "$TMP/new.env")"
-check "new key is appended" "$(grep -q '^KEY=value$' "$TMP/new.env" && echo 1 || echo 0)"
+check "new key is appended" "$(grep -q '^KEY=value$' "$TMP/new.env" && echo 1 || echo 0)" "got: $(cat "$TMP/new.env")"
 
 # A non-private existing file keeps its own mode.
 (umask 022 && printf 'B=1\n' > "$TMP/plain.env" && chmod 644 "$TMP/plain.env")

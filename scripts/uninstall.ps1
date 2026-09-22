@@ -81,4 +81,4 @@ if ($Failures -gt 0 -or $codexFail -ne 0) {
   Write-Error "[uninstall] finished with warnings ($Failures path failure(s))"
   exit 1
 }
-Write-Host "[uninstall] done. data/, logs/ and committed files were kept."
+Write-Host "[uninstall] done. data/input, data/artifacts, logs/ and committed files were kept (data/control was removed)."

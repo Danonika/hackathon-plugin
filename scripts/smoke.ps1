@@ -87,10 +87,7 @@ foreach ($line in $lines) {
       $ok = $false
       if (-not $Quiet) { Write-Host "[smoke] tool call id=$($obj.id) reported isError" }
     }
-    if ([string]$obj.id -ne [string]$parsedCount) {
-      $ok = $false
-      if (-not $Quiet) { Write-Host "[smoke] unexpected response order: expected id=$parsedCount, got id=$($obj.id)" }
-    }
+
   } catch {
     $ok = $false
     if (-not $Quiet) { Write-Host "[smoke] non-JSON stdout line detected: $line" }

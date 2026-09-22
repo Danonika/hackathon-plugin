@@ -22,7 +22,9 @@ $tmp = "$dst.tmp.$PID"
 if (Test-Path -LiteralPath $tmp) { Remove-Item -LiteralPath $tmp -Recurse -Force }
 New-Item -ItemType Directory -Force -Path $tmp | Out-Null
 try {
-  Get-ChildItem -LiteralPath $src -Force | Copy-Item -Destination $tmp -Recurse -Force
+  Get-ChildItem -LiteralPath $src -Force |
+    Where-Object { -not ($_.Attributes -band [System.IO.FileAttributes]::ReparsePoint) } |
+    Copy-Item -Destination $tmp -Recurse -Force
   $srcCount = (Get-ChildItem -LiteralPath $src -Directory).Count
   $count = (Get-ChildItem -LiteralPath $tmp -Directory).Count
   if ($count -ne $srcCount) {

@@ -87,7 +87,7 @@ fi
 
 # Collect secrets first: the profile must not claim a resource before its key
 # is actually stored.
-if [ "$OPENAI" = 1 ]; then set_key OPENAI_API_KEY "$(read_secret 'OPENAI_API_KEY (empty to skip)')"; fi
+if [ "$OPENAI" = 1 ]; then set_key OPENAI_API_KEY "$(read_secret 'OPENAI_API_KEY (empty to skip)')"; else set_key OPENAI_API_KEY ""; fi
 if [ "$NVIDIA" = 1 ]; then set_key NVIDIA_API_KEY "$(read_secret 'NVIDIA_API_KEY (empty to skip)')"; fi
 if [ "$TELEGRAM" = 1 ]; then
   set_key TELEGRAM_BOT_TOKEN "$(read_secret 'TELEGRAM_BOT_TOKEN (empty to skip)')"
