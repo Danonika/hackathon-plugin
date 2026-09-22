@@ -226,6 +226,8 @@ func NewManager(root string) *Manager {
 	var patch filePatch
 	if err := yaml.Unmarshal(data, &patch); err == nil {
 		mergeNumeric(&m.cfg, patch)
+	} else {
+		log.Printf("config: cannot parse overrides in %s: %v (numeric settings keep their defaults)", path, err)
 	}
 	return m
 }
@@ -321,6 +323,9 @@ func (m *Manager) Routing() RoutingState {
 	data, readErr := os.ReadFile(path)
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if readErr != nil && !os.IsNotExist(readErr) {
+		log.Printf("config: cannot read %s: %v (using the last known settings)", path, readErr)
+	}
 	if readErr == nil {
 		var doc routingDoc
 		if uerr := yaml.Unmarshal(data, &doc); uerr != nil {
@@ -395,8 +400,8 @@ func (m *Manager) EvaluationPath() string {
 	return filepath.Join(m.root, "configs", "evaluation.yaml")
 }
 
-// Evaluation re-reads configs/evaluation.yaml when its mtime changes and
-// always returns complete settings: built-in defaults overridden by the file.
+// Evaluation re-reads configs/evaluation.yaml on every call and always returns
+// complete settings: built-in defaults overridden by the file.
 func (m *Manager) Evaluation() EvaluationSettings {
 	path := m.EvaluationPath()
 	data, readErr := os.ReadFile(path)
@@ -405,11 +410,14 @@ func (m *Manager) Evaluation() EvaluationSettings {
 	if readErr == nil {
 		settings := defaultsEvaluation()
 		var patch evaluationPatch
-		if yaml.Unmarshal(data, &patch) == nil {
+		if uerr := yaml.Unmarshal(data, &patch); uerr == nil {
 			applyEvaluationPatch(&settings, patch)
+			settings = validateEvaluationSettings(settings)
 			m.evaluationCache = settings
 			m.evaluationInit = true
 			return settings
+		} else {
+			log.Printf("config: cannot parse %s: %v (using defaults)", path, uerr)
 		}
 		log.Printf("config: cannot parse %s (using defaults)", path)
 	}
@@ -417,6 +425,18 @@ func (m *Manager) Evaluation() EvaluationSettings {
 		return m.evaluationCache
 	}
 	return defaultsEvaluation()
+}
+
+func validateEvaluationSettings(s EvaluationSettings) EvaluationSettings {
+	if s.Judges > 0 && s.MinValidJudges > s.Judges {
+		// Surface the inconsistency instead of silently changing the value:
+		// aggregation reports inconclusive when the quorum cannot be met.
+		log.Printf("config: min_valid_judges %d exceeds judges %d; aggregation will be inconclusive", s.MinValidJudges, s.Judges)
+	}
+	if s.MinValidJudges < 1 {
+		s.MinValidJudges = 1
+	}
+	return s
 }
 
 func applyEvaluationPatch(dst *EvaluationSettings, src evaluationPatch) {

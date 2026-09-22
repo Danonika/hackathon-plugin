@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -193,7 +194,10 @@ func (s *Store) ingestDecisions(ctx context.Context, root string) (int, error) {
 	base := filepath.Join(root, "evals", "decisions")
 	entries := []string{}
 	err := filepath.WalkDir(base, func(path string, d os.DirEntry, walkErr error) error {
-		if walkErr != nil || d.IsDir() || !strings.HasSuffix(d.Name(), ".json") {
+		if walkErr != nil {
+			return walkErr
+		}
+		if d.IsDir() || !strings.HasSuffix(d.Name(), ".json") {
 			return nil
 		}
 		entries = append(entries, path)
@@ -212,7 +216,7 @@ func (s *Store) ingestDecisions(ctx context.Context, root string) (int, error) {
 		cursor := "decision:" + filepath.ToSlash(rel)
 		data, readErr := os.ReadFile(path)
 		if readErr != nil {
-			continue
+			return files, fmt.Errorf("reading %s: %w", rel, readErr)
 		}
 		offset, cursorErr := s.Cursor(ctx, cursor)
 		if cursorErr != nil {

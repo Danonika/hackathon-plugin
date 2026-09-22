@@ -174,7 +174,13 @@ func daemonForeground(root string) error {
 	}
 	token := os.Getenv("HACKATHONKIT_CONTROL_TOKEN")
 	addr := net.JoinHostPort("127.0.0.1", port)
-	server := &http.Server{Addr: addr, Handler: controlHandler(store, token), ReadHeaderTimeout: 5 * time.Second}
+	server := &http.Server{
+		Addr:              addr,
+		Handler:           controlHandler(store, token),
+		ReadHeaderTimeout: 5 * time.Second,
+		WriteTimeout:      30 * time.Second,
+		IdleTimeout:       120 * time.Second,
+	}
 	go func() {
 		<-ctx.Done()
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)

@@ -40,7 +40,7 @@ func EvaluateRisk(sess Session, events []Event, now time.Time) (float64, []strin
 				panics++
 			}
 		case "eval_decision":
-			if decision, _ := ev.Payload["decision"].(string); decision == "rollback" {
+			if decision, _ := ev.Payload["decision"].(string); strings.EqualFold(strings.TrimSpace(decision), "rollback") {
 				rollbacks++
 			}
 		}

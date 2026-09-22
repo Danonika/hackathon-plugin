@@ -31,7 +31,7 @@ import (
 	"hackathonkit.local/agentkit/internal/tools"
 )
 
-const version = "0.16.7"
+const version = "0.16.8"
 
 // redactBackendError strips credentials from driver/connection errors before
 // they are logged (DSNs can appear in Postgres and MinIO errors).
@@ -106,12 +106,18 @@ func run(args []string, stdout, stderr io.Writer) int {
 			fmt.Fprintln(stderr, "error:", err)
 			return 1
 		}
-		printResources(root, stdout)
+		if err := printResources(root, stdout); err != nil {
+			fmt.Fprintln(stderr, "error:", err)
+			return 1
+		}
 		return 0
 	}
 
 	if *resourcesJSON {
-		printResources(root, stdout)
+		if err := printResources(root, stdout); err != nil {
+			fmt.Fprintln(stderr, "error:", err)
+			return 1
+		}
 		return 0
 	}
 
@@ -337,20 +343,19 @@ func applyResourcesSet(root, spec string) error {
 	return resources.Save(root, profile)
 }
 
-func printResources(root string, out io.Writer) {
+func printResources(root string, out io.Writer) error {
 	profile, present, err := resources.Load(root)
 	if err != nil {
-		fmt.Fprintln(out, "resources: profile unreadable:", err)
-		return
+		return fmt.Errorf("profile unreadable: %w", err)
 	}
 	enc := json.NewEncoder(out)
 	enc.SetIndent("", "  ")
-	_ = enc.Encode(resources.View(profile, present))
+	return enc.Encode(resources.View(profile, present))
 }
 
 func countFiles(dir string) int {
 	count := 0
-	_ = filepath.WalkDir(dir, func(path string, entry os.DirEntry, err error) error {
+	if err := filepath.WalkDir(dir, func(path string, entry os.DirEntry, err error) error {
 		if err != nil || entry.IsDir() {
 			return nil
 		}
@@ -358,7 +363,11 @@ func countFiles(dir string) int {
 			count++
 		}
 		return nil
-	})
+	}); err != nil && !os.IsNotExist(err) {
+		// The session context is advisory: an unreadable directory must not
+		// silently look like zero pending decisions, so report it.
+		fmt.Fprintf(os.Stderr, "session-context: cannot read %s: %v\n", dir, err)
+	}
 	return count
 }
 

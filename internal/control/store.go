@@ -8,6 +8,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"time"
@@ -291,7 +292,9 @@ func scanSession(row rowScanner) (Session, error) {
 		return Session{}, err
 	}
 	if reasons.Valid && reasons.String != "" {
-		_ = json.Unmarshal([]byte(reasons.String), &sess.RiskReasons)
+		if err := json.Unmarshal([]byte(reasons.String), &sess.RiskReasons); err != nil {
+			return Session{}, fmt.Errorf("session %s has malformed risk reasons: %w", sess.ID, err)
+		}
 	}
 	sess.CreatedAt = parseTime(created.String)
 	sess.UpdatedAt = parseTime(updated.String)
@@ -371,7 +374,9 @@ func scanEvents(rows *sql.Rows) ([]Event, error) {
 		}
 		ev.TS = parseTime(ts)
 		if payload != "" && payload != "null" {
-			_ = json.Unmarshal([]byte(payload), &ev.Payload)
+			if err := json.Unmarshal([]byte(payload), &ev.Payload); err != nil {
+				return nil, fmt.Errorf("event has a malformed payload: %w", err)
+			}
 		}
 		out = append(out, ev)
 	}

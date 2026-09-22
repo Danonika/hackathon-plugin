@@ -170,7 +170,7 @@ function esc(value) {
   return String(value ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
 
-const state = { hunger: 40, dopamine: 0, mode: 'idle', lastTrace: null, lastFeedback: null, target: new THREE.Vector3(-4.5, 1.6, 0) };
+const state = { hunger: 40, dopamine: 0, mode: 'idle', lastTrace: null, lastFeedbackKey: null, target: new THREE.Vector3(-4.5, 1.6, 0) };
 const statusEl = document.getElementById('status'), verdictEl = document.getElementById('verdict');
 const hungerEl = document.getElementById('hunger'), hungerVal = document.getElementById('hunger-val');
 const dopaEl = document.getElementById('dopa'), dopaVal = document.getElementById('dopa-val');
@@ -196,7 +196,6 @@ function applyNeuronEvent(ev) {
     brainLight.color.set(reward ? 0x22c55e : 0xef4444);
     brainLight.intensity = 3.5;
     state.mode = reward ? 'reward' : 'punish';
-    state.lastFeedback = ev;
     if (reward) {
       state.dopamine = Math.min(100, state.dopamine + 22);
       state.hunger = Math.max(0, state.hunger - 18);

@@ -1,6 +1,7 @@
 package config
 
 import (
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -9,6 +10,9 @@ import (
 func LoadDotEnv(root string) {
 	data, err := os.ReadFile(filepath.Join(root, ".env"))
 	if err != nil {
+		if !os.IsNotExist(err) {
+			log.Printf("dotenv: cannot read %s: %v", filepath.Join(root, ".env"), err)
+		}
 		return
 	}
 	for _, line := range strings.Split(string(data), "\n") {
@@ -27,10 +31,29 @@ func LoadDotEnv(root string) {
 		}
 		value := strings.TrimSpace(line[eq+1:])
 		value = unquoteEnvValue(value)
+		if !validEnvKey(key) {
+			log.Printf("dotenv: ignoring invalid key %q", key)
+			continue
+		}
 		if _, set := os.LookupEnv(key); !set {
-			_ = os.Setenv(key, value)
+			if err := os.Setenv(key, value); err != nil {
+				log.Printf("dotenv: cannot set %s: %v", key, err)
+			}
 		}
 	}
+}
+
+func validEnvKey(key string) bool {
+	if key == "" {
+		return false
+	}
+	for i, r := range key {
+		if r == '_' || r >= 'A' && r <= 'Z' || r >= 'a' && r <= 'z' || (i > 0 && r >= '0' && r <= '9') {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 func unquoteEnvValue(value string) string {

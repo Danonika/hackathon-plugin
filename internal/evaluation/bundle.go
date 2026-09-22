@@ -153,8 +153,6 @@ func FreezeBundle(opts BundleOptions) (Bundle, error) {
 	}
 	profile := normalizeProfile(opts.Profile)
 
-	var copied int
-	var copiedBytes int64
 	err = filepath.WalkDir(rootResolved, func(path string, d fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
@@ -189,12 +187,9 @@ func FreezeBundle(opts BundleOptions) (Bundle, error) {
 		if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
 			return err
 		}
-		written, err := copyFile(path, dst, opts.ReadOnly)
-		if err != nil {
+		if _, err := copyFile(path, dst, opts.ReadOnly); err != nil {
 			return err
 		}
-		copied++
-		copiedBytes += written
 		return nil
 	})
 	if err != nil {

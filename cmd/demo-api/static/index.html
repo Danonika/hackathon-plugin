@@ -138,8 +138,10 @@ function esc(value) {
 }
 
 function fmtSize(n) {
-  if (n > 1024 * 1024) return (n / 1024 / 1024).toFixed(1) + ' MB';
-  if (n > 1024) return (n / 1024).toFixed(1) + ' KB';
+  n = Number(n);
+  if (!Number.isFinite(n) || n < 0) return '-';
+  if (n >= 1024 * 1024) return (n / 1024 / 1024).toFixed(1) + ' MB';
+  if (n >= 1024) return (n / 1024).toFixed(1) + ' KB';
   return n + ' B';
 }
 
@@ -191,9 +193,9 @@ function renderFly(events, feedback) {
     const accepted = chosen.filter(c => recNames.includes(c));
     const added = chosen.filter(c => !recNames.includes(c));
     const dropped = recNames.filter(c => !chosen.includes(c));
-    const all = feedback || [];
-    const pam = all.filter(f => f.source === 'accepted' || f.source === 'normal-teacher').length;
-    const ppl1 = all.filter(f => f.source === 'codex-correction' || f.source === 'fallback').length;
+    // Counters describe the decision shown for this trace, not the whole log.
+    const pam = fb.source === 'accepted' || fb.source === 'normal-teacher' ? 1 : 0;
+    const ppl1 = fb.source === 'codex-correction' || fb.source === 'fallback' ? 1 : 0;
     verdict.innerHTML = '<span class="good">Codex: принял ' + accepted.length + '</span>' +
       (added.length ? ' · <span class="good">добавил ' + esc(added.join(', ')) + '</span>' : '') +
       (dropped.length ? ' · <span class="bad">отклонил ' + esc(dropped.join(', ')) + '</span>' : '') +
@@ -254,15 +256,16 @@ async function refresh() {
   if (refreshing) return;
   refreshing = true;
   try {
-    const [routing, calls, fly, feedback, inputs, artifacts] = await Promise.all([
+    const [routing, calls, fly, feedback, inputs, artifacts] = await Promise.allSettled([
       j('/routing'), j('/calls?limit=40'), j('/fly-events?limit=10'), j('/fly-feedback?limit=20'),
       j('/inputs'), j('/artifacts')
     ]);
-    renderRouting(routing);
-    renderCalls(calls.calls);
-    renderFly(fly.events, feedback.events);
-    renderFiles('inputs', inputs.files);
-    renderFiles('artifacts', artifacts.files);
+    // One failing panel must not blank the whole dashboard.
+    if (routing.status === 'fulfilled') renderRouting(routing.value);
+    if (calls.status === 'fulfilled') renderCalls(calls.value.calls);
+    if (fly.status === 'fulfilled') renderFly(fly.value.events, feedback.status === 'fulfilled' ? feedback.value.events : []);
+    if (inputs.status === 'fulfilled') renderFiles('inputs', inputs.value.files);
+    if (artifacts.status === 'fulfilled') renderFiles('artifacts', artifacts.value.files);
     document.getElementById('status').textContent = 'updated ' + new Date().toLocaleTimeString();
   } catch (e) {
     document.getElementById('status').textContent = 'offline: ' + e.message;

@@ -6,6 +6,7 @@ package atomicfile
 import (
 	"os"
 	"path/filepath"
+	"time"
 )
 
 const (
@@ -27,6 +28,14 @@ func Write(path string, data []byte, mode os.FileMode) error {
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
+	}
+	// Best-effort: reclaim temp files left by a previous crash.
+	if stale, err := filepath.Glob(filepath.Join(dir, filepath.Base(path)+".*.tmp")); err == nil {
+		for _, candidate := range stale {
+			if info, statErr := os.Stat(candidate); statErr == nil && time.Since(info.ModTime()) > time.Hour {
+				_ = os.Remove(candidate)
+			}
+		}
 	}
 	tmp, err := os.CreateTemp(dir, filepath.Base(path)+".*.tmp")
 	if err != nil {

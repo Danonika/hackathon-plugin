@@ -144,7 +144,7 @@ func cmdSessions(args []string) error {
 		for _, sess := range sessions {
 			task := sess.Task
 			if len(task) > 40 {
-				task = task[:40] + "..."
+				task = truncate(task, 40) + "..."
 			}
 			fmt.Printf("%-28s %-8s %-6.1f %-20s %s\n", sess.ID, sess.Status, sess.RiskScore, sess.UpdatedAt.Format("2006-01-02 15:04:05"), task)
 		}
