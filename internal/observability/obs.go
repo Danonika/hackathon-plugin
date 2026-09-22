@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log"
 	"os"
@@ -75,16 +76,24 @@ func Log(l *log.Logger, level, msg string, fields map[string]any) {
 	if l == nil {
 		return
 	}
-	b, err := json.Marshal(Entry{
+	entry := Entry{
 		Time:   time.Now().UTC().Format(time.RFC3339Nano),
 		Level:  level,
 		Msg:    msg,
 		Fields: fields,
-	})
-	if err != nil {
-		return
 	}
-	l.Println(string(b))
+	b, err := json.Marshal(entry)
+	if err != nil {
+		// Never drop the log line because a field is not marshalable.
+		fallback, ferr := json.Marshal(Entry{Time: entry.Time, Level: level, Msg: msg, Fields: map[string]any{"log_error": err.Error()}})
+		if ferr != nil {
+			return
+		}
+		b = fallback
+	}
+	if err := l.Output(2, string(b)); err != nil {
+		fmt.Fprintf(os.Stderr, "observability: log write failed: %v\n", err)
+	}
 }
 
 func AppendJSONL(path string, entry any) error {
@@ -146,6 +155,8 @@ func TailJSONL(path string, limit int) ([]json.RawMessage, error) {
 			break
 		}
 		buf = append(tmp[:n], buf...)
+		// Enough newlines buffered means the requested tail is complete; the
+		// maxTailBytes cap below only bounds memory for pathological files.
 		if bytes.Count(buf, []byte{'\n'}) > limit+1 {
 			break
 		}

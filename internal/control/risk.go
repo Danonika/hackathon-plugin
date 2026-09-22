@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -66,6 +67,8 @@ func EvaluateRisk(sess Session, events []Event, now time.Time) (float64, []strin
 	return math.Round(score*100) / 100, reasons
 }
 
+var panicWord = regexp.MustCompile(`(?i)(^|[^a-z])panic`)
+
 func payloadHasPanic(payload map[string]any) bool {
 	if len(payload) == 0 {
 		return false
@@ -74,20 +77,23 @@ func payloadHasPanic(payload map[string]any) bool {
 	if err != nil {
 		return false
 	}
-	return strings.Contains(strings.ToLower(string(data)), "panic")
+	text := strings.ToLower(string(data))
+	// "no panic observed" and similar prose must not count as a panic event.
+	text = strings.ReplaceAll(text, "no panic", "")
+	return panicWord.MatchString(text)
 }
 
 // RecomputeRisk refreshes risk for every session, attributing global MCP call
 // events to sessions by their time window.
 func (s *Store) RecomputeRisk(ctx context.Context) (int, error) {
-	sessions, err := s.Sessions(ctx, 1000)
+	sessions, err := s.Sessions(ctx, 10000)
 	if err != nil {
 		return 0, err
 	}
 	now := time.Now().UTC()
 	updated := 0
 	for _, sess := range sessions {
-		events, err := s.Events(ctx, sess.ID, 2000)
+		events, err := s.Events(ctx, sess.ID, 10000)
 		if err != nil {
 			return updated, err
 		}
@@ -95,10 +101,14 @@ func (s *Store) RecomputeRisk(ctx context.Context) (int, error) {
 		if sess.EndedAt != nil && sess.EndedAt.Before(end) {
 			end = *sess.EndedAt
 		}
-		if latest, err := s.latestGlobalTS(ctx); err == nil && latest.After(end) {
+		latest, err := s.latestGlobalTS(ctx)
+		if err != nil {
+			return updated, err
+		}
+		if latest.After(end) {
 			end = latest
 		}
-		globals, err := s.EventsBetween(ctx, sess.CreatedAt, end, 2000)
+		globals, err := s.EventsBetween(ctx, sess.CreatedAt, end, 10000)
 		if err != nil {
 			return updated, err
 		}

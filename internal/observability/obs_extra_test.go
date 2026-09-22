@@ -56,8 +56,13 @@ func TestLog(t *testing.T) {
 
 	buf.Reset()
 	Log(logger, "error", "bad", map[string]any{"bad": make(chan int)})
-	if buf.Len() != 0 {
-		t.Fatalf("unmarshalable fields must be dropped, got %q", buf.String())
+	// The line must survive with a fallback payload instead of vanishing.
+	var fallback Entry
+	if err := json.Unmarshal(buf.Bytes(), &fallback); err != nil {
+		t.Fatalf("fallback line is not JSON: %q", buf.String())
+	}
+	if fallback.Msg != "bad" || fallback.Fields["log_error"] == nil {
+		t.Fatalf("fallback entry = %+v", fallback)
 	}
 }
 

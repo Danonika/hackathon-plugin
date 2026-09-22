@@ -16,6 +16,9 @@ func (r *Router) ActivationSnapshot(ctx context.Context, task string, topN int) 
 	}
 	empty := map[string]any{"active_kc": []KCSample{}, "mbon": map[string]float64{}, "kc_total": MBKenyonCells}
 	brain := r.loadBrain()
+	if brain != nil && brain.KC > 0 {
+		empty["kc_total"] = brain.KC
+	}
 	if brain == nil || r.embedder == nil {
 		return empty
 	}

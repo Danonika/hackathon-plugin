@@ -84,14 +84,28 @@ func exemplarHash() string {
 }
 
 func (r *Router) embedTask(ctx context.Context, task string) ([]float64, bool) {
+	// One-entry cache: Recommend embeds the same task for the embedding, kNN
+	// and mushroom-body signals, which would otherwise be three provider calls.
+	r.embedCacheMu.Lock()
+	if r.embedCacheTask == task && (r.embedCacheOK || r.embedCacheVec == nil) {
+		vec, ok := r.embedCacheVec, r.embedCacheOK
+		r.embedCacheMu.Unlock()
+		return vec, ok
+	}
+	r.embedCacheMu.Unlock()
 	if r.embedder == nil {
 		return nil, false
 	}
 	vectors, err := r.embedder.Embed(ctx, []string{task})
-	if err != nil || len(vectors) != 1 {
-		return nil, false
+	ok := err == nil && len(vectors) == 1
+	var vec []float64
+	if ok {
+		vec = normalizeVector(vectors[0])
 	}
-	return normalizeVector(vectors[0]), true
+	r.embedCacheMu.Lock()
+	r.embedCacheTask, r.embedCacheVec, r.embedCacheOK = task, vec, ok
+	r.embedCacheMu.Unlock()
+	return vec, ok
 }
 
 func (r *Router) embeddingCategoryScores(ctx context.Context, task string) (map[string]float64, bool) {
@@ -129,12 +143,25 @@ func (r *Router) embeddingCategoryScores(ctx context.Context, task string) (map[
 			maxSim = s
 		}
 	}
+	if len(sims) == 1 {
+		for cat, s := range sims {
+			absolute := (s - embFloor) / (embCeil - embFloor)
+			if absolute < 0 {
+				absolute = 0
+			}
+			if absolute > 1 {
+				absolute = 1
+			}
+			return map[string]float64{cat: absolute}, true
+		}
+	}
+	if maxSim-minSim < 1e-9 {
+		// All similarities are (nearly) equal: no usable ranking signal.
+		return nil, false
+	}
 	out := map[string]float64{}
 	for cat, s := range sims {
-		rank := 0.0
-		if maxSim-minSim >= 1e-9 {
-			rank = (s - minSim) / (maxSim - minSim)
-		}
+		rank := (s - minSim) / (maxSim - minSim)
 		absolute := (s - embFloor) / (embCeil - embFloor)
 		if absolute < 0 {
 			absolute = 0

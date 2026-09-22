@@ -51,11 +51,13 @@ func (e Envelope) WithWarnings(warnings ...string) Envelope {
 }
 
 func (e Envelope) WithMetrics(m map[string]any) Envelope {
-	if e.Metrics == nil {
-		e.Metrics = map[string]any{}
+	merged := make(map[string]any, len(e.Metrics)+len(m))
+	for k, v := range e.Metrics {
+		merged[k] = v
 	}
 	for k, v := range m {
-		e.Metrics[k] = v
+		merged[k] = v
 	}
+	e.Metrics = merged
 	return e
 }

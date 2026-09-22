@@ -315,10 +315,13 @@ func (m *Manager) RoutingPath() string {
 }
 
 func (m *Manager) Routing() RoutingState {
+	// Read the file before taking the lock: a slow bind mount must not block
+	// every other config access.
+	path := m.RoutingPath()
+	data, readErr := os.ReadFile(path)
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	path := m.RoutingPath()
-	if data, err := os.ReadFile(path); err == nil {
+	if readErr == nil {
 		var doc routingDoc
 		if uerr := yaml.Unmarshal(data, &doc); uerr != nil {
 			log.Printf("config: cannot parse %s: %v (keeping the last known routing state)", path, uerr)
@@ -339,8 +342,8 @@ func (m *Manager) Routing() RoutingState {
 			m.routingInit = true
 			return m.routingCache
 		}
-	} else if err != nil && !os.IsNotExist(err) {
-		log.Printf("config: cannot read %s: %v (keeping the last known routing state)", path, err)
+	} else if readErr != nil && !os.IsNotExist(readErr) {
+		log.Printf("config: cannot read %s: %v (keeping the last known routing state)", path, readErr)
 	}
 	if m.routingInit {
 		return m.routingCache
@@ -395,10 +398,11 @@ func (m *Manager) EvaluationPath() string {
 // Evaluation re-reads configs/evaluation.yaml when its mtime changes and
 // always returns complete settings: built-in defaults overridden by the file.
 func (m *Manager) Evaluation() EvaluationSettings {
+	path := m.EvaluationPath()
+	data, readErr := os.ReadFile(path)
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	path := m.EvaluationPath()
-	if data, err := os.ReadFile(path); err == nil {
+	if readErr == nil {
 		settings := defaultsEvaluation()
 		var patch evaluationPatch
 		if yaml.Unmarshal(data, &patch) == nil {

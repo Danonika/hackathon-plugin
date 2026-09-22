@@ -48,5 +48,33 @@ func (r *Router) llmCategoryScores(ctx context.Context, task string) (map[string
 	if len(clean) == 0 {
 		return nil, false
 	}
+	// A classifier that returns all-zero or (with several categories) all-equal
+	// scores carries no information; treat it as unavailable instead of a flat
+	// signal. A single category is a legitimate signal.
+	first, maxScore := 0.0, 0.0
+	for _, score := range clean {
+		first = score
+		break
+	}
+	for _, score := range clean {
+		if score > maxScore {
+			maxScore = score
+		}
+	}
+	if maxScore <= 0 {
+		return nil, false
+	}
+	if len(clean) > 1 {
+		varying := false
+		for _, score := range clean {
+			if math.Abs(score-first) > 1e-9 {
+				varying = true
+				break
+			}
+		}
+		if !varying {
+			return nil, false
+		}
+	}
 	return clean, true
 }

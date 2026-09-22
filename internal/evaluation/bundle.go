@@ -230,10 +230,14 @@ func FreezeBundle(opts BundleOptions) (Bundle, error) {
 	if err != nil {
 		return Bundle{}, err
 	}
-	if err := os.WriteFile(filepath.Join(outAbs, "bundle.json"), append(manifestData, '\n'), 0o644); err != nil {
+	manifestMode := os.FileMode(0o644)
+	if opts.ReadOnly {
+		manifestMode = 0o444
+	}
+	if err := os.WriteFile(filepath.Join(outAbs, "bundle.json"), append(manifestData, '\n'), manifestMode); err != nil {
 		return Bundle{}, err
 	}
-	if err := os.WriteFile(filepath.Join(outAbs, "bundle-hash.txt"), []byte(bundleHash+"\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(outAbs, "bundle-hash.txt"), []byte(bundleHash+"\n"), manifestMode); err != nil {
 		return Bundle{}, err
 	}
 	return Bundle{

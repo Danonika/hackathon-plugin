@@ -90,8 +90,14 @@ type Client struct {
 
 func New(settings Settings) *Client {
 	return &Client{
-		settings:        settings,
-		http:            &http.Client{},
+		settings: settings,
+		http: &http.Client{
+			// The bot token is part of the request URL: following a redirect
+			// would send it to another host.
+			CheckRedirect: func(*http.Request, []*http.Request) error {
+				return http.ErrUseLastResponse
+			},
+		},
 		rateLimitPerMin: 20,
 		retryDelay:      time.Second,
 	}
@@ -446,7 +452,7 @@ func (c *Client) call(ctx context.Context, method string, payload any) (json.Raw
 		// underlying cause so credentials can never leak into logs.
 		var urlErr *url.Error
 		if errors.As(err, &urlErr) {
-			return nil, fmt.Errorf("telegram %s: request failed: %v", method, urlErr.Err)
+			return nil, fmt.Errorf("telegram %s: request failed: %w", method, urlErr.Err)
 		}
 		return nil, fmt.Errorf("telegram %s: request failed", method)
 	}
@@ -528,7 +534,12 @@ func ChunkHTML(text string, limit int) []string {
 		for _, tag := range stack {
 			prefix += tag.full
 		}
-		budget := limit - len([]rune(prefix))
+		// Reserve room for the closing tags the chunk will need.
+		closersBudget := 0
+		for _, tag := range stack {
+			closersBudget += len([]rune("</" + tag.name + ">"))
+		}
+		budget := limit - len([]rune(prefix)) - closersBudget
 		if budget < 1 {
 			budget = 1
 		}

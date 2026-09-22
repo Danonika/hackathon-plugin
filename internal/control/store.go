@@ -191,6 +191,7 @@ ON CONFLICT(id) DO UPDATE SET
   stage=excluded.stage,
   plan_slug=excluded.plan_slug,
   worktree=excluded.worktree,
+  ended_at=excluded.ended_at,
   updated_at=excluded.updated_at`,
 		sess.ID, sess.Root, sess.Kind, sess.Task, sess.Status, sess.Stage, sess.PlanSlug, sess.Worktree,
 		sess.RiskScore, string(reasons), formatTime(sess.CreatedAt), formatTime(sess.UpdatedAt), nullableTime(sess.EndedAt))
@@ -259,7 +260,7 @@ func (s *Store) Session(ctx context.Context, id string) (Session, error) {
 }
 
 func (s *Store) Sessions(ctx context.Context, limit int) ([]Session, error) {
-	if limit <= 0 || limit > 1000 {
+	if limit <= 0 || limit > 10000 {
 		limit = 50
 	}
 	rows, err := s.db.QueryContext(ctx, `SELECT id, root, kind, task, status, stage, plan_slug, worktree, risk_score, risk_reasons, created_at, updated_at, ended_at FROM sessions ORDER BY updated_at DESC LIMIT ?`, limit)
@@ -316,7 +317,7 @@ func (s *Store) AppendEvent(ctx context.Context, ev Event) error {
 }
 
 func (s *Store) Events(ctx context.Context, sessionID string, limit int) ([]Event, error) {
-	if limit <= 0 || limit > 2000 {
+	if limit <= 0 || limit > 10000 {
 		limit = 100
 	}
 	rows, err := s.db.QueryContext(ctx,
@@ -330,12 +331,21 @@ func (s *Store) Events(ctx context.Context, sessionID string, limit int) ([]Even
 
 // EventsBetween returns global events (no session id) inside a time window.
 func (s *Store) EventsBetween(ctx context.Context, from, to time.Time, limit int) ([]Event, error) {
-	if limit <= 0 || limit > 2000 {
+	if limit <= 0 || limit > 10000 {
 		limit = 200
+	}
+	// Zero bounds would format as "" and break the lexicographic window.
+	fromText := formatTime(from)
+	if fromText == "" {
+		fromText = "0000-01-01T00:00:00.000000000Z"
+	}
+	toText := formatTime(to)
+	if toText == "" {
+		toText = "9999-12-31T23:59:59.999999999Z"
 	}
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT id, session_id, ts, type, tool, status, duration_ms, payload FROM events WHERE session_id='' AND ts>=? AND ts<=? ORDER BY id DESC LIMIT ?`,
-		formatTime(from), formatTime(to), limit)
+		fromText, toText, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -381,6 +391,16 @@ func (s *Store) Counts(ctx context.Context) (sessions int, events int, err error
 	}
 	err = s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM events`).Scan(&events)
 	return sessions, events, err
+}
+
+// CursorUpdatedAt returns when the cursor was last written, used to detect
+// in-place rewrites of immutable-looking files.
+func (s *Store) CursorUpdatedAt(ctx context.Context, name string) (time.Time, error) {
+	var value string
+	if err := s.db.QueryRowContext(ctx, `SELECT COALESCE(updated_at,'') FROM cursors WHERE name=?`, name).Scan(&value); err != nil {
+		return time.Time{}, err
+	}
+	return parseTime(value), nil
 }
 
 func (s *Store) Cursor(ctx context.Context, name string) (int64, error) {

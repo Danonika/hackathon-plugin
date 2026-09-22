@@ -218,6 +218,14 @@ func (s *Store) ingestDecisions(ctx context.Context, root string) (int, error) {
 		if cursorErr != nil {
 			return files, cursorErr
 		}
+		if offset > 0 {
+			if info, statErr := os.Stat(path); statErr == nil {
+				if updated, uerr := s.CursorUpdatedAt(ctx, cursor); uerr == nil && info.ModTime().After(updated) {
+					// The file was rewritten in place; re-read it.
+					offset = 0
+				}
+			}
+		}
 		if offset > int64(len(data)) {
 			offset = 0
 		}

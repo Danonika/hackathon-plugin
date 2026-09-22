@@ -137,7 +137,25 @@ func (r *Router) saveMemory(mem memoryFile) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(r.memoryPath, data, 0o644)
+	tmp, err := os.CreateTemp(filepath.Dir(r.memoryPath), "fly-memory-*.tmp")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		os.Remove(tmpName)
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		os.Remove(tmpName)
+		return err
+	}
+	if err := os.Rename(tmpName, r.memoryPath); err != nil {
+		os.Remove(tmpName)
+		return err
+	}
+	return nil
 }
 
 func (r *Router) MemorySize() int {
@@ -155,6 +173,7 @@ func (r *Router) AddFeedback(ctx context.Context, ev FeedbackEvent) (int, error)
 		Source:       ev.Source,
 		CreatedAt:    time.Now().UTC().Format(time.RFC3339),
 	}
+	// Embed before taking the lock: this can be a network call.
 	if r.embedder != nil {
 		if vectors, err := r.embedder.Embed(ctx, []string{ev.Task}); err == nil && len(vectors) == 1 {
 			example.Vector = normalizeVector(vectors[0])
@@ -162,7 +181,6 @@ func (r *Router) AddFeedback(ctx context.Context, ev FeedbackEvent) (int, error)
 	}
 
 	memoryMu.Lock()
-	defer memoryMu.Unlock()
 	mem := r.loadMemory()
 	mem.Model = r.modelTag
 	kept := make([]FeedbackExample, 0, len(mem.Examples)+1)
@@ -177,7 +195,9 @@ func (r *Router) AddFeedback(ctx context.Context, ev FeedbackEvent) (int, error)
 		kept = kept[len(kept)-maxExamples:]
 	}
 	mem.Examples = kept
-	if err := r.saveMemory(mem); err != nil {
+	err := r.saveMemory(mem)
+	memoryMu.Unlock()
+	if err != nil {
 		return len(kept), err
 	}
 	r.applyDopamine(ctx, ev)
@@ -198,6 +218,10 @@ func (r *Router) memoryCategoryScores(taskVector []float64, k int) (map[string]f
 	list := []scored{}
 	for _, example := range mem.Examples {
 		if len(example.Vector) == 0 || len(example.Categories) == 0 {
+			continue
+		}
+		if mem.Model != "" && r.modelTag != "" && mem.Model != r.modelTag {
+			// Vectors from another embedding model are not comparable.
 			continue
 		}
 		list = append(list, scored{cosine(taskVector, normalizeVector(example.Vector)), example.Categories})

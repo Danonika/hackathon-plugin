@@ -32,16 +32,53 @@ func (r *Registry) Get(name string) (*Tool, bool) {
 	if !ok {
 		return nil, false
 	}
-	copied := *t
-	return &copied, true
+	return cloneTool(t), true
 }
 
 func (r *Registry) List() []*Tool {
 	out := make([]*Tool, 0, len(r.order))
 	for _, n := range r.order {
 		if t, ok := r.tools[n]; ok {
-			copied := *t
-			out = append(out, &copied)
+			out = append(out, cloneTool(t))
+		}
+	}
+	return out
+}
+
+// cloneTool deep-copies the schema so callers cannot mutate registry state.
+func cloneTool(t *Tool) *Tool {
+	copied := *t
+	if t.InputSchema != nil {
+		copied.InputSchema = cloneMap(t.InputSchema)
+	}
+	return &copied
+}
+
+func cloneMap(in map[string]any) map[string]any {
+	out := make(map[string]any, len(in))
+	for k, v := range in {
+		switch value := v.(type) {
+		case map[string]any:
+			out[k] = cloneMap(value)
+		case []any:
+			out[k] = cloneSlice(value)
+		default:
+			out[k] = v
+		}
+	}
+	return out
+}
+
+func cloneSlice(in []any) []any {
+	out := make([]any, len(in))
+	for i, v := range in {
+		switch value := v.(type) {
+		case map[string]any:
+			out[i] = cloneMap(value)
+		case []any:
+			out[i] = cloneSlice(value)
+		default:
+			out[i] = v
 		}
 	}
 	return out

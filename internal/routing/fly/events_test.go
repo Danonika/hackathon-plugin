@@ -67,13 +67,13 @@ func TestActivationSnapshotFailureModes(t *testing.T) {
 	brainPath := saveTestBrain(t, NewMBrain(32, 0.2, []string{"data"}, 3))
 
 	r := NewRouter(config.RoutingSettings{}).WithBrain(brainPath)
-	if got := r.ActivationSnapshot(ctx, "x", 10); got["kc_total"] != MBKenyonCells {
-		t.Fatalf("without an embedder the snapshot must be empty, got %+v", got)
+	if got := r.ActivationSnapshot(ctx, "x", 10); got["kc_total"] != 32 || len(got["active_kc"].([]KCSample)) != 0 {
+		t.Fatalf("without an embedder the snapshot must have no active KC, got %+v", got)
 	}
 
 	r = NewRouter(config.RoutingSettings{}).WithEmbeddings(failingEmbedder{}, "", "fake").WithBrain(brainPath)
-	if got := r.ActivationSnapshot(ctx, "x", 10); got["kc_total"] != MBKenyonCells {
-		t.Fatalf("a failing embedder must return the empty snapshot, got %+v", got)
+	if got := r.ActivationSnapshot(ctx, "x", 10); got["kc_total"] != 32 || len(got["active_kc"].([]KCSample)) != 0 {
+		t.Fatalf("a failing embedder must return no active KC, got %+v", got)
 	}
 
 	r = NewRouter(config.RoutingSettings{}).WithEmbeddings(fakeEmbedder{}, "", "fake")

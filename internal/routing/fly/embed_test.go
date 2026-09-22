@@ -32,8 +32,8 @@ func TestRecommendWithEmbeddings(t *testing.T) {
 
 	available := []string{"audio.transcribe", "timeseries.analyze", "documents.extract", "reports.create"}
 	res := r.Recommend(context.Background(), "process this recording from the meeting", nil, available)
-	if res.Encoder != "keyword+embedding" {
-		t.Fatalf("expected keyword+embedding encoder, got %q", res.Encoder)
+	if !strings.Contains(res.Encoder, "embedding") {
+		t.Fatalf("expected an embedding encoder, got %q", res.Encoder)
 	}
 	if res.Route != "speech" {
 		t.Fatalf("expected speech route, got %q (scores %v)", res.Route, res.CategoryScores)

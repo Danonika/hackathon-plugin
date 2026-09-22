@@ -271,7 +271,9 @@ func (r *Router) applyDopamine(ctx context.Context, ev FeedbackEvent) bool {
 		return false
 	}
 	r.brain = brain
-	_ = r.saveBrain(brain)
+	if err := r.saveBrain(brain); err != nil {
+		return false
+	}
 	return true
 }
 
@@ -297,6 +299,10 @@ func (b *MBrain) adjust(category string, code []float64, eta float64) {
 }
 
 func (b *MBrain) Train(input []float64, category string, eta float64) {
+	if b.Readout == nil || b.Bias == nil {
+		b.Readout = map[string][]float64{}
+		b.Bias = map[string]float64{}
+	}
 	if len(b.Categories) == 0 || category == "" {
 		return
 	}

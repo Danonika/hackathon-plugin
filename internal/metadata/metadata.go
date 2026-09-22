@@ -210,5 +210,6 @@ func (p *Postgres) RecordEvalRun(ctx context.Context, run EvalRun) error {
 func (p *Postgres) Close() {
 	if p != nil && p.pool != nil {
 		p.pool.Close()
+		p.pool = nil
 	}
 }

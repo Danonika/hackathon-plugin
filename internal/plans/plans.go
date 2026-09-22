@@ -82,8 +82,8 @@ func Slug(value string) string {
 	if out == "" {
 		out = "plan"
 	}
-	if len(out) > 60 {
-		out = strings.Trim(out[:60], "-")
+	if runes := []rune(out); len(runes) > 60 {
+		out = strings.Trim(string(runes[:60]), "-")
 	}
 	return out
 }

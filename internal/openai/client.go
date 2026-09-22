@@ -190,6 +190,8 @@ func (c *Client) Embed(ctx context.Context, texts []string) ([][]float64, error)
 	return result, nil
 }
 
+const maxAudioBytes = 25 << 20
+
 func (c *Client) Transcribe(ctx context.Context, path string, language string) (string, error) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -197,6 +199,9 @@ func (c *Client) Transcribe(ctx context.Context, path string, language string) (
 	}
 	defer f.Close()
 
+	if st, serr := f.Stat(); serr == nil && st.Size() > maxAudioBytes {
+		return "", fmt.Errorf("audio file exceeds %d bytes", maxAudioBytes)
+	}
 	var buf bytes.Buffer
 	w := multipart.NewWriter(&buf)
 	_ = w.WriteField("model", c.TranscribeModel)
@@ -227,7 +232,10 @@ func (c *Client) Transcribe(ctx context.Context, path string, language string) (
 		return "", err
 	}
 	defer resp.Body.Close()
-	data, _ := io.ReadAll(io.LimitReader(resp.Body, 32<<20))
+	data, rerr := io.ReadAll(io.LimitReader(resp.Body, 32<<20))
+	if rerr != nil {
+		return "", fmt.Errorf("openai transcribe: reading response: %w", rerr)
+	}
 	if resp.StatusCode >= 300 {
 		return "", fmt.Errorf("openai transcribe: status %d: %s", resp.StatusCode, truncate(string(data), 400))
 	}

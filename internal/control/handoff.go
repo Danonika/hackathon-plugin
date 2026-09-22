@@ -16,6 +16,7 @@ type Handoff struct {
 	RecentEvents     []Event             `json:"recent_events,omitempty"`
 	Outputs          []Output            `json:"outputs,omitempty"`
 	PendingDecisions int                 `json:"pending_decisions"`
+	Notes            []string            `json:"notes,omitempty"`
 }
 
 // BuildHandoff assembles the context a new agent session needs to resume work.
@@ -36,6 +37,8 @@ func BuildHandoff(ctx context.Context, store *Store, learn *learning.Store, root
 	if learn != nil {
 		if items, err := learn.Top(maxLearnings, 0.5); err == nil {
 			handoff.Learnings = items
+		} else {
+			handoff.Notes = append(handoff.Notes, "learning store unreadable: "+err.Error())
 		}
 	}
 	events, err := store.Events(ctx, sessionID, 10)
@@ -48,10 +51,16 @@ func BuildHandoff(ctx context.Context, store *Store, learn *learning.Store, root
 		return handoff, err
 	}
 	handoff.Outputs = outputs
-	for _, ev := range events {
-		if ev.Type == "eval_decision" {
-			handoff.PendingDecisions++
+	// Count decisions from a wider window than the 10 shown, so older pending
+	// decisions are not silently invisible.
+	if decisionEvents, derr := store.Events(ctx, sessionID, 500); derr == nil {
+		for _, ev := range decisionEvents {
+			if ev.Type == "eval_decision" {
+				handoff.PendingDecisions++
+			}
 		}
+	} else {
+		handoff.Notes = append(handoff.Notes, "decision history unreadable: "+derr.Error())
 	}
 	return handoff, nil
 }

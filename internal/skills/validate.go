@@ -170,7 +170,12 @@ func validateSkill(base, name string) SkillReport {
 	}
 
 	for _, ref := range referencedFiles(text) {
-		if _, err := os.Stat(filepath.Join(dir, filepath.FromSlash(ref))); err != nil {
+		clean := filepath.Clean(filepath.FromSlash(ref))
+		if filepath.IsAbs(ref) || clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
+			item.Problems = append(item.Problems, fmt.Sprintf("reference escapes the skill directory: %s", ref))
+			continue
+		}
+		if _, err := os.Stat(filepath.Join(dir, clean)); err != nil {
 			item.Problems = append(item.Problems, fmt.Sprintf("referenced file does not exist: %s", ref))
 		}
 	}

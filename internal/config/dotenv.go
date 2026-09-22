@@ -35,8 +35,37 @@ func LoadDotEnv(root string) {
 
 func unquoteEnvValue(value string) string {
 	if len(value) > 0 {
-		if q := value[0]; q == '"' || q == '\'' {
-			if end := strings.IndexByte(value[1:], q); end >= 0 {
+		switch q := value[0]; q {
+		case '"':
+			var b strings.Builder
+			escaped := false
+			for _, r := range value[1:] {
+				if escaped {
+					switch r {
+					case 'n':
+						b.WriteByte('\n')
+					case 't':
+						b.WriteByte('\t')
+					case 'r':
+						b.WriteByte('\r')
+					default:
+						b.WriteRune(r)
+					}
+					escaped = false
+					continue
+				}
+				if r == '\\' {
+					escaped = true
+					continue
+				}
+				if r == '"' {
+					return b.String()
+				}
+				b.WriteRune(r)
+			}
+			return b.String()
+		case '\'':
+			if end := strings.IndexByte(value[1:], '\''); end >= 0 {
 				return value[1 : 1+end]
 			}
 			return value[1:]

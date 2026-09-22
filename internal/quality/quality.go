@@ -3,6 +3,7 @@
 package quality
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -87,15 +88,18 @@ func runCheck(ctx context.Context, root string, spec checkSpec) Check {
 	}
 	// Bound the wait even when a grandchild keeps stdout/stderr open.
 	cmd.WaitDelay = 10 * time.Second
-	output, err := cmd.CombinedOutput()
+	var captured cappedBuffer
+	cmd.Stdout = &captured
+	cmd.Stderr = &captured
+	err := cmd.Run()
 	check.DurationMS = time.Since(start).Milliseconds()
-	check.Output = tail(string(output), 2000)
+	check.Output = tail(captured.String(), 2000)
 	switch {
 	case runCtx.Err() == context.DeadlineExceeded:
 		check.Status = "timeout"
 	case err != nil:
 		check.Status = "failed"
-	case spec.name == "gofmt" && strings.TrimSpace(string(output)) != "":
+	case spec.name == "gofmt" && strings.TrimSpace(captured.String()) != "":
 		check.Status = "failed"
 	default:
 		check.Status = "ok"
@@ -123,6 +127,26 @@ func buildEnv() []string {
 	return append(base, "GOFLAGS="+existing)
 }
 
+// cappedBuffer keeps at most maxCheckOutput bytes so a chatty test run cannot
+// exhaust memory before tail() trims the output.
+const maxCheckOutput = 256 << 10
+
+type cappedBuffer struct {
+	buf bytes.Buffer
+}
+
+func (c *cappedBuffer) Write(p []byte) (int, error) {
+	if remaining := maxCheckOutput - c.buf.Len(); remaining > 0 {
+		if len(p) > remaining {
+			p = p[:remaining]
+		}
+		_, _ = c.buf.Write(p)
+	}
+	return len(p), nil
+}
+
+func (c *cappedBuffer) String() string { return c.buf.String() }
+
 func tail(text string, limit int) string {
 	text = strings.TrimRight(text, "\n")
 	if len(text) <= limit {
@@ -136,10 +160,23 @@ func Dir(root string) string {
 }
 
 func Path(root, sha string) string {
-	if strings.TrimSpace(sha) == "" {
+	sha = strings.TrimSpace(sha)
+	if !validSHA(sha) {
 		sha = "unknown"
 	}
 	return filepath.Join(Dir(root), sha, "gate.json")
+}
+
+func validSHA(sha string) bool {
+	if sha == "" || sha == "." || sha == ".." || strings.ContainsAny(sha, `/\`) {
+		return false
+	}
+	for _, r := range sha {
+		if !(r >= '0' && r <= '9' || r >= 'a' && r <= 'f' || r >= 'A' && r <= 'F') {
+			return false
+		}
+	}
+	return true
 }
 
 // Save writes the report atomically and returns the repository-relative path.
@@ -191,7 +228,18 @@ func LatestReport(root string) (Report, bool, error) {
 		if info.ModTime().Before(bestTime) {
 			continue
 		}
-		data, readErr := os.ReadFile(filepath.Join(Dir(root), entry.Name(), "gate.json"))
+		gatePath := filepath.Join(Dir(root), entry.Name(), "gate.json")
+		gateInfo, gateErr := os.Stat(gatePath)
+		if gateErr != nil {
+			if firstErr == nil {
+				firstErr = gateErr
+			}
+			continue
+		}
+		if gateInfo.ModTime().Before(bestTime) {
+			continue
+		}
+		data, readErr := os.ReadFile(gatePath)
 		if readErr != nil {
 			if firstErr == nil {
 				firstErr = readErr
@@ -205,7 +253,7 @@ func LatestReport(root string) (Report, bool, error) {
 			}
 			continue
 		}
-		best, bestTime = report, info.ModTime()
+		best, bestTime = report, gateInfo.ModTime()
 	}
 	if bestTime.IsZero() {
 		return Report{}, false, firstErr

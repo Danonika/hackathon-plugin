@@ -39,6 +39,11 @@ type Router struct {
 	brain     *MBrain
 	llm       LLMClassifier
 	building  chan struct{}
+
+	embedCacheMu   sync.Mutex
+	embedCacheTask string
+	embedCacheVec  []float64
+	embedCacheOK   bool
 }
 
 func NewRouter(settings config.RoutingSettings) *Router {
@@ -125,7 +130,10 @@ func (r *Router) Recommend(ctx context.Context, task string, meta map[string]any
 		}
 	}
 	keywordSignal := len(scores) > 0
-	encoderParts := []string{"keyword"}
+	encoderParts := []string{}
+	if keywordSignal {
+		encoderParts = append(encoderParts, "keyword")
+	}
 	if embeddingScores, ok := r.embeddingCategoryScores(ctx, task); ok {
 		encoderParts = append(encoderParts, "embedding")
 		for category, emb := range embeddingScores {

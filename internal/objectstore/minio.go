@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 
 	"github.com/minio/minio-go/v7"
 	"github.com/minio/minio-go/v7/pkg/credentials"
@@ -42,6 +43,9 @@ func Open(ctx context.Context, s Settings) (*Client, error) {
 	if s.Endpoint == "" {
 		return nil, fmt.Errorf("objectstore: MINIO_ENDPOINT is not set")
 	}
+	if strings.TrimSpace(s.AccessKey) == "" || strings.TrimSpace(s.SecretKey) == "" {
+		return nil, fmt.Errorf("objectstore: MINIO_ACCESS_KEY and MINIO_SECRET_KEY are required")
+	}
 	cli, err := minio.New(s.Endpoint, &minio.Options{
 		Creds:  credentials.NewStaticV4(s.AccessKey, s.SecretKey, ""),
 		Secure: s.UseSSL,
@@ -55,7 +59,11 @@ func Open(ctx context.Context, s Settings) (*Client, error) {
 	}
 	if !exists {
 		if err := cli.MakeBucket(ctx, s.Bucket, minio.MakeBucketOptions{}); err != nil {
-			return nil, err
+			// Another replica may have created it between the check and the
+			// call; only fail when the bucket really is unavailable.
+			if again, existsErr := cli.BucketExists(ctx, s.Bucket); existsErr != nil || !again {
+				return nil, err
+			}
 		}
 	}
 	return &Client{client: cli, bucket: s.Bucket}, nil
@@ -73,8 +81,21 @@ func (c *Client) Get(ctx context.Context, name string) ([]byte, error) {
 		return nil, err
 	}
 	defer obj.Close()
-	if _, err := obj.Stat(); err != nil {
+	info, err := obj.Stat()
+	if err != nil {
 		return nil, err
 	}
-	return io.ReadAll(obj)
+	if info.Size > maxObjectBytes {
+		return nil, fmt.Errorf("objectstore: object %s exceeds %d bytes", name, maxObjectBytes)
+	}
+	data, err := io.ReadAll(io.LimitReader(obj, maxObjectBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(data)) > maxObjectBytes {
+		return nil, fmt.Errorf("objectstore: object %s exceeds %d bytes", name, maxObjectBytes)
+	}
+	return data, nil
 }
+
+const maxObjectBytes = 64 << 20

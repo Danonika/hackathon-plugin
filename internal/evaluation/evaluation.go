@@ -5,6 +5,7 @@
 package evaluation
 
 import (
+	"encoding/json"
 	"fmt"
 	"math"
 	"sort"
@@ -68,6 +69,26 @@ type JudgeReport struct {
 	Deductions         []Deduction        `json:"deductions"`
 	Questions          []string           `json:"questions"`
 	TopImprovements    []string           `json:"top_improvements"`
+
+	// TotalSet records whether the JSON carried a "total" field, so an omitted
+	// total stays tolerated while an explicit total of 0 is validated.
+	TotalSet bool `json:"-"`
+}
+
+func (r *JudgeReport) UnmarshalJSON(data []byte) error {
+	type alias JudgeReport
+	var decoded alias
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+	var probe struct {
+		Total *float64 `json:"total"`
+	}
+	if err := json.Unmarshal(data, &probe); err == nil && probe.Total != nil {
+		decoded.TotalSet = true
+	}
+	*r = JudgeReport(decoded)
+	return nil
 }
 
 type InvalidReport struct {
@@ -147,7 +168,7 @@ func ValidateJudgeReport(r JudgeReport, snapshotSHA string) []string {
 	for _, key := range unknown {
 		problems = append(problems, "unknown criterion "+key)
 	}
-	if r.Total != 0 && math.Abs(r.Total-sum) > 0.01 {
+	if (r.TotalSet || r.Total != 0) && math.Abs(r.Total-sum) > 0.01 {
 		problems = append(problems, fmt.Sprintf("total %v does not match criterion sum %v", r.Total, sum))
 	}
 	if len(r.Evidence) == 0 {
@@ -566,7 +587,10 @@ func Rank(aggregates []Aggregate) (Ranking, error) {
 			return Ranking{}, fmt.Errorf("aggregate %s is inconclusive (%d of %d valid judges); assign substitute judges before ranking",
 				agg.SnapshotSHA, agg.ValidJudges, minValid)
 		}
-		if agg.RubricVersion != "" && agg.RubricVersion != RubricVersion {
+		if agg.RubricVersion == "" {
+			return Ranking{}, fmt.Errorf("aggregate %s has no rubric version; re-aggregate with this build", agg.SnapshotSHA)
+		}
+		if agg.RubricVersion != RubricVersion {
 			return Ranking{}, fmt.Errorf("aggregate %s uses rubric version %s, expected %s", agg.SnapshotSHA, agg.RubricVersion, RubricVersion)
 		}
 	}
