@@ -5,9 +5,10 @@ Durable state for resuming after `/compact` or in a new session. Read this and
 
 ## Where we are
 
-- Latest release: **v0.16.9**, pushed. Previous: v0.15.1–v0.16.8.
-- Review register: **328/416 fixed** — criticals 4/4, highs 55/55,
-  mediums 215/215, lows 54/142. Remaining: **88 lows**.
+- Latest release: **v0.16.13**, pushed. Previous: v0.13.0–v0.16.12.
+- Review register: **408/416 fixed** — criticals 4/4, highs 55/55,
+  mediums 215/215, lows 134/142. The 8 remaining lows are annotated
+  reviewed-intentional (documented behaviour or tuned heuristics).
 - Every release passed: gofmt/build/vet, `go test ./...`, coverage ≥80%,
   quality gate 7/7, hooks + env-set + smoke tests, Windows cross-vet, and
   `go run ./cmd/hackathonkit-rehearse` (clean-checkout rehearsal) PASS 24/24.
