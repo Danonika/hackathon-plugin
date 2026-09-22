@@ -121,12 +121,12 @@ func securitySource(d Deps, args map[string]any) (string, string, error) {
 	if artifact := argString(args, "artifact_id"); artifact != "" {
 		full, err := d.Store.ArtifactPath(artifact, false)
 		if err != nil {
-			return "", "", err
+			return "", "", fmt.Errorf("artifact %s is not readable", artifact)
 		}
 		data, err := readCapped(full, int64(securityScanLimit)+1)
 		if err != nil {
 			if !os.IsNotExist(err) {
-				return "", "", err
+				return "", "", fmt.Errorf("artifact %s is not readable", artifact)
 			}
 			// Not materialized locally: use the store read path (object-store
 			// fallback + rehydrate), capped to the scan limit.

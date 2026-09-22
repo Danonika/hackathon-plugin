@@ -157,7 +157,16 @@ func LatestErr(root string) (Plan, bool, error) {
 			}
 			continue
 		}
-		best, bestTime = plan, info.ModTime()
+		// Prefer the semantic timestamp; fall back to the file mtime when it is
+		// absent or unparseable (e.g. after a bulk copy).
+		candidate := info.ModTime()
+		if !plan.UpdatedAt.IsZero() {
+			candidate = plan.UpdatedAt
+		}
+		if candidate.Before(bestTime) {
+			continue
+		}
+		best, bestTime = plan, candidate
 	}
 	if bestTime.IsZero() {
 		return Plan{}, false, firstErr

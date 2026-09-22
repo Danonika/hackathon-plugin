@@ -325,6 +325,9 @@ func (c *Client) GetUpdates(ctx context.Context, offset int64, limit, timeoutSec
 			From struct {
 				ID int64 `json:"id"`
 			} `json:"from"`
+			SenderChat struct {
+				ID int64 `json:"id"`
+			} `json:"sender_chat"`
 			Text string `json:"text"`
 		} `json:"message"`
 	}
@@ -341,7 +344,12 @@ func (c *Client) GetUpdates(ctx context.Context, offset int64, limit, timeoutSec
 			if info.ChatName == "" {
 				info.ChatName = update.Message.Chat.Username
 			}
-			info.FromID = strconv.FormatInt(update.Message.From.ID, 10)
+			if update.Message.From.ID != 0 {
+				info.FromID = strconv.FormatInt(update.Message.From.ID, 10)
+			} else if update.Message.SenderChat.ID != 0 {
+				// Channel posts / anonymous admins have no `from`.
+				info.FromID = strconv.FormatInt(update.Message.SenderChat.ID, 10)
+			}
 			info.Text = update.Message.Text
 		}
 		out = append(out, info)

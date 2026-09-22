@@ -36,7 +36,6 @@ func ProbeOpenAICompatible(ctx context.Context, providerID, baseURL, apiKey stri
 		result.Error = "no base url configured"
 		return result
 	}
-	result.Live = true
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURL+"/models", nil)
@@ -52,6 +51,7 @@ func ProbeOpenAICompatible(ctx context.Context, providerID, baseURL, apiKey stri
 		result.Error = redact(err.Error(), apiKey)
 		return result
 	}
+	result.Live = true
 	defer resp.Body.Close()
 	result.StatusCode = resp.StatusCode
 	body, readErr := io.ReadAll(io.LimitReader(resp.Body, 1<<20))

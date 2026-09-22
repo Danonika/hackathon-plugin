@@ -26,12 +26,13 @@ func (h *HashEncoder) Embed(ctx context.Context, texts []string) ([][]float64, e
 		return nil, fmt.Errorf("hash encoder: invalid dimensions %d", dimsOf(h))
 	}
 	out := make([][]float64, 0, len(texts))
+	hasher := fnv.New64a()
 	for _, text := range texts {
 		vector := make([]float64, h.Dims)
 		for _, token := range tokenizeFly(text) {
-			hash := fnv.New64a()
-			_, _ = hash.Write([]byte(token))
-			value := hash.Sum64()
+			hasher.Reset()
+			_, _ = hasher.Write([]byte(token))
+			value := hasher.Sum64()
 			index := int(value % uint64(h.Dims))
 			sign := 1.0
 			if (value>>63)&1 == 1 {

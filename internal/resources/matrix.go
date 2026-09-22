@@ -101,6 +101,11 @@ func Plan(matrix Matrix, statuses []Status, trackRef string) (TrackPlan, []Decis
 	for _, capability := range plan.Capabilities {
 		variants := matrix.Capabilities[capability]
 		if len(variants) == 0 {
+			decisions = append(decisions, Decision{
+				Capability: capability,
+				Degraded:   true,
+				Reason:     "no variant is defined for this capability",
+			})
 			continue
 		}
 		decision := Decision{Capability: capability}

@@ -149,6 +149,13 @@ func Load(root string) (Profile, bool, error) {
 
 // Save writes the profile atomically with least-privilege permissions.
 func Save(root string, profile Profile) error {
+	// Profile is passed by value but Claimed is a shared map; copy it so Save
+	// does not mutate the caller's map.
+	claimed := make(map[string]bool, len(profile.Claimed))
+	for k, v := range profile.Claimed {
+		claimed[k] = v
+	}
+	profile.Claimed = claimed
 	if profile.Version == 0 {
 		profile.Version = ProfileVersion
 	}

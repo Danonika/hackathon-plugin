@@ -31,9 +31,11 @@ func (r *Router) ActivationSnapshot(ctx context.Context, task string, topN int) 
 	if !ok {
 		return empty
 	}
-	brainMu.Lock()
-	scores, code, ok := brain.scores(vec)
-	brainMu.Unlock()
+	scores, code, ok := func() (map[string]float64, []float64, bool) {
+		brainMu.Lock()
+		defer brainMu.Unlock()
+		return brain.scores(vec)
+	}()
 	if !ok {
 		return empty
 	}

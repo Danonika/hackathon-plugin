@@ -72,7 +72,7 @@ func downsample(points []seriesPoint, maxPoints int) []seriesPoint {
 	out := make([]seriesPoint, 0, maxPoints)
 	for i := 0; i < maxPoints; i++ {
 		idx := int(float64(i) * step)
-		if idx >= len(points) {
+		if i == maxPoints-1 || idx >= len(points) {
 			idx = len(points) - 1
 		}
 		out = append(out, points[idx])
@@ -257,8 +257,8 @@ func registerTimeSeries(reg *mcp.Registry, d Deps) {
 							anomalies = append(anomalies, anomaly{
 								Timestamp: points[i].T.UTC().Format(time.RFC3339),
 								Value:     round2(points[i].V),
-								Score:     round2(threshold),
-								Method:    "zscore",
+								Score:     0,
+								Method:    "constant-window",
 							})
 						}
 						continue
@@ -277,7 +277,8 @@ func registerTimeSeries(reg *mcp.Registry, d Deps) {
 					}
 				}
 			}
-			sort.Slice(anomalies, func(i, j int) bool { return anomalies[i].Timestamp < anomalies[j].Timestamp })
+			// Most recent first, so truncation keeps the newest anomalies.
+			sort.Slice(anomalies, func(i, j int) bool { return anomalies[i].Timestamp > anomalies[j].Timestamp })
 			totalAnomalies := len(anomalies)
 			limit := argInt(args, "limit", 100)
 			if limit <= 0 || limit > 10000 {

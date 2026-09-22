@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"strings"
 
@@ -69,10 +70,11 @@ func Open(ctx context.Context, s Settings) (*Client, error) {
 	if !exists {
 		if err := cli.MakeBucket(ctx, s.Bucket, minio.MakeBucketOptions{}); err != nil {
 			// Another replica may have created it between the check and the
-			// call; only fail when the bucket really is unavailable.
+			// call; only tolerate that when the bucket now exists.
 			if again, existsErr := cli.BucketExists(ctx, s.Bucket); existsErr != nil || !again {
 				return nil, err
 			}
+			log.Printf("objectstore: MakeBucket(%s) failed (%v) but the bucket exists; continuing", s.Bucket, err)
 		}
 	}
 	return &Client{client: cli, bucket: s.Bucket}, nil

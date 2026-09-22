@@ -48,6 +48,10 @@ func (m *Metrics) Inc(name string) {
 }
 
 func (m *Metrics) Add(name string, delta int64) {
+	if v, ok := m.counters.Load(name); ok {
+		v.(*atomic.Int64).Add(delta)
+		return
+	}
 	v, _ := m.counters.LoadOrStore(name, new(atomic.Int64))
 	v.(*atomic.Int64).Add(delta)
 }

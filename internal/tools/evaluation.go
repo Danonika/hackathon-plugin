@@ -567,8 +567,24 @@ func writeRepoJSON(root, rel string, value any) (string, error) {
 	if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
 		return "", err
 	}
-	if err := os.WriteFile(full, append(data, '\n'), 0o644); err != nil {
-		return "", err
+	// Atomic replace so a crash/concurrent reader never sees a partial JSON.
+	tmp, terr := os.CreateTemp(filepath.Dir(full), ".tmp-*.json")
+	if terr != nil {
+		return "", terr
+	}
+	tmpName := tmp.Name()
+	if _, werr := tmp.Write(append(data, '\n')); werr != nil {
+		tmp.Close()
+		os.Remove(tmpName)
+		return "", werr
+	}
+	if werr := tmp.Close(); werr != nil {
+		os.Remove(tmpName)
+		return "", werr
+	}
+	if rerr := os.Rename(tmpName, full); rerr != nil {
+		os.Remove(tmpName)
+		return "", rerr
 	}
 	return filepath.ToSlash(rel), nil
 }

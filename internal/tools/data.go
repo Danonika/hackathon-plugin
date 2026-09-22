@@ -26,18 +26,16 @@ func readAnyTable(path string, sheet string) (*table, []string, error) {
 	case "xls":
 		return nil, nil, fmt.Errorf("legacy .xls (BIFF) tables are not supported; convert the file to .xlsx or .csv first")
 	case "tsv":
-		t, err := readCSVTable(path, "\t")
-		return t, nil, err
+		return readCSVTable(path, "\t")
 	default:
-		t, err := readCSVTable(path, "")
-		return t, nil, err
+		return readCSVTable(path, "")
 	}
 }
 
-func readCSVTable(path string, delimiter string) (*table, error) {
+func readCSVTable(path string, delimiter string) (*table, []string, error) {
 	f, err := os.Open(path)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	defer f.Close()
 	r := csv.NewReader(f)
@@ -51,16 +49,27 @@ func readCSVTable(path string, delimiter string) (*table, error) {
 	}
 	records, err := r.ReadAll()
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if len(records) == 0 {
-		return nil, fmt.Errorf("empty table")
+		return nil, nil, fmt.Errorf("empty table")
 	}
 	headers := records[0]
 	if len(headers) > 0 {
 		headers[0] = strings.TrimPrefix(headers[0], "\ufeff")
 	}
-	return &table{Headers: headers, Rows: records[1:]}, nil
+	rows := records[1:]
+	warnings := []string{}
+	ragged := 0
+	for _, row := range rows {
+		if len(row) != len(headers) {
+			ragged++
+		}
+	}
+	if ragged > 0 {
+		warnings = append(warnings, fmt.Sprintf("%d row(s) do not match the header column count; short rows are padded with empty values", ragged))
+	}
+	return &table{Headers: headers, Rows: rows}, warnings, nil
 }
 
 func (t *table) columnIndex(name string) int {
@@ -452,6 +461,11 @@ func applyWhere(t *table, where string) ([][]string, error) {
 	idx := t.columnIndex(column)
 	if idx < 0 {
 		return nil, fmt.Errorf("unknown column in where: %s", column)
+	}
+	switch op {
+	case "=", "==", "!=", ">", ">=", "<", "<=", "contains":
+	default:
+		return nil, fmt.Errorf("unsupported operator %q", op)
 	}
 	out := [][]string{}
 	for _, row := range t.Rows {

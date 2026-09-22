@@ -143,14 +143,17 @@ func skillContextItems(ctx context.Context, root string) ([]contextItem, error) 
 		}
 		info, statErr := entry.Info()
 		if statErr != nil {
+			items = append(items, contextItem{Kind: "skill", Name: path, Flag: "stat failed: " + statErr.Error()})
 			return nil
 		}
 		data, readErr := os.ReadFile(path)
 		if readErr != nil {
+			items = append(items, contextItem{Kind: "skill", Name: path, Flag: "read failed: " + readErr.Error()})
 			return nil
 		}
 		rel, relErr := filepath.Rel(base, path)
 		if relErr != nil {
+			items = append(items, contextItem{Kind: "skill", Name: path, Flag: "relative path failed: " + relErr.Error()})
 			return nil
 		}
 		name := filepath.ToSlash(rel)

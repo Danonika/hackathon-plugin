@@ -68,6 +68,7 @@ func registerPlans(reg *mcp.Registry, d Deps) {
 			}
 			warnings := []string{}
 			stages := []plans.Stage{}
+			seenStage := map[string]bool{}
 			if rawValue, present := args["stages"]; present && rawValue != nil {
 				if _, isArray := rawValue.([]any); !isArray {
 					warnings = append(warnings, "stages must be an array; default stages were used")
@@ -96,7 +97,15 @@ func registerPlans(reg *mcp.Registry, d Deps) {
 						return mcp.Fail(trace(ctx), fmt.Sprintf("invalid stage status %q", status)), nil
 					}
 					timebox := argInt(m, "timebox_minutes", 0)
-					stages = append(stages, plans.Stage{ID: strings.TrimSpace(id), Goal: goal, Status: status, TimeboxMinute: timebox})
+					if timebox < 0 {
+						return mcp.Fail(trace(ctx), "timebox_minutes must be >= 0"), nil
+					}
+					cleanID := strings.TrimSpace(id)
+					if seenStage[cleanID] {
+						return mcp.Fail(trace(ctx), "duplicate stage id: "+cleanID), nil
+					}
+					seenStage[cleanID] = true
+					stages = append(stages, plans.Stage{ID: cleanID, Goal: goal, Status: status, TimeboxMinute: timebox})
 				}
 				if skipped > 0 {
 					warnings = append(warnings, fmt.Sprintf("skipped %d malformed stage(s)", skipped))

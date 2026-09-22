@@ -253,6 +253,9 @@ func resourcesEnvelope(ctx context.Context, d Deps, task, trackRef string) mcp.E
 	}
 	metrics := map[string]any{"providers_ready": countReady(statuses)}
 	if !present || len(resources.Missing(statuses)) > 0 {
+		if len(warnings) == 0 {
+			warnings = append(warnings, "resource profile is incomplete; some providers are not configured")
+		}
 		return mcp.Partial(trace(ctx), data, warnings...).WithMetrics(metrics)
 	}
 	envelope := mcp.OK(trace(ctx), data).WithMetrics(metrics)

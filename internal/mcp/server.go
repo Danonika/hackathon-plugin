@@ -10,6 +10,7 @@ import (
 	"io"
 	"log"
 	"runtime/debug"
+	"strings"
 	"time"
 
 	"hackathonkit.local/agentkit/internal/observability"
@@ -55,6 +56,14 @@ func (s *Server) Serve(ctx context.Context) error {
 	return s.ServeStreams(ctx, nil, nil)
 }
 
+func sanitizeRPCError(msg string) string {
+	msg = strings.TrimSpace(msg)
+	if len(msg) > 500 {
+		msg = msg[:500] + "..."
+	}
+	return msg
+}
+
 func (s *Server) ServeStreams(ctx context.Context, in io.Reader, out io.Writer) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -80,6 +89,11 @@ func (s *Server) ServeStreams(ctx context.Context, in io.Reader, out io.Writer) 
 			for scanner.Scan() {
 				line := bytes.TrimSpace(scanner.Bytes())
 				if len(line) == 0 {
+					continue
+				}
+				// A bare NUL frame would equal the in-band oversize sentinel;
+				// treat it as a control byte and drop it.
+				if len(line) == 1 && line[0] == 0x00 {
 					continue
 				}
 				buf := append([]byte(nil), line...)
@@ -143,7 +157,7 @@ func (s *Server) ServeStreams(ctx context.Context, in io.Reader, out io.Writer) 
 				_ = enc.Encode(Response{
 					JSONRPC: "2.0",
 					ID:      json.RawMessage("null"),
-					Error:   &RPCError{Code: CodeParseError, Message: "parse error: " + err.Error()},
+					Error:   &RPCError{Code: CodeParseError, Message: "parse error: " + sanitizeRPCError(err.Error())},
 				})
 				continue
 			}
@@ -216,7 +230,7 @@ func (s *Server) handleToolCall(ctx context.Context, req *Request, resp *Respons
 		Arguments map[string]any `json:"arguments"`
 	}
 	if err := json.Unmarshal(req.Params, &p); err != nil {
-		resp.Error = &RPCError{Code: CodeInvalidParams, Message: "invalid tools/call params: " + err.Error()}
+		resp.Error = &RPCError{Code: CodeInvalidParams, Message: "invalid tools/call params: " + sanitizeRPCError(err.Error())}
 		return
 	}
 	tool, ok := s.registry.Get(p.Name)
@@ -231,9 +245,10 @@ func (s *Server) handleToolCall(ctx context.Context, req *Request, resp *Respons
 	if s.opts.Metrics != nil {
 		s.opts.Metrics.Inc("mcp_tool_calls_total")
 	}
-	timeout := time.Duration(s.opts.CallTimeoutSec) * time.Second
-	if s.opts.CallTimeoutSec <= 0 || timeout <= 0 || timeout > 24*time.Hour {
-		timeout = 30 * time.Second
+	const maxTimeoutSec = int(24 * time.Hour / time.Second)
+	timeout := 30 * time.Second
+	if s.opts.CallTimeoutSec > 0 && s.opts.CallTimeoutSec <= maxTimeoutSec {
+		timeout = time.Duration(s.opts.CallTimeoutSec) * time.Second
 	}
 	callCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
@@ -249,8 +264,8 @@ func (s *Server) handleToolCall(ctx context.Context, req *Request, resp *Respons
 	}
 	if err != nil {
 		result = Envelope{
-			Status:  "error",
-			Data:    map[string]any{"error": err.Error()},
+			Status:  StatusError,
+			Data:    map[string]any{"error": sanitizeRPCError(err.Error())},
 			TraceID: observability.TraceFrom(callCtx),
 		}
 	}

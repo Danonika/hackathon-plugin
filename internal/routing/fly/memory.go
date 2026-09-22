@@ -5,6 +5,7 @@ import (
 	"crypto/sha1"
 	"encoding/hex"
 	"encoding/json"
+	"log"
 	"os"
 	"path/filepath"
 	"sort"
@@ -114,13 +115,20 @@ func (r *Router) loadMemory() memoryFile {
 	}
 	data, err := os.ReadFile(r.memoryPath)
 	if err != nil {
+		if !os.IsNotExist(err) {
+			// A transient/permission error must be visible: returning an empty
+			// memory here would let the next save overwrite good data.
+			log.Printf("fly: cannot read %s: %v (treating as empty)", r.memoryPath, err)
+		}
 		return memoryFile{}
 	}
 	var mem memoryFile
 	if json.Unmarshal(data, &mem) != nil {
 		// Quarantine the corrupt file so the next save does not silently
 		// overwrite recoverable data with an empty memory.
-		_ = os.Rename(r.memoryPath, r.memoryPath+".corrupt")
+		if rerr := os.Rename(r.memoryPath, r.memoryPath+".corrupt"); rerr != nil {
+			log.Printf("fly: cannot quarantine corrupt %s: %v", r.memoryPath, rerr)
+		}
 		return memoryFile{}
 	}
 	return mem
