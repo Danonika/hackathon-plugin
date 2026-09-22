@@ -52,10 +52,15 @@
 let TOKEN = sessionStorage.getItem("hackathonkitToken") || "";
 let current = null;
 
-function esc(v) { return String(v ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c])); }
+function esc(v) { return String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])); }
 
+let planLoading = false;
 async function load() {
+  if (planLoading) return;
+  planLoading = true;
+  try {
   const res = await fetch("/plan/api/latest");
+  if (!res.ok) throw new Error("plan API -> " + res.status);
   const data = await res.json();
   const meta = document.getElementById("meta");
   const tbody = document.getElementById("stages");
@@ -76,6 +81,14 @@ async function load() {
   document.getElementById("approval").textContent = data.approval
     ? "last decision: " + data.approval.decision + " on r" + data.approval.revision + (data.approval.note ? " - " + data.approval.note : "")
     : "no decision recorded";
+  } catch (err) {
+    const banner = document.getElementById("banner");
+    banner.style.display = "block";
+    banner.style.background = "#2a1b1b";
+    banner.textContent = "plan load failed: " + err.message;
+  } finally {
+    planLoading = false;
+  }
 }
 
 async function decide(decision) {

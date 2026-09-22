@@ -64,8 +64,12 @@ func (m *tuiModel) load() {
 	}
 	m.events = nil
 	if len(sessions) > 0 {
-		if events, err := m.store.Events(ctx, sessions[m.selected].ID, 20); err == nil {
+		events, err := m.store.Events(ctx, sessions[m.selected].ID, 20)
+		if err != nil {
+			m.err = err
+		} else {
 			m.events = events
+			m.err = nil
 		}
 	}
 	m.status = fmt.Sprintf("%d session(s) - refreshed %s", len(sessions), time.Now().Format("15:04:05"))

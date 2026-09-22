@@ -58,6 +58,14 @@ function safeBinary(root, name) {
   }
 }
 
+function safeCwd() {
+  try {
+    return process.cwd();
+  } catch (_) {
+    return "";
+  }
+}
+
 function findRepoUp(start) {
   let dir = start;
   for (let i = 0; i < 8; i += 1) {
@@ -79,7 +87,10 @@ function repoRoot() {
     const envRoot = path.resolve(process.env.HACKATHONKIT_REPO_ROOT);
     if (isHackathonKitRepo(envRoot)) candidates.push(envRoot);
   }
-  candidates.push(findRepoUp(process.cwd()));
+  const cwd = safeCwd();
+  if (cwd) {
+    candidates.push(findRepoUp(cwd));
+  }
   if (process.env.PLUGIN_ROOT) {
     const pluginRoot = path.resolve(process.env.PLUGIN_ROOT, "..", "..");
     if (isHackathonKitRepo(pluginRoot)) candidates.push(pluginRoot);
@@ -87,8 +98,13 @@ function repoRoot() {
   for (const candidate of candidates) {
     if (looksLikeRepo(candidate)) return candidate;
   }
+  // Prefer the repository this hook script lives in over an unrelated cwd.
+  const selfRoot = path.resolve(__dirname, "..", "..", "..");
+  if (isHackathonKitRepo(selfRoot)) {
+    return selfRoot;
+  }
   // Never fall back to an unvalidated plugin-cache path.
-  return process.cwd();
+  return safeCwd();
 }
 
 const ROOT = repoRoot();
@@ -109,7 +125,7 @@ function appendJSONL(file, record) {
 function readStdin() {
   try {
     if (process.stdin.isTTY) return "";
-    return fs.readFileSync(0, "utf8").slice(0, 8192);
+    return fs.readFileSync(0, "utf8").slice(0, 1024 * 1024);
   } catch (_) {
     return "";
   }
@@ -203,7 +219,8 @@ function readActive() {
         if (!entry || typeof entry.id !== "string" || !entry.id) continue;
         const stat = fs.statSync(full);
         const started = Date.parse(entry.started_at || "") || stat.mtimeMs;
-        if (now - started > SESSION_TTL_MS) {
+        const lastActivity = Math.max(Date.parse(entry.updated_at || "") || 0, stat.mtimeMs);
+        if (now - lastActivity > SESSION_TTL_MS) {
           // A session that never emitted stop (crash, timeout) must not keep
           // stealing events; expire it.
           try {
@@ -214,10 +231,8 @@ function readActive() {
         entries.push({ entry, mtime: stat.mtimeMs });
       } catch (_) {}
     }
-    entries.sort((a, b) => {
-      const byStart = String(a.entry.started_at || "").localeCompare(String(b.entry.started_at || ""));
-      return byStart !== 0 ? byStart : a.mtime - b.mtime;
-    });
+    // Latest activity first: the most recently touched session wins.
+    entries.sort((a, b) => a.mtime - b.mtime);
     return entries.map((item) => item.entry);
   } catch (_) {
     return [];

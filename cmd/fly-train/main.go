@@ -67,7 +67,9 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 
-	rows, err := readDataset(*dataset)
+	rows, err := readDatasetWithWarnings(*dataset, func(line int, reason string) {
+		fmt.Fprintf(stderr, "fly-train: skipping dataset line %d: %s\n", line, reason)
+	})
 	if err != nil {
 		fmt.Fprintln(stderr, "fly-train:", err)
 		return 1
@@ -121,12 +123,17 @@ func run(args []string, stdout, stderr io.Writer) int {
 		len(rows), len(categories), *kc, *sparsity, brainPath)
 
 	if *evalPath != "" {
-		evalRows, err := readDataset(*evalPath)
+		evalRows, err := readDatasetWithWarnings(*evalPath, func(line int, reason string) {
+			fmt.Fprintf(stderr, "fly-train: skipping eval line %d: %s\n", line, reason)
+		})
 		if err != nil {
 			fmt.Fprintln(stderr, "fly-train: eval:", err)
 			return 1
 		}
-		runEval(client, brain, evalRows, stdout, stderr)
+		if err := runEval(client, brain, evalRows, stdout, stderr); err != nil {
+			fmt.Fprintln(stderr, "fly-train:", err)
+			return 1
+		}
 	}
 	return 0
 }
@@ -172,15 +179,17 @@ func rebuildFromFeedback(root string, cfg config.File, client *openai.Client, st
 	return nil
 }
 
-func runEval(client *openai.Client, brain *fly.MBrain, rows []datasetRow, stdout, stderr io.Writer) {
+func runEval(client *openai.Client, brain *fly.MBrain, rows []datasetRow, stdout, stderr io.Writer) error {
 	texts := make([]string, 0, len(rows))
 	for _, row := range rows {
 		texts = append(texts, row.Task)
 	}
 	vectors, err := client.Embed(context.Background(), texts)
 	if err != nil {
-		fmt.Fprintln(stderr, "fly-train: eval embeddings failed:", err)
-		return
+		return fmt.Errorf("eval embeddings failed: %w", err)
+	}
+	if len(vectors) != len(rows) {
+		return fmt.Errorf("eval embeddings returned %d vectors for %d rows", len(vectors), len(rows))
 	}
 	top1, top3 := 0, 0
 	confusion := map[string]map[string]int{}
@@ -213,9 +222,14 @@ func runEval(client *openai.Client, brain *fly.MBrain, rows []datasetRow, stdout
 	for _, key := range keys {
 		fmt.Fprintf(stdout, "  %-16s -> %v\n", key, confusion[key])
 	}
+	return nil
 }
 
 func readDataset(path string) ([]datasetRow, error) {
+	return readDatasetWithWarnings(path, nil)
+}
+
+func readDatasetWithWarnings(path string, onSkip func(line int, reason string)) ([]datasetRow, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, err
@@ -224,16 +238,24 @@ func readDataset(path string) ([]datasetRow, error) {
 	rows := []datasetRow{}
 	scanner := bufio.NewScanner(f)
 	scanner.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
+	lineNumber := 0
 	for scanner.Scan() {
+		lineNumber++
 		line := strings.TrimSpace(scanner.Text())
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
 		var row datasetRow
 		if err := json.Unmarshal([]byte(line), &row); err != nil {
+			if onSkip != nil {
+				onSkip(lineNumber, "malformed JSON")
+			}
 			continue
 		}
 		if row.Task == "" || row.Category == "" {
+			if onSkip != nil {
+				onSkip(lineNumber, "missing task or category")
+			}
 			continue
 		}
 		rows = append(rows, row)

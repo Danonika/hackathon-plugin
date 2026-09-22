@@ -31,7 +31,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	var err error
 	switch args[0] {
 	case "ingest":
-		err = cmdIngest(args[1:])
+		err = cmdIngest(args[1:], stdout)
 	case "sessions":
 		err = cmdSessions(args[1:])
 	case "daemon":
@@ -89,8 +89,8 @@ func learningStore(root string) *learning.Store {
 	return learning.NewStore(filepath.Join(root, "data", "index", "learnings.json"), learning.ProjectKey(root))
 }
 
-func cmdIngest(args []string) error {
-	fs := flag.NewFlagSet("ingest", flag.ExitOnError)
+func cmdIngest(args []string, stdout io.Writer) error {
+	fs := flag.NewFlagSet("ingest", flag.ContinueOnError)
 	root := fs.String("root", "", "repository root")
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -108,7 +108,7 @@ func cmdIngest(args []string) error {
 	if err != nil {
 		return err
 	}
-	enc := json.NewEncoder(os.Stdout)
+	enc := json.NewEncoder(stdout)
 	enc.SetIndent("", "  ")
 	return enc.Encode(result)
 }
@@ -127,7 +127,7 @@ func cmdSessions(args []string) error {
 
 	switch args[0] {
 	case "list":
-		fs := flag.NewFlagSet("sessions list", flag.ExitOnError)
+		fs := flag.NewFlagSet("sessions list", flag.ContinueOnError)
 		limit := fs.Int("limit", 20, "maximum sessions")
 		if err := fs.Parse(args[1:]); err != nil {
 			return err
@@ -284,7 +284,7 @@ func slugify(value string) string {
 }
 
 func cmdRun(args []string) error {
-	fs := flag.NewFlagSet("run", flag.ExitOnError)
+	fs := flag.NewFlagSet("run", flag.ContinueOnError)
 	task := fs.String("task", "", "task description passed to codex exec")
 	slug := fs.String("slug", "", "session slug (default: derived from the task)")
 	useWorktree := fs.Bool("worktree", false, "create and run inside a git worktree")
@@ -331,7 +331,9 @@ func cmdRun(args []string) error {
 		}
 		return err
 	}
-	_ = store.AppendEvent(ctx, control.Event{SessionID: sessionID, Type: "agent_start", Payload: map[string]any{"task": *task, "dir": dir}})
+	if err := store.AppendEvent(ctx, control.Event{SessionID: sessionID, Type: "agent_start", Payload: map[string]any{"task": *task, "dir": dir}}); err != nil {
+		fmt.Fprintln(os.Stderr, "warning: agent_start event not stored:", err)
+	}
 
 	fmt.Printf("session %s\nrunning: codex exec --cd %s %q\n", sessionID, dir, *task)
 	codexArgs := []string{"exec"}
@@ -349,8 +351,14 @@ func cmdRun(args []string) error {
 	if runErr != nil {
 		status = "error"
 	}
-	_ = store.AppendEvent(ctx, control.Event{SessionID: sessionID, Type: "agent_output", Status: status, Payload: map[string]any{"error": fmt.Sprint(runErr)}})
-	_ = store.EndSession(ctx, sessionID, time.Now().UTC())
+	if err := store.AppendEvent(ctx, control.Event{SessionID: sessionID, Type: "agent_output", Status: status, Payload: map[string]any{"error": fmt.Sprint(runErr)}}); err != nil {
+		fmt.Fprintln(os.Stderr, "warning: agent_output event not stored:", err)
+		status = "error"
+	}
+	if err := store.EndSession(ctx, sessionID, time.Now().UTC()); err != nil {
+		fmt.Fprintln(os.Stderr, "warning: session end not stored:", err)
+		status = "error"
+	}
 	if _, err := store.RecomputeRisk(ctx); err != nil {
 		return err
 	}

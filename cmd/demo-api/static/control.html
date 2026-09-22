@@ -57,10 +57,13 @@ function riskClass(score) {
 }
 
 function esc(value) {
-  return String(value ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+  return String(value ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 }
 
+let sessionsLoading = false;
 async function loadSessions() {
+  if (sessionsLoading) return;
+  sessionsLoading = true;
   const banner = document.getElementById("banner");
   try {
     const res = await fetch("/control/api/sessions?limit=50");
@@ -88,6 +91,8 @@ async function loadSessions() {
     banner.textContent = err.message;
     banner.style.display = "block";
     document.getElementById("status").textContent = "control database unavailable";
+  } finally {
+    sessionsLoading = false;
   }
 }
 

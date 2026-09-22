@@ -7,6 +7,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -14,6 +15,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -133,7 +135,9 @@ func cloneCheckout(source string, keep bool) (string, func(), error) {
 		}
 	}
 	checkout := filepath.Join(dir, "repo")
-	cmd := exec.Command("git", "clone", "--quiet", source, checkout)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "git", "clone", "--quiet", "--", source, checkout)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		cleanup()
 		return "", func() {}, fmt.Errorf("git clone: %v: %s", err, strings.TrimSpace(string(out)))
@@ -146,7 +150,9 @@ func buildMCP(checkout string) (string, error) {
 	if err := os.MkdirAll(filepath.Dir(binary), 0o755); err != nil {
 		return "", err
 	}
-	cmd := exec.Command("go", "build", "-buildvcs=false", "-o", binary, "./cmd/hackathonkit-mcp")
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "go", "build", "-buildvcs=false", "-o", binary, "./cmd/hackathonkit-mcp")
 	cmd.Dir = checkout
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return "", fmt.Errorf("go build: %v: %s", err, lastLines(string(out), 5))
@@ -162,14 +168,14 @@ func listArtifacts(checkout string) ([]string, error) {
 			if path == base {
 				return nil
 			}
-			return nil
+			return err
 		}
 		if d.IsDir() {
 			return nil
 		}
 		rel, relErr := filepath.Rel(base, path)
 		if relErr != nil {
-			return nil
+			return relErr
 		}
 		out = append(out, filepath.ToSlash(rel))
 		return nil
@@ -187,8 +193,10 @@ func finish(rep report, source, out string, stdout, stderr io.Writer, jsonOnly, 
 		stamp := rep.StartedAt.Format("20060102-150405")
 		path = filepath.Join(source, "evals", "rehearsal", rep.SHA, "rehearsal-"+stamp+".json")
 	}
-	if err := writeReport(path, rep); err != nil {
-		fmt.Fprintln(stderr, "[rehearse] cannot write report:", err)
+	reportErr := writeReport(path, rep)
+	if reportErr != nil {
+		fmt.Fprintln(stderr, "[rehearse] cannot write report:", reportErr)
+		ok = false
 	}
 
 	if jsonOnly {
@@ -321,31 +329,46 @@ func (c *mcpClient) request(method string, params map[string]any) (json.RawMessa
 		read, err := c.stdout.ReadBytes('\n')
 		ch <- readResult{line: read, err: err}
 	}()
-	select {
-	case result := <-ch:
-		if result.err != nil {
-			return nil, result.err
+	for {
+		select {
+		case result := <-ch:
+			if result.err != nil {
+				return nil, result.err
+			}
+			var probe struct {
+				ID json.RawMessage `json:"id"`
+			}
+			_ = json.Unmarshal(result.line, &probe)
+			if len(probe.ID) > 0 && string(probe.ID) != "null" && string(probe.ID) != strconv.Itoa(c.nextID) {
+				// Notification or a stale reply: keep reading for our id.
+				ch = make(chan readResult, 1)
+				go func() {
+					read, err := c.stdout.ReadBytes('\n')
+					ch <- readResult{line: read, err: err}
+				}()
+				continue
+			}
+			var resp struct {
+				Result json.RawMessage `json:"result"`
+				Error  *struct {
+					Code    int    `json:"code"`
+					Message string `json:"message"`
+				} `json:"error"`
+			}
+			if err := json.Unmarshal(result.line, &resp); err != nil {
+				return nil, fmt.Errorf("invalid response: %w", err)
+			}
+			if resp.Error != nil {
+				return nil, fmt.Errorf("rpc error %d: %s", resp.Error.Code, resp.Error.Message)
+			}
+			return resp.Result, nil
+		case <-time.After(c.timeout):
+			// The read goroutine is still blocked; mark the client dead so no later
+			// request can race with it for the next response line.
+			c.dead = true
+			c.close()
+			return nil, fmt.Errorf("timeout after %s", c.timeout)
 		}
-		var resp struct {
-			Result json.RawMessage `json:"result"`
-			Error  *struct {
-				Code    int    `json:"code"`
-				Message string `json:"message"`
-			} `json:"error"`
-		}
-		if err := json.Unmarshal(result.line, &resp); err != nil {
-			return nil, fmt.Errorf("invalid response: %w", err)
-		}
-		if resp.Error != nil {
-			return nil, fmt.Errorf("rpc error %d: %s", resp.Error.Code, resp.Error.Message)
-		}
-		return resp.Result, nil
-	case <-time.After(c.timeout):
-		// The read goroutine is still blocked; mark the client dead so no later
-		// request can race with it for the next response line.
-		c.dead = true
-		c.close()
-		return nil, fmt.Errorf("timeout after %s", c.timeout)
 	}
 }
 

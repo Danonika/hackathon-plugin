@@ -130,7 +130,9 @@ async function loadRealFly() {
     wings.forEach(w => { w.visible = false; });
     document.getElementById('model-note').textContent = 'меш: NeuromechFly (EPFL), Apache-2.0 — glTF, анимаций: ' + ((gltf.animations || []).length);
     return;
-  } catch (e) { /* fall back to STL assembly below */ }
+  } catch (e) {
+    document.getElementById('model-note').textContent = 'glTF load failed, falling back to STL: ' + e.message;
+  }
   const wanted = ['Thorax', 'Head', 'LEye', 'REye', 'LWing', 'RWing'];
   try {
     const list = await fetch('/fly-model-list').then(r => r.json());
@@ -158,7 +160,9 @@ async function loadRealFly() {
     body.visible = false; head.visible = false;
     wings.forEach(w => { w.visible = false; });
     document.getElementById('model-note').textContent = 'меш: NeuromechFly (EPFL), Apache-2.0 — Thorax / Head / Eyes / Wings';
-  } catch (e) { /* procedural fallback stays */ }
+  } catch (e) {
+    document.getElementById('model-note').textContent = 'model assets unavailable: ' + e.message;
+  }
 }
 loadRealFly();
 
@@ -209,7 +213,10 @@ function applyNeuronEvent(ev) {
   dopaEl.style.width = state.dopamine + '%'; dopaVal.textContent = Math.round(state.dopamine);
 }
 
+let polling = false;
 async function poll() {
+  if (polling) return;
+  polling = true;
   try {
     const [events, feedback, neurons] = await Promise.all([
       fetch('/fly-events?limit=5').then(r => r.json()),
@@ -233,6 +240,8 @@ async function poll() {
     }
   } catch (e) {
     statusEl.textContent = 'offline: ' + e.message;
+  } finally {
+    polling = false;
   }
 }
 poll(); setInterval(poll, 2500);

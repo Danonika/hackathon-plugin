@@ -54,6 +54,7 @@ type summary struct {
 }
 
 type report struct {
+	Determinism string      `json:"determinism,omitempty"`
 	SHA         string      `json:"sha"`
 	GeneratedAt time.Time   `json:"generated_at"`
 	Suite       string      `json:"suite"`
@@ -106,6 +107,10 @@ func run(args []string, stdout, stderr io.Writer) int {
 	full.WithLLM(oa)
 	full.WithEmbeddings(embedder, filepath.Join(root, "data", "index", "fly-embeddings.json"), cfg.OpenAI.EmbeddingModel+"+hash512")
 
+	// Warm the lazy caches (centroids, brain, memory) before timing so the
+	// first row does not absorb their build cost.
+	full.Recommend(ctx, "warmup", nil, nil)
+
 	results := make([]rowResult, 0, len(rows))
 	for _, row := range rows {
 		baselineStart := time.Now()
@@ -140,6 +145,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		GeneratedAt: time.Now().UTC(),
 		Suite:       *suite,
 		Summary:     summarize(results, cfg.Routing.TopK),
+		Determinism: "warm (caches primed before the loop)",
 		Rows:        results,
 	}
 	path, err := save(root, rep)
@@ -250,7 +256,22 @@ func save(root string, rep report) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if err := os.WriteFile(path, append(data, '\n'), 0o644); err != nil {
+	tmp, err := os.CreateTemp(filepath.Dir(path), "fly-ab-*.tmp")
+	if err != nil {
+		return "", err
+	}
+	tmpName := tmp.Name()
+	if _, err := tmp.Write(append(data, '\n')); err != nil {
+		tmp.Close()
+		os.Remove(tmpName)
+		return "", err
+	}
+	if err := tmp.Close(); err != nil {
+		os.Remove(tmpName)
+		return "", err
+	}
+	if err := os.Rename(tmpName, path); err != nil {
+		os.Remove(tmpName)
 		return "", err
 	}
 	rel, err := filepath.Rel(root, path)

@@ -8,13 +8,13 @@ esac
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$SELF")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 
+if [ -x "$REPO_ROOT/bin/hackathonkit-mcp" ]; then
+  exec "$REPO_ROOT/bin/hackathonkit-mcp" --repo-root "$REPO_ROOT"
+fi
+
 if [ ! -f "$REPO_ROOT/docker-compose.yml" ]; then
   echo "Hackathon Agent Kit launcher: docker-compose.yml not found at $REPO_ROOT" >&2
   exit 1
-fi
-
-if [ -x "$REPO_ROOT/bin/hackathonkit-mcp" ]; then
-  exec "$REPO_ROOT/bin/hackathonkit-mcp" --repo-root "$REPO_ROOT"
 fi
 
 if ! command -v docker >/dev/null 2>&1; then

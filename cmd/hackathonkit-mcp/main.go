@@ -31,7 +31,30 @@ import (
 	"hackathonkit.local/agentkit/internal/tools"
 )
 
-const version = "0.16.4"
+const version = "0.16.5"
+
+// redactBackendError strips credentials from driver/connection errors before
+// they are logged (DSNs can appear in Postgres and MinIO errors).
+func redactBackendError(err error) string {
+	if err == nil {
+		return ""
+	}
+	text := err.Error()
+	for _, marker := range []string{"password=", "passwd=", "secret=", "token="} {
+		for {
+			idx := strings.Index(strings.ToLower(text), marker)
+			if idx < 0 {
+				break
+			}
+			end := idx + len(marker)
+			for end < len(text) && text[end] != ' ' && text[end] != '&' && text[end] != ';' && text[end] != '\n' {
+				end++
+			}
+			text = text[:idx+len(marker)] + "[redacted]" + text[end:]
+		}
+	}
+	return text
+}
 
 func main() {
 	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
@@ -151,7 +174,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	var meta metadata.Recorder = metadata.Disabled{}
 	if dsn := os.Getenv("POSTGRES_DSN"); dsn != "" {
 		if pg, err := metadata.OpenPostgres(context.Background(), dsn); err != nil {
-			observability.Log(logger, "warn", "metadata_disabled", map[string]any{"error": err.Error()})
+			observability.Log(logger, "warn", "metadata_disabled", map[string]any{"error": redactBackendError(err)})
 		} else {
 			meta = pg
 			observability.Log(logger, "info", "metadata_postgres_enabled", nil)

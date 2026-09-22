@@ -124,7 +124,12 @@ function tokenHeader() {
 
 async function setMode(mode) {
   const headers = Object.assign({ 'Content-Type': 'application/json' }, tokenHeader());
-  await j('/routing', { method: 'POST', headers, body: JSON.stringify({ mode }) });
+  try {
+    await j('/routing', { method: 'POST', headers, body: JSON.stringify({ mode }) });
+    document.getElementById('status').textContent = 'mode set to ' + mode;
+  } catch (err) {
+    document.getElementById('status').textContent = 'mode change failed: ' + err.message;
+  }
   refresh();
 }
 
@@ -151,7 +156,13 @@ function renderFly(events, feedback) {
   const recs = document.getElementById('fly-recs');
   const verdict = document.getElementById('fly-verdict');
   const signals = document.getElementById('fly-signals');
-  if (!events.length) return;
+  if (!events.length) {
+    bars.innerHTML = '';
+    recs.innerHTML = '';
+    signals.innerHTML = '';
+    verdict.innerHTML = '<span class="muted">ожидание события routing.fly_recommend…</span>';
+    return;
+  }
   const ev = events[events.length - 1];
   const isNew = ev.trace_id && ev.trace_id !== lastFlyTrace;
   lastFlyTrace = ev.trace_id || lastFlyTrace;
@@ -173,7 +184,7 @@ function renderFly(events, feedback) {
     '<div class="rec" data-cap="' + esc(r.capability) + '">' + esc(r.capability) + ' — ' + Math.round(r.score * 100) + '%</div>').join('');
 
   const matches = (feedback || []).filter(f => f.task === ev.task);
-  const fb = matches.pop() || (ev.task ? null : (feedback || [])[(feedback || []).length - 1]);
+  const fb = matches.length ? matches[matches.length - 1] : null;
   if (fb) {
     const chosen = fb.chosen || [];
     const recNames = (ev.recommendations || []).map(r => r.capability);
@@ -238,7 +249,10 @@ function renderFiles(id, files) {
     '<li><span>' + esc(f.path) + '</span><span class="size">' + esc(fmtSize(f.size_bytes)) + '</span></li>').join('');
 }
 
+let refreshing = false;
 async function refresh() {
+  if (refreshing) return;
+  refreshing = true;
   try {
     const [routing, calls, fly, feedback, inputs, artifacts] = await Promise.all([
       j('/routing'), j('/calls?limit=40'), j('/fly-events?limit=10'), j('/fly-feedback?limit=20'),
@@ -252,6 +266,8 @@ async function refresh() {
     document.getElementById('status').textContent = 'updated ' + new Date().toLocaleTimeString();
   } catch (e) {
     document.getElementById('status').textContent = 'offline: ' + e.message;
+  } finally {
+    refreshing = false;
   }
 }
 refresh();

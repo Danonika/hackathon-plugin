@@ -287,12 +287,12 @@ func TestRunEvalEmbeddingError(t *testing.T) {
 	client := &openai.Client{APIKey: "test", BaseURL: server.URL, HTTP: server.Client(), EmbeddingModel: "test"}
 	brain := fly.NewMBrain(8, 0.5, []string{"alpha"}, 1)
 	var stdout, stderr strings.Builder
-	runEval(client, brain, []datasetRow{{Task: "alpha one", Category: "alpha"}}, &stdout, &stderr)
+	err := runEval(client, brain, []datasetRow{{Task: "alpha one", Category: "alpha"}}, &stdout, &stderr)
 	if stdout.String() != "" {
 		t.Fatalf("stdout = %q", stdout.String())
 	}
-	if !strings.Contains(stderr.String(), "eval embeddings failed") {
-		t.Fatalf("stderr = %q", stderr.String())
+	if err == nil || !strings.Contains(err.Error(), "eval embeddings failed") {
+		t.Fatalf("err = %v", err)
 	}
 }
 

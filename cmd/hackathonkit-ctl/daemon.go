@@ -132,10 +132,19 @@ func daemonForeground(root string) error {
 	if err := os.MkdirAll(filepath.Dir(pidPath(root)), 0o755); err != nil {
 		return err
 	}
-	if err := os.WriteFile(pidPath(root), []byte(strconv.Itoa(os.Getpid())), 0o644); err != nil {
+	if existing, ok := readPID(root); ok && existing != os.Getpid() {
+		return fmt.Errorf("daemon: another process (pid %d) already owns %s", existing, pidPath(root))
+	}
+	mine := strconv.Itoa(os.Getpid())
+	if err := os.WriteFile(pidPath(root), []byte(mine), 0o644); err != nil {
 		return err
 	}
-	defer os.Remove(pidPath(root))
+	defer func() {
+		// Only remove the pid file when it is still ours.
+		if data, err := os.ReadFile(pidPath(root)); err == nil && strings.TrimSpace(string(data)) == mine {
+			os.Remove(pidPath(root))
+		}
+	}()
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -196,7 +205,21 @@ func readPID(root string) (int, bool) {
 	if err := process.Signal(syscall.Signal(0)); err != nil {
 		return pid, false
 	}
+	if !processLooksLikeDaemon(pid) {
+		// Stale pid recycled by an unrelated process.
+		return pid, false
+	}
 	return pid, true
+}
+
+// processLooksLikeDaemon verifies the process identity on Linux (via
+// /proc/<pid>/cmdline) and accepts the signal check elsewhere.
+func processLooksLikeDaemon(pid int) bool {
+	cmdline, err := os.ReadFile(filepath.Join("/proc", strconv.Itoa(pid), "cmdline"))
+	if err != nil {
+		return true
+	}
+	return strings.Contains(strings.ReplaceAll(string(cmdline), "\x00", " "), "hackathonkit-ctl")
 }
 
 func controlHandler(store *control.Store, token string) http.Handler {
@@ -228,9 +251,13 @@ func controlHandler(store *control.Store, token string) http.Handler {
 			writeControlJSON(w, http.StatusNotFound, map[string]any{"error": "session not found"})
 			return
 		}
-		events, _ := store.Events(r.Context(), id, queryInt(r, "events", 50))
-		outputs, _ := store.Outputs(r.Context(), id, 10)
-		writeControlJSON(w, http.StatusOK, map[string]any{"session": sess, "events": events, "outputs": outputs})
+		events, eventsErr := store.Events(r.Context(), id, queryInt(r, "events", 50))
+		outputs, outputsErr := store.Outputs(r.Context(), id, 10)
+		payload := map[string]any{"session": sess, "events": events, "outputs": outputs}
+		if eventsErr != nil || outputsErr != nil {
+			payload["errors"] = strings.TrimSpace(fmt.Sprintf("%v %v", eventsErr, outputsErr))
+		}
+		writeControlJSON(w, http.StatusOK, payload)
 	})
 	mux.HandleFunc("/api/events", func(w http.ResponseWriter, r *http.Request) {
 		events, err := store.Events(r.Context(), r.URL.Query().Get("session_id"), queryInt(r, "limit", 50))
@@ -259,7 +286,7 @@ func controlHandler(store *control.Store, token string) http.Handler {
 				writeControlJSON(w, http.StatusUnauthorized, map[string]any{"error": "missing or invalid X-HackathonKit-Token"})
 				return
 			}
-		} else if mutatingMethod(r.Method) && (r.Header.Get("Origin") != "" || r.Header.Get("Referer") != "") {
+		} else if (mutatingMethod(r.Method) || r.URL.Path == "/api/risk") && (r.Header.Get("Origin") != "" || r.Header.Get("Referer") != "") {
 			// Without a token, refuse browser-initiated mutations: a page in any
 			// origin could otherwise POST to the loopback API.
 			writeControlJSON(w, http.StatusForbidden, map[string]any{"error": "cross-origin request rejected; set HACKATHONKIT_CONTROL_TOKEN or use a non-browser client"})

@@ -5,7 +5,7 @@
 # .cmd launcher for Windows.
 command = "./plugins/hackathonkit/scripts/hackathonkit-mcp-launcher.sh"
 args = []
-startup_timeout_sec = 60
+startup_timeout_sec = 120
 tool_timeout_sec = 120
 
 # Web search is opt-in: set to "live" when $theme-research must verify external
@@ -13,4 +13,4 @@ tool_timeout_sec = 120
 web_search = "off"
 
 # Appended to every prompt (additive, unlike model_instructions_file).
-persistent_instructions = "Follow AGENTS.md. Call system.context before planning, use the Hackathon Agent Kit MCP tools for evidence, and never claim a result without a tool result behind it."
+persistent_instructions = "Follow AGENTS.md. If the Hackathon Agent Kit MCP server is available, call system.context before planning and use its tools for evidence; when the server is unavailable, say so and fall back to repository evidence. Never claim a result without a tool result or file behind it."

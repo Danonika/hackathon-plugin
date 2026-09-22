@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -147,13 +148,12 @@ func TestRunDispatch(t *testing.T) {
 		}
 	}
 
-	ingestOut := captureStdout(t, func() {
-		if code := run([]string{"ingest", "--root", root}, io.Discard, io.Discard); code != 0 {
-			t.Fatalf("run(ingest) = %d", code)
-		}
-	})
-	if !strings.Contains(ingestOut, `"sessions"`) {
-		t.Fatalf("ingest output = %q", ingestOut)
+	var ingestBuf bytes.Buffer
+	if code := run([]string{"ingest", "--root", root}, &ingestBuf, io.Discard); code != 0 {
+		t.Fatalf("run(ingest) = %d", code)
+	}
+	if !strings.Contains(ingestBuf.String(), `"sessions"`) {
+		t.Fatalf("ingest output = %q", ingestBuf.String())
 	}
 }
 
@@ -208,14 +208,13 @@ func TestCmdIngestJSON(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	out := captureStdout(t, func() {
-		if err := cmdIngest([]string{"--root", root}); err != nil {
-			t.Fatalf("cmdIngest: %v", err)
-		}
-	})
+	var out bytes.Buffer
+	if err := cmdIngest([]string{"--root", root}, &out); err != nil {
+		t.Fatalf("cmdIngest: %v", err)
+	}
 	var result control.IngestResult
-	if err := json.Unmarshal([]byte(out), &result); err != nil {
-		t.Fatalf("ingest JSON = %q: %v", out, err)
+	if err := json.Unmarshal(out.Bytes(), &result); err != nil {
+		t.Fatalf("ingest JSON = %q: %v", out.String(), err)
 	}
 	if result.Sessions != 2 || result.Events != 5 || result.Files != 5 {
 		t.Fatalf("ingest result = %+v", result)
@@ -235,7 +234,7 @@ func TestCmdIngestReadError(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(root, "logs", "sessions.jsonl"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := cmdIngest([]string{"--root", root}); err == nil {
+	if err := cmdIngest([]string{"--root", root}, io.Discard); err == nil {
 		t.Fatal("cmdIngest with directory-based JSONL must fail")
 	}
 }
@@ -245,13 +244,12 @@ func TestCmdIngestUsesRepoRoot(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(root, "logs"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	out := captureStdout(t, func() {
-		if err := cmdIngest(nil); err != nil {
-			t.Fatalf("cmdIngest: %v", err)
-		}
-	})
-	if !strings.Contains(out, `"sessions"`) {
-		t.Fatalf("ingest output = %q", out)
+	var out bytes.Buffer
+	if err := cmdIngest(nil, &out); err != nil {
+		t.Fatalf("cmdIngest: %v", err)
+	}
+	if !strings.Contains(out.String(), `"sessions"`) {
+		t.Fatalf("ingest output = %q", out.String())
 	}
 }
 
