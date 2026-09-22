@@ -1,5 +1,7 @@
 #:schema https://developers.openai.com/codex/config-schema.json
 
+name = "reviewer"
+description = "Read-only review of changes for quality and risk; never runs builds, tests, or network fetches."
 # model is left to the harness default by design; pin it here to freeze behavior.
 model_reasoning_effort = "high"
 # read-only forbids writes; the no-tests/no-builds guarantee is an instruction

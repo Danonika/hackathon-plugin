@@ -1,5 +1,7 @@
 #:schema https://developers.openai.com/codex/config-schema.json
 
+name = "evaluator"
+description = "Scores Hackathon Agent Kit artifacts against the judge rubric; read-only, never re-performs the task or runs commands."
 # model is left to the harness default by design; pin it here to freeze behavior.
 model_reasoning_effort = "high"
 # Read-only: judge reports are persisted through the eval.* MCP tools, so the
