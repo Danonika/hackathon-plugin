@@ -50,8 +50,9 @@ func TestFilesDescribeTextFormats(t *testing.T) {
 				}
 			}
 			if c.path == "notes.md" {
-				if got := data["lines"].(int); got != 3 {
-					t.Fatalf("lines = %d, want 3", got)
+				// "line one\nline two\n" is two lines, not three.
+				if got := data["lines"].(int); got != 2 {
+					t.Fatalf("lines = %d, want 2", got)
 				}
 				if got := data["chars"].(int); got != len("line one\nline two\n") {
 					t.Fatalf("chars = %d", got)

@@ -93,6 +93,8 @@ func registerTelegram(reg *mcp.Registry, d Deps) {
 			}
 			if updates, err := d.Telegram.GetUpdates(ctx, 0, 5, 0); err == nil {
 				data["recent_chats"] = summarizeChats(updates)
+			} else {
+				data["recent_chats_error"] = err.Error()
 			}
 			return mcp.OK(trace(ctx), data), nil
 		},

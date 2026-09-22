@@ -24,7 +24,7 @@ func (r *Registry) Register(t Tool) {
 	if _, exists := r.tools[t.Name]; !exists {
 		r.order = append(r.order, t.Name)
 	}
-	r.tools[t.Name] = &t
+	r.tools[t.Name] = cloneTool(&t)
 }
 
 func (r *Registry) Get(name string) (*Tool, bool) {

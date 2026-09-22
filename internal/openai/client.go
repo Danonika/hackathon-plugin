@@ -32,7 +32,8 @@ type Client struct {
 func newSessionID() string {
 	b := make([]byte, 16)
 	if _, err := rand.Read(b); err != nil {
-		return "hackathonkit-session"
+		// Fall back to time+pid rather than a constant shared by every client.
+		return fmt.Sprintf("hackathonkit-session-%d-%d", time.Now().UnixNano(), os.Getpid())
 	}
 	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16])
 }
@@ -204,10 +205,16 @@ func (c *Client) Transcribe(ctx context.Context, path string, language string) (
 	}
 	var buf bytes.Buffer
 	w := multipart.NewWriter(&buf)
-	_ = w.WriteField("model", c.TranscribeModel)
-	_ = w.WriteField("response_format", "json")
+	if err := w.WriteField("model", c.TranscribeModel); err != nil {
+		return "", err
+	}
+	if err := w.WriteField("response_format", "json"); err != nil {
+		return "", err
+	}
 	if language != "" {
-		_ = w.WriteField("language", language)
+		if err := w.WriteField("language", language); err != nil {
+			return "", err
+		}
 	}
 	part, err := w.CreateFormFile("file", filepath.Base(path))
 	if err != nil {
@@ -286,8 +293,9 @@ func (c *Client) ClassifyTask(ctx context.Context, task string, categories []str
 }
 
 func truncate(s string, n int) string {
-	if len(s) <= n {
+	runes := []rune(s)
+	if len(runes) <= n {
 		return s
 	}
-	return s[:n] + "..."
+	return string(runes[:n]) + "..."
 }

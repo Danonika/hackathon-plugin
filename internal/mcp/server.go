@@ -183,7 +183,11 @@ func (s *Server) handleToolCall(ctx context.Context, req *Request, resp *Respons
 	if s.opts.Metrics != nil {
 		s.opts.Metrics.Inc("mcp_tool_calls_total")
 	}
-	callCtx, cancel := context.WithTimeout(ctx, time.Duration(s.opts.CallTimeoutSec)*time.Second)
+	timeout := time.Duration(s.opts.CallTimeoutSec) * time.Second
+	if s.opts.CallTimeoutSec <= 0 || timeout <= 0 || timeout > 24*time.Hour {
+		timeout = 30 * time.Second
+	}
+	callCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	callCtx = observability.WithTrace(callCtx, observability.NewTraceID())
 

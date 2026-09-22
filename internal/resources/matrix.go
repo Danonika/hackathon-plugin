@@ -178,6 +178,8 @@ func providerMissing(statuses []Status, providerID string) []string {
 		if len(status.MissingKeys) > 0 {
 			return status.MissingKeys
 		}
+		// The full key list is the actionable hint for a provider that was
+		// never configured (and the subset for a partially configured one).
 		return status.EnvKeys
 	}
 	return nil

@@ -300,6 +300,7 @@ func registerKnowledge(reg *mcp.Registry, d Deps) {
 				}
 			}
 			sort.Slice(hits, func(i, j int) bool { return hits[i].Score > hits[j].Score })
+			matchedTotal := len(hits)
 			if len(hits) > limit {
 				hits = hits[:limit]
 			}
@@ -307,7 +308,7 @@ func registerKnowledge(reg *mcp.Registry, d Deps) {
 				"hits":         hits,
 				"index_count":  len(docs),
 				"total_chunks": totalChunks,
-				"matched":      len(hits),
+				"matched":      matchedTotal,
 			})
 			for _, h := range hits {
 				artifactID := h.ArtifactID

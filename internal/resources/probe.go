@@ -26,7 +26,7 @@ type ProbeResult struct {
 // ProbeOpenAICompatible checks GET {base}/models with a bearer key. OpenAI and
 // NVIDIA expose the same endpoint shape, so both providers share this probe.
 func ProbeOpenAICompatible(ctx context.Context, providerID, baseURL, apiKey string) ProbeResult {
-	result := ProbeResult{Provider: providerID, Configured: strings.TrimSpace(apiKey) != "", Live: true}
+	result := ProbeResult{Provider: providerID, Configured: strings.TrimSpace(apiKey) != ""}
 	if !result.Configured {
 		result.Error = "not configured"
 		return result
@@ -36,6 +36,7 @@ func ProbeOpenAICompatible(ctx context.Context, providerID, baseURL, apiKey stri
 		result.Error = "no base url configured"
 		return result
 	}
+	result.Live = true
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURL+"/models", nil)

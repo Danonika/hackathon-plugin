@@ -40,8 +40,8 @@ func TestNewRouterDefaults(t *testing.T) {
 }
 
 func TestStringSliceVariants(t *testing.T) {
-	if got := stringSlice([]string{"CSV"}); len(got) != 1 || got[0] != "CSV" {
-		t.Fatalf("[]string must pass through unchanged, got %v", got)
+	if got := stringSlice([]string{"CSV"}); len(got) != 1 || got[0] != "csv" {
+		t.Fatalf("[]string must be lowercased like the other branches, got %v", got)
 	}
 	if got := stringSlice([]any{"A", 3, "B"}); len(got) != 2 || got[0] != "a" || got[1] != "b" {
 		t.Fatalf("[]any = %v", got)

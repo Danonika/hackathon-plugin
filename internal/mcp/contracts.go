@@ -41,7 +41,11 @@ func Fail(trace string, msg string) Envelope {
 }
 
 func (e Envelope) WithSources(sources ...Source) Envelope {
-	e.Sources = append(e.Sources, sources...)
+	// Copy first: appending to a shared backing array would mutate the caller.
+	merged := make([]Source, 0, len(e.Sources)+len(sources))
+	merged = append(merged, e.Sources...)
+	merged = append(merged, sources...)
+	e.Sources = merged
 	return e
 }
 

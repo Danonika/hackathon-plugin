@@ -3,6 +3,7 @@ package fly
 import (
 	"context"
 	"math"
+	"reflect"
 	"sort"
 )
 
@@ -16,7 +17,7 @@ func (r *Router) WithLLM(classifier LLMClassifier) *Router {
 }
 
 func (r *Router) llmCategoryScores(ctx context.Context, task string) (map[string]float64, bool) {
-	if r.llm == nil {
+	if r.llm == nil || reflect.ValueOf(r.llm).Kind() == reflect.Ptr && reflect.ValueOf(r.llm).IsNil() {
 		return nil, false
 	}
 	categories := make([]string, 0, len(categoryCapabilities))

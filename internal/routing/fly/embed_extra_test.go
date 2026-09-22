@@ -292,8 +292,8 @@ func TestCosineAndNormalizeEdgeCases(t *testing.T) {
 	if got := cosine(nil, nil); got != 0 {
 		t.Fatalf("cosine of empty vectors = %v, want 0", got)
 	}
-	if got := cosine([]float64{1, 2}, []float64{3}); got != 3 {
-		t.Fatalf("cosine must use the shorter length, got %v", got)
+	if got := cosine([]float64{1, 2}, []float64{3}); got != 0 {
+		t.Fatalf("cosine of mismatched dimensions must be 0, got %v", got)
 	}
 	if got := cosine([]float64{}, []float64{1}); got != 0 {
 		t.Fatalf("cosine with an empty first vector = %v, want 0", got)

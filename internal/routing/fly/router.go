@@ -207,7 +207,7 @@ func (r *Router) Recommend(ctx context.Context, task string, meta map[string]any
 	sort.Strings(categories)
 	for _, category := range categories {
 		s := scores[category]
-		if s > routeScore {
+		if s > routeScore && categoryAvailable(category, avail) {
 			route = category
 			routeScore = s
 		}
@@ -297,10 +297,26 @@ func boost(scores map[string]float64, category string, delta float64) {
 	}
 }
 
+func categoryAvailable(category string, avail map[string]bool) bool {
+	if len(avail) == 0 {
+		return true
+	}
+	for _, cap := range categoryCapabilities[category] {
+		if avail[cap] {
+			return true
+		}
+	}
+	return false
+}
+
 func stringSlice(v any) []string {
 	switch t := v.(type) {
 	case []string:
-		return t
+		out := make([]string, 0, len(t))
+		for _, item := range t {
+			out = append(out, strings.ToLower(item))
+		}
+		return out
 	case []any:
 		out := make([]string, 0, len(t))
 		for _, item := range t {

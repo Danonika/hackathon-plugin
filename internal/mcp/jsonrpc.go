@@ -10,14 +10,18 @@ type Request struct {
 }
 
 func (r *Request) IsNotification() bool {
-	return len(r.ID) == 0 || string(r.ID) == "null"
+	// Only a missing id is a notification; an explicit "id": null is a
+	// (discouraged) request and must still receive a response.
+	return len(r.ID) == 0
 }
 
 type Response struct {
 	JSONRPC string          `json:"jsonrpc"`
 	ID      json.RawMessage `json:"id,omitempty"`
-	Result  any             `json:"result,omitempty"`
-	Error   *RPCError       `json:"error,omitempty"`
+	// Result/Error are marshalled by the custom MarshalJSON below; the tags
+	// here only document intent (they are not consulted).
+	Result any       `json:"-"`
+	Error  *RPCError `json:"-"`
 }
 
 // MarshalJSON keeps the JSON-RPC 2.0 wire contract: a response carries either

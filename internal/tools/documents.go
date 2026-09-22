@@ -80,7 +80,7 @@ func extractText(path string) (string, []string, error) {
 	case "pdf":
 		text, truncated, err := pdfText(path)
 		if err != nil {
-			return "", []string{"pdf text extraction failed: " + err.Error()}, nil
+			return "", nil, fmt.Errorf("pdf text extraction failed: %w", err)
 		}
 		warnings := []string{}
 		if truncated {
@@ -227,10 +227,12 @@ func registerDocuments(reg *mcp.Registry, d Deps) {
 				return mcp.Fail(trace(ctx), merr.Error()), nil
 			}
 			meta := string(metaBytes)
-			_, _ = d.Store.WriteArtifact(
+			if _, werr := d.Store.WriteArtifact(
 				fmt.Sprintf("extracted/%s-%s-%s.meta.json", slugify(base), shortHash(path), stamp),
 				[]byte(meta),
-			)
+			); werr != nil {
+				warnings = append(warnings, "metadata artifact not stored: "+werr.Error())
+			}
 			env := mcp.OK(trace(ctx), map[string]any{
 				"artifact_id": artifact,
 				"chars":       len([]rune(text)),
@@ -267,6 +269,9 @@ func registerDocuments(reg *mcp.Registry, d Deps) {
 			maxChars := argInt(args, "max_chars", d.Cfg.Config().Tools.MaxTextChars)
 			if maxChars <= 0 || maxChars > 10_000_000 {
 				maxChars = d.Cfg.Config().Tools.MaxTextChars
+			}
+			if maxChars > 10_000_000 {
+				maxChars = 10_000_000
 			}
 			if maxChars <= 0 {
 				maxChars = 60000

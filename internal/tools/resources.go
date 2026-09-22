@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"hackathonkit.local/agentkit/internal/mcp"
 	"hackathonkit.local/agentkit/internal/resources"
@@ -284,7 +285,11 @@ func probeProvider(ctx context.Context, d Deps, status resources.Status, live bo
 				base = defaultOpenAIBaseURL
 			}
 		}
-		probe := resources.ProbeOpenAICompatible(ctx, status.ID, base, os.Getenv(status.EnvKeys[0]))
+		apiKey := ""
+		if len(status.EnvKeys) > 0 {
+			apiKey = os.Getenv(status.EnvKeys[0])
+		}
+		probe := resources.ProbeOpenAICompatible(ctx, status.ID, base, apiKey)
 		return map[string]any{
 			"provider":    probe.Provider,
 			"configured":  probe.Configured,
@@ -300,7 +305,9 @@ func probeProvider(ctx context.Context, d Deps, status resources.Status, live bo
 			result["error"] = "not configured"
 			return result
 		}
-		bot, err := d.Telegram.GetMe(ctx)
+		probeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		defer cancel()
+		bot, err := d.Telegram.GetMe(probeCtx)
 		if err != nil {
 			result["error"] = err.Error()
 			return result

@@ -122,7 +122,7 @@ func validateSkill(base, name string) SkillReport {
 		return item
 	}
 	text := string(data)
-	item.Lines = strings.Count(text, "\n") + 1
+	item.Lines = strings.Count(strings.TrimSuffix(text, "\n"), "\n") + 1
 
 	if item.Lines < minLines {
 		item.Problems = append(item.Problems, fmt.Sprintf("SKILL.md has %d lines, minimum is %d", item.Lines, minLines))
@@ -144,7 +144,8 @@ func validateSkill(base, name string) SkillReport {
 			if len([]rune(fm.Description)) > maxDescriptionChars {
 				item.Problems = append(item.Problems, fmt.Sprintf("description is %d chars, maximum is %d", len([]rune(fm.Description)), maxDescriptionChars))
 			}
-			if !strings.Contains(strings.ToLower(fm.Description), "use when") && !strings.Contains(strings.ToLower(fm.Description), "use for") {
+			lowerDesc := strings.ToLower(strings.TrimSpace(fm.Description))
+			if !strings.HasPrefix(lowerDesc, "use when") && !strings.HasPrefix(lowerDesc, "use for") {
 				item.Problems = append(item.Problems, "description must start with a trigger phrase such as \"Use when\"")
 			}
 		}
@@ -197,10 +198,11 @@ func validateSkill(base, name string) SkillReport {
 }
 
 func parseFrontmatter(text string) (frontmatter, error) {
-	if !strings.HasPrefix(text, "---\n") {
+	if !strings.HasPrefix(text, "---\n") && !strings.HasPrefix(text, "---\r\n") {
 		return frontmatter{}, fmt.Errorf("SKILL.md must start with YAML frontmatter")
 	}
-	rest := text[len("---\n"):]
+	rest := strings.TrimPrefix(text, "---\r\n")
+	rest = strings.TrimPrefix(rest, "---\n")
 	end := -1
 	offset := 0
 	for _, line := range strings.Split(rest, "\n") {

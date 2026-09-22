@@ -140,6 +140,9 @@ func shortHash(s string) string {
 
 // truncateRunes cuts s to at most n bytes without splitting a UTF-8 rune.
 func truncateRunes(s string, n int) string {
+	if n <= 0 {
+		return ""
+	}
 	if len(s) <= n {
 		return s
 	}

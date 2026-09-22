@@ -91,6 +91,15 @@ func registerSystem(reg *mcp.Registry, d Deps) {
 			}
 			res := d.Router.Recommend(ctx, task, argMap(args, "input_metadata"), available)
 			if len(res.Recommendations) == 0 {
+				if d.Store != nil {
+					_ = observability.AppendJSONL(filepath.Join(d.Store.Root(), "logs", "fly-events.jsonl"), map[string]any{
+						"ts":       time.Now().UTC().Format(time.RFC3339Nano),
+						"trace_id": trace(ctx),
+						"route":    "unknown",
+						"encoder":  res.Encoder,
+						"task":     snippet(task, 200),
+					})
+				}
 				return mcp.Partial(trace(ctx), map[string]any{
 					"route":           "unknown",
 					"recommendations": []any{},

@@ -223,11 +223,11 @@ func TestDocumentsExtractMalformedInputs(t *testing.T) {
 	}
 
 	pdf := call(t, reg, "documents.extract", map[string]any{"path": "broken.pdf"})
-	if pdf.Status != "ok" {
-		t.Fatalf("malformed pdf status %s data %+v", pdf.Status, pdf.Data)
+	if pdf.Status != "error" {
+		t.Fatalf("corrupt pdf must fail: %+v", pdf)
 	}
-	if !strings.Contains(strings.Join(pdf.Warnings, "|"), "pdf text extraction failed") {
-		t.Fatalf("expected pdf warning, got %v", pdf.Warnings)
+	if !strings.Contains(pdf.Data.(map[string]any)["error"].(string), "pdf text extraction failed") {
+		t.Fatalf("expected a pdf extraction error, got %+v", pdf.Data)
 	}
 }
 

@@ -5,10 +5,20 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
+	"unicode"
 
 	"hackathonkit.local/agentkit/internal/mcp"
 	"hackathonkit.local/agentkit/internal/plans"
 )
+
+func containsLetterOrDigit(value string) bool {
+	for _, r := range value {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) {
+			return true
+		}
+	}
+	return false
+}
 
 func registerPlans(reg *mcp.Registry, d Deps) {
 	reg.Register(tool(
@@ -33,7 +43,7 @@ func registerPlans(reg *mcp.Registry, d Deps) {
 		func(ctx context.Context, args map[string]any) (any, error) {
 			rawSlug := argString(args, "slug")
 			slug := plans.Slug(rawSlug)
-			if rawSlug == "" || (slug == "plan" && strings.ToLower(strings.TrimSpace(rawSlug)) != "plan") {
+			if rawSlug == "" || !containsLetterOrDigit(rawSlug) {
 				return mcp.Fail(trace(ctx), "slug must contain at least one letter or digit"), nil
 			}
 			if !argBool(args, "overwrite", false) {
@@ -43,6 +53,11 @@ func registerPlans(reg *mcp.Registry, d Deps) {
 			}
 			warnings := []string{}
 			stages := []plans.Stage{}
+			if rawValue, present := args["stages"]; present && rawValue != nil {
+				if _, isArray := rawValue.([]any); !isArray {
+					warnings = append(warnings, "stages must be an array; default stages were used")
+				}
+			}
 			if raw, ok := args["stages"].([]any); ok && len(raw) > 0 {
 				skipped := 0
 				for _, item := range raw {
@@ -66,7 +81,7 @@ func registerPlans(reg *mcp.Registry, d Deps) {
 						return mcp.Fail(trace(ctx), fmt.Sprintf("invalid stage status %q", status)), nil
 					}
 					timebox := argInt(m, "timebox_minutes", 0)
-					stages = append(stages, plans.Stage{ID: id, Goal: goal, Status: status, TimeboxMinute: timebox})
+					stages = append(stages, plans.Stage{ID: strings.TrimSpace(id), Goal: goal, Status: status, TimeboxMinute: timebox})
 				}
 				if skipped > 0 {
 					warnings = append(warnings, fmt.Sprintf("skipped %d malformed stage(s)", skipped))

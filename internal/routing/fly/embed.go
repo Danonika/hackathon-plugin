@@ -334,13 +334,11 @@ func normalizeVector(v []float64) []float64 {
 }
 
 func cosine(a, b []float64) float64 {
-	n := len(a)
-	if len(b) < n {
-		n = len(b)
-	}
-	if n == 0 {
+	if len(a) != len(b) || len(a) == 0 {
+		// Mismatched dimensions are not comparable; never truncate silently.
 		return 0
 	}
+	n := len(a)
 	sum := 0.0
 	for i := 0; i < n; i++ {
 		sum += a[i] * b[i]
