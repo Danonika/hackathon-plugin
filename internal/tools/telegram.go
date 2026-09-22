@@ -43,6 +43,17 @@ func registerTelegram(reg *mcp.Registry, d Deps) {
 					}, err.Error()), nil
 				}
 				recordTelegramError(d)
+				// A later chunk may have failed after earlier chunks were sent:
+				// surface the partial result so a caller does not blindly retry.
+				if result.Chunks > 0 || result.MessageID != 0 {
+					return mcp.Partial(trace(ctx), map[string]any{
+						"error":      err.Error(),
+						"message_id": result.MessageID,
+						"chat_id":    result.ChatID,
+						"chunks":     result.Chunks,
+						"hint":       "some chunks may already be delivered; verify before retrying",
+					}, "telegram send partially failed: "+err.Error()), nil
+				}
 				return mcp.Fail(trace(ctx), err.Error()), nil
 			}
 			if d.Metrics != nil {

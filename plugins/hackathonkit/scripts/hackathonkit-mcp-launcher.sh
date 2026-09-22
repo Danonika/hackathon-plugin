@@ -5,11 +5,25 @@ case "$SELF" in
   */*) ;;
   *) SELF=$(command -v -- "$SELF" 2>/dev/null || echo "$SELF") ;;
 esac
+# Canonicalize a symlinked invocation so the root is derived from the real file.
+if [ -L "$SELF" ] && command -v readlink >/dev/null 2>&1; then
+  TARGET=$(readlink "$SELF" 2>/dev/null || true)
+  case "$TARGET" in
+    /*) SELF="$TARGET" ;;
+    "") : ;;
+    *) SELF="$(dirname -- "$SELF")/$TARGET" ;;
+  esac
+fi
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$SELF")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 
 if [ -f "$REPO_ROOT/bin/hackathonkit-mcp" ] && [ -x "$REPO_ROOT/bin/hackathonkit-mcp" ]; then
   exec "$REPO_ROOT/bin/hackathonkit-mcp" --repo-root "$REPO_ROOT" "$@"
+fi
+
+if [ -e "$REPO_ROOT/bin/hackathonkit-mcp" ]; then
+  echo "Hackathon Agent Kit launcher: $REPO_ROOT/bin/hackathonkit-mcp exists but is not an executable file" >&2
+  exit 1
 fi
 
 if [ ! -f "$REPO_ROOT/docker-compose.yml" ]; then

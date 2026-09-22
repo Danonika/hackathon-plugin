@@ -235,10 +235,24 @@ function removeActive(id) {
   } catch (_) {}
 }
 
+function isExpired(full, entry) {
+  try {
+    const stat = fs.statSync(full);
+    let last = stat.mtimeMs;
+    if (entry) {
+      const started = Date.parse(entry.started_at || "") || 0;
+      const updated = Date.parse(entry.updated_at || "") || 0;
+      last = Math.max(last, started, updated);
+    }
+    return Date.now() - last > SESSION_TTL_MS;
+  } catch (_) {
+    return false;
+  }
+}
+
 function readActive() {
   try {
     const entries = [];
-    const now = Date.now();
     for (const name of fs.readdirSync(SESSIONS_DIR)) {
       if (!name.endsWith(".json")) continue;
       const full = path.join(SESSIONS_DIR, name);
@@ -246,10 +260,7 @@ function readActive() {
         const entry = JSON.parse(fs.readFileSync(full, "utf8"));
         if (!entry || typeof entry.id !== "string" || !entry.id) continue;
         const stat = fs.statSync(full);
-        const started = Date.parse(entry.started_at || "") || stat.mtimeMs;
-        // Sessions are ordered/expired by their file mtime (creation time):
-        // the tool-use path does not currently refresh it.
-        if (now - stat.mtimeMs > SESSION_TTL_MS) {
+        if (isExpired(full, entry)) {
           // A session that never emitted stop (crash, timeout) must not keep
           // stealing events; expire it.
           try {
@@ -269,14 +280,12 @@ function readActive() {
 }
 
 function pruneExpiredSessions() {
-  const now = Date.now();
   try {
     for (const name of fs.readdirSync(SESSIONS_DIR)) {
       if (!name.endsWith(".json")) continue;
       const full = path.join(SESSIONS_DIR, name);
       try {
-        const stat = fs.statSync(full);
-        if (now - stat.mtimeMs > SESSION_TTL_MS) {
+        if (isExpired(full)) {
           fs.unlinkSync(full);
         }
       } catch (_) {}

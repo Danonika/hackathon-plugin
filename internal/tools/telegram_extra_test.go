@@ -56,8 +56,18 @@ func TestTelegramConfiguredErrorPaths(t *testing.T) {
 	}
 	for _, c := range cases {
 		env := call(t, reg, names[c.name], c.args)
-		if env.Status != "error" {
-			t.Fatalf("%s: status %s, want error (%+v)", c.name, env.Status, env)
+		want := "error"
+		if c.name == "send" {
+			// A partially delivered message reports partial, not error.
+			want = "partial"
+		}
+		if env.Status != want {
+			t.Fatalf("%s: status %s, want %s (%+v)", c.name, env.Status, want, env)
+		}
+		if c.name == "send" {
+			if !strings.Contains(strings.Join(env.Warnings, " "), "partially failed") {
+				t.Fatalf("send: warnings = %v", env.Warnings)
+			}
 		}
 	}
 }
