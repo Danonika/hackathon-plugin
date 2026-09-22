@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"hackathonkit.local/agentkit/internal/mcp"
@@ -15,6 +16,9 @@ const (
 	defaultOpenAIBaseURL = "https://api.openai.com/v1"
 	defaultNVIDIABaseURL = "https://integrate.api.nvidia.com/v1"
 )
+
+// resourcesProfileMu serializes read-modify-write on the shared profile file.
+var resourcesProfileMu sync.Mutex
 
 func registerResources(reg *mcp.Registry, d Deps) {
 	reg.Register(tool(
@@ -45,6 +49,8 @@ func registerResources(reg *mcp.Registry, d Deps) {
 		},
 		nil,
 		func(ctx context.Context, args map[string]any) (any, error) {
+			resourcesProfileMu.Lock()
+			defer resourcesProfileMu.Unlock()
 			root := d.Cfg.Root()
 			profile, _, err := resources.Load(root)
 			if err != nil {

@@ -366,7 +366,11 @@ func registerEvaluation(reg *mcp.Registry, d Deps) {
 				}
 				if votes, ok := raw["votes"].(map[string]any); ok {
 					for sha, value := range votes {
-						commission.Votes[sha] = argInt(map[string]any{"v": value}, "v", 0)
+						fv, isNum := value.(float64)
+						if !isNum || fv < 0 || fv != math.Trunc(fv) {
+							return mcp.Fail(trace(ctx), fmt.Sprintf("vote for %s must be a non-negative integer", sha)), nil
+						}
+						commission.Votes[sha] = int(fv)
 					}
 				}
 				ranking, err = evaluation.ApplyCommission(ranking, commission)
@@ -487,6 +491,8 @@ func readReports(root string, args map[string]any, pathsKey, jsonKey string) ([]
 	for i, rel := range argStringSlice(args, pathsKey) {
 		full, err := resolveRepoPath(root, rel)
 		if err != nil {
+			// Kept as a dropped-invalid entry (the specific reason, e.g.
+			// "path escapes repository root", is preserved in reasons).
 			invalids = append(invalids, evaluation.InvalidReport{Index: i, Path: rel, Reasons: []string{err.Error()}})
 			continue
 		}

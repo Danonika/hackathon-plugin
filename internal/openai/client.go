@@ -274,8 +274,12 @@ func (c *Client) ClassifyTask(ctx context.Context, task string, categories []str
 	}
 	raw = strings.TrimSpace(raw)
 	if start := strings.Index(raw, "{"); start >= 0 {
-		if end := strings.LastIndex(raw, "}"); end > start {
-			raw = raw[start : end+1]
+		// Decode exactly one JSON object so trailing prose or a second object
+		// does not corrupt the payload.
+		dec := json.NewDecoder(strings.NewReader(raw[start:]))
+		var payload json.RawMessage
+		if err := dec.Decode(&payload); err == nil {
+			raw = string(payload)
 		}
 	}
 	var parsed map[string]float64

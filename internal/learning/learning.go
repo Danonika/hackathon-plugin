@@ -10,6 +10,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"log"
 	"math"
 	"os"
 	"path/filepath"
@@ -151,14 +152,15 @@ func (s *Store) Record(ctx context.Context, in RecordInput) (RecordResult, error
 		}
 	}
 
+	// Serialize in-process callers first so they do not contend on the
+	// cross-process lock file itself.
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	unlock, err := s.lockFile()
 	if err != nil {
 		return RecordResult{}, err
 	}
 	defer unlock()
-
-	s.mu.Lock()
-	defer s.mu.Unlock()
 
 	doc, err := s.load()
 	if err != nil {
@@ -254,6 +256,9 @@ func (s *Store) Recall(ctx context.Context, query string, limit int, minConfiden
 	if s.embedder != nil {
 		if vector, err := s.embed(ctx, query); err == nil {
 			queryVector = vector
+		} else {
+			// Semantic recall is degraded for this call; keyword overlap is used.
+			log.Printf("learning: embedding failed, falling back to keyword recall: %v", err)
 		}
 	}
 	queryTokens := tokenize(query)

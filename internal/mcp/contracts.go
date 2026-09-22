@@ -27,6 +27,7 @@ const (
 
 type Envelope struct {
 	Status   string         `json:"status"`
+	Error    string         `json:"error,omitempty"`
 	Data     any            `json:"data,omitempty"`
 	Sources  []Source       `json:"sources,omitempty"`
 	Warnings []string       `json:"warnings,omitempty"`
@@ -43,7 +44,7 @@ func Partial(trace string, data any, warnings ...string) Envelope {
 }
 
 func Fail(trace string, msg string) Envelope {
-	return Envelope{Status: StatusError, Data: map[string]any{"error": msg}, TraceID: trace}
+	return Envelope{Status: StatusError, Error: msg, Data: map[string]any{"error": msg}, TraceID: trace}
 }
 
 func (e Envelope) WithSources(sources ...Source) Envelope {

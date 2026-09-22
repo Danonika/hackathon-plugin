@@ -1,6 +1,9 @@
 package mcp
 
-import "context"
+import (
+	"context"
+	"sync"
+)
 
 type Handler func(ctx context.Context, args map[string]any) (any, error)
 
@@ -12,6 +15,7 @@ type Tool struct {
 }
 
 type Registry struct {
+	mu    sync.RWMutex
 	tools map[string]*Tool
 	order []string
 }
@@ -21,6 +25,8 @@ func NewRegistry() *Registry {
 }
 
 func (r *Registry) Register(t Tool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	if _, exists := r.tools[t.Name]; !exists {
 		r.order = append(r.order, t.Name)
 	}
@@ -28,6 +34,8 @@ func (r *Registry) Register(t Tool) {
 }
 
 func (r *Registry) Get(name string) (*Tool, bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	t, ok := r.tools[name]
 	if !ok {
 		return nil, false
@@ -36,6 +44,8 @@ func (r *Registry) Get(name string) (*Tool, bool) {
 }
 
 func (r *Registry) List() []*Tool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	out := make([]*Tool, 0, len(r.order))
 	for _, n := range r.order {
 		if t, ok := r.tools[n]; ok {
@@ -93,5 +103,7 @@ func cloneSlice(in []any) []any {
 }
 
 func (r *Registry) Names() []string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	return append([]string(nil), r.order...)
 }

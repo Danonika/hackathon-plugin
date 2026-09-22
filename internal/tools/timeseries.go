@@ -42,8 +42,17 @@ func loadSeries(t *table, timeColumn, valueColumn string) ([]seriesPoint, string
 			}
 		}
 	}
-	if timeIdx < 0 || valueIdx < 0 {
-		return nil, "", "", fmt.Errorf("could not detect time/value columns; pass time_column and value_column explicitly")
+	if timeIdx < 0 {
+		if timeColumn != "" {
+			return nil, "", "", fmt.Errorf("time_column %q was not found in the table", timeColumn)
+		}
+		return nil, "", "", fmt.Errorf("could not detect a time column; pass time_column explicitly")
+	}
+	if valueIdx < 0 {
+		if valueColumn != "" {
+			return nil, "", "", fmt.Errorf("value_column %q was not found in the table", valueColumn)
+		}
+		return nil, "", "", fmt.Errorf("could not detect a value column; pass value_column explicitly")
 	}
 	points := []seriesPoint{}
 	for _, row := range t.Rows {

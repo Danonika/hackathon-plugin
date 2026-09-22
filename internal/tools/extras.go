@@ -593,9 +593,13 @@ func registerMedia(reg *mcp.Registry, d Deps) {
 			if st.Size() > 20<<20 {
 				return mcp.Fail(trace(ctx), "image larger than 20MB is not supported"), nil
 			}
-			raw, rerr := os.ReadFile(full)
+			// Re-cap on read so a file that grew after Stat cannot bypass the limit.
+			raw, rerr := readCapped(full, 20<<20+1)
 			if rerr != nil {
 				return mcp.Fail(trace(ctx), rerr.Error()), nil
+			}
+			if len(raw) > 20<<20 {
+				return mcp.Fail(trace(ctx), "image larger than 20MB is not supported"), nil
 			}
 			prompt := argString(args, "prompt")
 			if prompt == "" {

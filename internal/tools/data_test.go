@@ -120,7 +120,7 @@ func TestApplyWhereOperators(t *testing.T) {
 		{"name = delta", 0},
 	}
 	for _, c := range cases {
-		got, err := applyWhere(tbl, c.where)
+		got, _, err := applyWhere(tbl, c.where)
 		if err != nil {
 			t.Fatalf("applyWhere(%q): %v", c.where, err)
 		}
@@ -130,7 +130,7 @@ func TestApplyWhereOperators(t *testing.T) {
 	}
 
 	for _, bad := range []string{"value", "value >", "missing = 1", "value ~ 1"} {
-		if _, err := applyWhere(tbl, bad); err == nil {
+		if _, _, err := applyWhere(tbl, bad); err == nil {
 			t.Fatalf("applyWhere(%q) must fail", bad)
 		}
 	}

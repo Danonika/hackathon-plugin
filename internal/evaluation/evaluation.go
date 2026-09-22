@@ -604,11 +604,15 @@ func Rank(aggregates []Aggregate) (Ranking, error) {
 
 	entries := make([]RankEntry, 0, len(aggregates))
 	for _, agg := range aggregates {
+		means := make(map[string]float64, len(agg.CriterionMeans))
+		for k, v := range agg.CriterionMeans {
+			means[k] = v
+		}
 		entries = append(entries, RankEntry{
 			SnapshotSHA:        agg.SnapshotSHA,
 			MeanTotal:          agg.MeanTotal,
 			MeanTotalPublished: agg.MeanTotalRounded,
-			CriterionMeans:     agg.CriterionMeans,
+			CriterionMeans:     means,
 			ValidJudges:        agg.ValidJudges,
 		})
 	}
@@ -662,6 +666,11 @@ func ApplyCommission(ranking Ranking, commission Commission) (Ranking, error) {
 		}
 		seen[member] = true
 	}
+	votesCopy := make(map[string]int, len(commission.Votes))
+	for k, v := range commission.Votes {
+		votesCopy[k] = v
+	}
+	commission.Votes = votesCopy
 	total := 0
 	for sha, votes := range commission.Votes {
 		if !containsString(ranking.Unresolved, sha) {

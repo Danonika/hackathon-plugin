@@ -171,6 +171,15 @@ func TailJSONL(path string, limit int) ([]json.RawMessage, error) {
 			break
 		}
 	}
+	// When the read stopped before offset 0 the buffer starts mid-record; drop
+	// that partial first line.
+	if offset > 0 {
+		if idx := bytes.IndexByte(buf, '\n'); idx >= 0 {
+			buf = buf[idx+1:]
+		} else {
+			buf = nil
+		}
+	}
 	lines := []json.RawMessage{}
 	for _, line := range splitLines(buf) {
 		trimmed := trimSpace(line)

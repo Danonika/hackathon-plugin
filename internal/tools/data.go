@@ -104,6 +104,10 @@ func (t *table) columnIndex(name string) int {
 			}
 		}
 	}
+	if prefixMatch == -2 || suffixMatch == -2 {
+		// Ambiguous prefix/suffix matches are refused, as documented.
+		return -1
+	}
 	if prefixMatch >= 0 {
 		return prefixMatch
 	}
@@ -311,9 +315,12 @@ func registerData(reg *mcp.Registry, d Deps) {
 			}
 			rows := t.Rows
 			if where := argString(args, "where"); where != "" {
-				filtered, ferr := applyWhere(t, where)
+				filtered, skipped, ferr := applyWhere(t, where)
 				if ferr != nil {
 					return mcp.Fail(trace(ctx), ferr.Error()), nil
+				}
+				if skipped > 0 {
+					warnings = append(warnings, fmt.Sprintf("%d row(s) skipped: the column value is not numeric for an ordering comparison", skipped))
 				}
 				rows = filtered
 			}
@@ -451,22 +458,23 @@ func registerData(reg *mcp.Registry, d Deps) {
 	))
 }
 
-func applyWhere(t *table, where string) ([][]string, error) {
+func applyWhere(t *table, where string) ([][]string, int, error) {
 	fields := strings.Fields(where)
 	if len(fields) < 3 {
-		return nil, fmt.Errorf("where must be \"column op value\", got %q", where)
+		return nil, 0, fmt.Errorf("where must be \"column op value\", got %q", where)
 	}
 	column, op := fields[0], fields[1]
 	value := strings.Join(fields[2:], " ")
 	idx := t.columnIndex(column)
 	if idx < 0 {
-		return nil, fmt.Errorf("unknown column in where: %s", column)
+		return nil, 0, fmt.Errorf("unknown column in where: %s", column)
 	}
 	switch op {
 	case "=", "==", "!=", ">", ">=", "<", "<=", "contains":
 	default:
-		return nil, fmt.Errorf("unsupported operator %q", op)
+		return nil, 0, fmt.Errorf("unsupported operator %q", op)
 	}
+	skippedNonNumeric := 0
 	out := [][]string{}
 	for _, row := range t.Rows {
 		cell := ""
@@ -495,6 +503,7 @@ func applyWhere(t *table, where string) ([][]string, error) {
 			cv, okC := parseNumber(cell)
 			vv, okV := parseNumber(value)
 			if !okC || !okV {
+				skippedNonNumeric++
 				continue
 			}
 			switch op {
@@ -510,13 +519,13 @@ func applyWhere(t *table, where string) ([][]string, error) {
 		case "contains":
 			match = strings.Contains(strings.ToLower(cell), strings.ToLower(value))
 		default:
-			return nil, fmt.Errorf("unsupported operator %q", op)
+			return nil, 0, fmt.Errorf("unsupported operator %q", op)
 		}
 		if match {
 			out = append(out, row)
 		}
 	}
-	return out, nil
+	return out, skippedNonNumeric, nil
 }
 
 func round2(v float64) float64 {

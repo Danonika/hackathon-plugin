@@ -426,7 +426,6 @@ func (m *Manager) Evaluation() EvaluationSettings {
 		} else {
 			log.Printf("config: cannot parse %s: %v (using defaults)", path, uerr)
 		}
-		log.Printf("config: cannot parse %s (using defaults)", path)
 	}
 	if m.evaluationInit {
 		return m.evaluationCache

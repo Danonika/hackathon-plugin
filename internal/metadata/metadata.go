@@ -124,6 +124,12 @@ ALTER TABLE fly_predictions ADD COLUMN IF NOT EXISTS category_scores JSONB;
 ALTER TABLE fly_predictions ADD COLUMN IF NOT EXISTS recommendations JSONB;
 `
 
+// isDuplicateDDL tolerates a concurrent creator winning the DDL race.
+func isDuplicateDDL(err error) bool {
+	msg := err.Error()
+	return strings.Contains(msg, "already exists") || strings.Contains(msg, "42P07") || strings.Contains(msg, "42710")
+}
+
 type Postgres struct {
 	mu   sync.Mutex
 	pool pgExecutor
@@ -155,11 +161,11 @@ func openPostgres(ctx context.Context, dsn string, newPool func(context.Context,
 	}
 	ddlCtx, ddlCancel := context.WithTimeout(ctx, 15*time.Second)
 	defer ddlCancel()
-	if _, err := pool.Exec(ddlCtx, schema); err != nil {
+	if _, err := pool.Exec(ddlCtx, schema); err != nil && !isDuplicateDDL(err) {
 		pool.Close()
 		return nil, err
 	}
-	if _, err := pool.Exec(ddlCtx, migrations); err != nil {
+	if _, err := pool.Exec(ddlCtx, migrations); err != nil && !isDuplicateDDL(err) {
 		pool.Close()
 		return nil, err
 	}
