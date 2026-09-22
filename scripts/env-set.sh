@@ -45,10 +45,14 @@ if [ "$FROM_STDIN" = "1" ]; then
 fi
 
 if [ -L "$FILE" ]; then
-  TARGET=""
-  if command -v readlink >/dev/null 2>&1; then
-    TARGET=$(readlink -f "$FILE" 2>/dev/null || readlink "$FILE" 2>/dev/null || true)
-  fi
+  # readlink (without -f) is portable; resolve a relative target against the
+  # link's directory so the write lands on the real file.
+  TARGET=$(readlink "$FILE" 2>/dev/null || true)
+  case "$TARGET" in
+    /*) : ;;
+    "") : ;;
+    *) TARGET="$(dirname -- "$FILE")/$TARGET" ;;
+  esac
   if [ -n "$TARGET" ]; then
     FILE="$TARGET"
   fi
@@ -57,11 +61,18 @@ fi
 MODE="600"
 OWNER=""
 if [ -f "$FILE" ]; then
-  MODE=$(stat -c '%a' "$FILE" 2>/dev/null || stat -f '%Lp' "$FILE" 2>/dev/null || echo 600)
+  MODE=$(stat -c '%a' "$FILE" 2>/dev/null || stat -f '%Lp' "$FILE" 2>/dev/null || true)
+  if [ -z "$MODE" ]; then
+    echo "env-set: warning: cannot read the mode of $FILE; defaulting to 600" >&2
+    MODE=600
+  fi
   OWNER=$(stat -c '%u:%g' "$FILE" 2>/dev/null || stat -f '%u:%g' "$FILE" 2>/dev/null || true)
 fi
 
-TMP=$(mktemp "$FILE.tmp.XXXXXX" 2>/dev/null || echo "$FILE.tmp.$$")
+TMP=$(mktemp "$FILE.tmp.XXXXXX" 2>/dev/null) || {
+  echo "env-set: cannot create a temp file next to $FILE" >&2
+  exit 1
+}
 trap 'rm -f "$TMP"' EXIT INT TERM
 
 INPUT="$FILE"
@@ -102,20 +113,33 @@ trap cleanup_env_set EXIT
 trap on_signal_env_set INT TERM
 
 (umask 077 && KEY="$KEY" VALUE="$VALUE" awk '
+  function enc(v) {
+    if (v ~ /[ \t#"'"'"'\n]/) {
+      gsub(/\\/, "\\\\", v)
+      gsub(/"/, "\\\"", v)
+      gsub(/\n/, "\\n", v)
+      return "\"" v "\""
+    }
+    return v
+  }
   BEGIN { k = ENVIRON["KEY"]; v = ENVIRON["VALUE"]; done = 0 }
   substr($0, 1, length(k) + 1) == k "=" {
     if (done == 0) {
-      print k "=" v
+      print k "=" enc(v)
       done = 1
     }
     next
   }
   { print }
-  END { if (!done) print k "=" v }
+  END { if (!done) print k "=" enc(v) }
 ' "$INPUT" > "$TMP")
 
 mv "$TMP" "$FILE"
-chmod "$MODE" "$FILE" 2>/dev/null || true
+if ! chmod "$MODE" "$FILE" 2>/dev/null; then
+  echo "env-set: warning: could not restore mode $MODE on $FILE" >&2
+fi
 if [ -n "$OWNER" ]; then
-  chown "$OWNER" "$FILE" 2>/dev/null || true
+  if ! chown "$OWNER" "$FILE" 2>/dev/null; then
+    echo "env-set: warning: could not restore owner $OWNER on $FILE" >&2
+  fi
 fi

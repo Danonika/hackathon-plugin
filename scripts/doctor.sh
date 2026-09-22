@@ -34,20 +34,23 @@ if command -v codex >/dev/null 2>&1; then
     elif command -v python3 >/dev/null 2>&1; then
       PLUGIN_STATE=$(printf '%s' "$PLUGIN_JSON" | python3 -c '
 import json, sys
+raw = sys.stdin.read()
 try:
-    data = json.load(sys.stdin)
+    data = json.loads(raw)
 except Exception:
+    print("unknown")
     sys.exit(0)
-if not isinstance(data, dict):
+if not isinstance(data, dict) or not isinstance(data.get("installed"), list):
+    print("unknown")
     sys.exit(0)
-state = ""
+state = "missing"
 for entry in data.get("installed", []):
-    if entry.get("name") == "hackathonkit":
+    if isinstance(entry, dict) and entry.get("name") == "hackathonkit":
         state = "disabled" if entry.get("enabled") is False else "enabled"
 print(state)
 ' 2>/dev/null)
       if [ -z "$PLUGIN_STATE" ]; then
-        PLUGIN_STATE=missing
+        PLUGIN_STATE=unknown
       fi
     elif PLUGIN_STATE=$(printf '%s' "$PLUGIN_JSON" | awk '
       { text = text $0 }
@@ -173,8 +176,28 @@ fi
 
 if [ -x "$ROOT/bin/hackathonkit-mcp" ]; then
   RESOURCES_JSON=$("$ROOT/bin/hackathonkit-mcp" --repo-root "$ROOT" --resources 2>/dev/null || true)
-  RESOURCES_SUMMARY=$(printf '%s' "$RESOURCES_JSON" | sed -n 's/.*"summary": *"\([^"]*\)".*/\1/p' | head -n 1)
-  if printf '%s' "$RESOURCES_JSON" | grep -q '"present": *true'; then
+  RESOURCES_PRESENT=false
+  RESOURCES_SUMMARY=""
+  if command -v jq >/dev/null 2>&1; then
+    RESOURCES_PRESENT=$(printf '%s' "$RESOURCES_JSON" | jq -r '.present // false' 2>/dev/null || echo false)
+    RESOURCES_SUMMARY=$(printf '%s' "$RESOURCES_JSON" | jq -r '.summary // ""' 2>/dev/null || echo "")
+  elif command -v python3 >/dev/null 2>&1; then
+    RESOURCES_LINE=$(printf '%s' "$RESOURCES_JSON" | python3 -c '
+import json, sys
+try:
+    d = json.load(sys.stdin)
+except Exception:
+    print("false|")
+    sys.exit(0)
+if not isinstance(d, dict):
+    print("false|")
+    sys.exit(0)
+print(("true" if d.get("present") else "false") + "|" + str(d.get("summary", "")))
+' 2>/dev/null || echo "false|")
+    RESOURCES_PRESENT=${RESOURCES_LINE%%|*}
+    RESOURCES_SUMMARY=${RESOURCES_LINE#*|}
+  fi
+  if [ "$RESOURCES_PRESENT" = "true" ]; then
     echo "[info] resources            $RESOURCES_SUMMARY"
   else
     echo "[info] resources            not configured (run scripts/setup-resources.sh)"

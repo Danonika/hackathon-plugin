@@ -70,6 +70,18 @@ check "append adds the new key" "$(grep -q '^NEW=value$' "$TMP/append.env" && ec
 check "stdin value is stored" "$(grep -q '^S=from-stdin$' "$TMP/stdin.env" && echo 1 || echo 0)"
 check "stdin value file is 0600" "$([ "$(file_mode "$TMP/stdin.env")" = "600" ] && echo 1 || echo 0)" "mode=$(file_mode "$TMP/stdin.env")"
 
+# A single trailing newline from stdin is a terminator, not part of the value.
+(umask 022 && printf 'trailing\n' | sh "$HELPER" "$TMP/stdin-nl.env" NL)
+check "stdin trailing newline is stripped" "$(grep -q '^NL=trailing$' "$TMP/stdin-nl.env" && echo 1 || echo 0)" "got: $(cat "$TMP/stdin-nl.env")"
+
+# A value containing spaces/quotes is quoted so the .env stays parseable.
+sh "$HELPER" "$TMP/quote.env" SPACED 'two words'
+check "spaced value is quoted" "$(grep -q '^SPACED="two words"$' "$TMP/quote.env" && echo 1 || echo 0)" "got: $(cat "$TMP/quote.env")"
+
+# An embedded newline is preserved as an escaped \n inside a quoted value.
+(umask 022 && printf 'line1\nline2\n' | sh "$HELPER" "$TMP/multi.env" MULTI)
+check "embedded newline is escaped" "$(grep -q '^MULTI="line1\\nline2"$' "$TMP/multi.env" && echo 1 || echo 0)" "got: $(cat "$TMP/multi.env")"
+
 # Backslashes and other escape sequences survive unchanged.
 sh "$HELPER" "$TMP/escape.env" B 'p\q\\r'
 check "backslash value is literal" "$(grep -q '^B=p\\q\\\\r$' "$TMP/escape.env" && echo 1 || echo 0)" "got: $(cat "$TMP/escape.env")"

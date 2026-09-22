@@ -7,7 +7,10 @@
 set -e
 ROOT="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
 TMP="$(mktemp -d)"
-trap 'rm -rf "$TMP"' 0 INT TERM
+cleanup_smoke_test() { rm -rf "$TMP"; }
+trap cleanup_smoke_test 0
+trap 'cleanup_smoke_test; exit 130' INT
+trap 'cleanup_smoke_test; exit 143' TERM
 FAIL=0
 
 check() {
@@ -47,7 +50,7 @@ write_responder "$REPO/bin/hackathonkit-mcp" binary
 write_responder "$TMP/bin/docker" docker
 
 run_smoke() {
-  HACKATHONKIT_SMOKE_DOCKER="$TMP/bin/docker" MARKER="$TMP/marker" PATH="$TMP/bin:/usr/bin:/bin" sh "$REPO/scripts/smoke.sh" "$@"
+  HACKATHONKIT_SMOKE_DOCKER="$TMP/bin/docker" MARKER="$TMP/marker" PATH="$TMP/bin:$PATH" sh "$REPO/scripts/smoke.sh" "$@"
 }
 
 # --compose forces Docker even though bin/hackathonkit-mcp exists.
@@ -57,7 +60,7 @@ if run_smoke --compose >/dev/null 2>&1; then
 else
   check "--compose exits 0" 0 "non-zero exit"
 fi
-check "--compose used docker" "$(grep -q '^docker .*stdin=3' "$TMP/marker" 2>/dev/null && echo 1 || echo 0)" "$(cat "$TMP/marker" 2>/dev/null)"
+check "--compose used docker with the compose args" "$(grep -q '^docker compose .*run --rm -T hackathonkit-mcp stdin=3' "$TMP/marker" 2>/dev/null && echo 1 || echo 0)" "$(cat "$TMP/marker" 2>/dev/null)"
 check "--compose skipped the local binary" "$(grep -q '^binary ' "$TMP/marker" 2>/dev/null && echo 0 || echo 1)"
 
 # --binary uses the local binary and never Docker.
@@ -67,7 +70,7 @@ if run_smoke --binary >/dev/null 2>&1; then
 else
   check "--binary exits 0" 0 "non-zero exit"
 fi
-check "--binary used the local binary" "$(grep -q '^binary .*stdin=3' "$TMP/marker" 2>/dev/null && echo 1 || echo 0)"
+check "--binary used the local binary with --repo-root" "$(grep -q '^binary --repo-root .*stdin=3' "$TMP/marker" 2>/dev/null && echo 1 || echo 0)"
 check "--binary skipped docker" "$(grep -q '^docker ' "$TMP/marker" 2>/dev/null && echo 0 || echo 1)"
 
 # --auto prefers the local binary and must not touch docker.
@@ -79,6 +82,29 @@ else
 fi
 check "--auto prefers the local binary" "$(grep -q '^binary ' "$TMP/marker" 2>/dev/null && echo 1 || echo 0)"
 check "--auto skips docker" "$(grep -q '^docker ' "$TMP/marker" 2>/dev/null && echo 0 || echo 1)"
+
+# --auto without a local binary falls back to Docker.
+rm -f "$TMP/marker" "$REPO/bin/hackathonkit-mcp"
+if run_smoke --auto >/dev/null 2>&1; then
+  check "--auto falls back to docker" 1
+else
+  check "--auto falls back to docker" 0 "non-zero exit"
+fi
+check "--auto used docker when the binary is absent" "$(grep -q '^docker compose ' "$TMP/marker" 2>/dev/null && echo 1 || echo 0)" "$(cat "$TMP/marker" 2>/dev/null)"
+
+# --binary without a local binary fails with a clear status.
+rm -f "$TMP/marker"
+if run_smoke --binary >/dev/null 2>&1; then
+  BINARY_STATUS=0
+else
+  BINARY_STATUS=$?
+fi
+if [ "$BINARY_STATUS" = "1" ]; then
+  check "--binary without a binary fails with exit 1" 1
+else
+  check "--binary without a binary fails with exit 1" 0 "exit=$BINARY_STATUS"
+fi
+write_responder "$REPO/bin/hackathonkit-mcp" binary
 
 # --compose without docker fails loudly.
 rm -f "$TMP/marker"

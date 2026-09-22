@@ -7,8 +7,11 @@ case "$SELF" in
   */*) ;;
   *) SELF=$(command -v -- "$SELF" 2>/dev/null || echo "$SELF") ;;
 esac
-ROOT="$(CDPATH= cd -- "$(dirname -- "$SELF")/.." && pwd)"
-if [ -z "$ROOT" ] || [ "$ROOT" = "/" ] || [ ! -f "$ROOT/docker-compose.yml" ] || [ ! -f "$ROOT/go.mod" ]; then
+ROOT="$(CDPATH= cd -- "$(dirname -- "$SELF")/.." && pwd)" || {
+  echo "[uninstall] cannot resolve the repository root" >&2
+  exit 1
+}
+if [ -z "$ROOT" ] || [ "$ROOT" = "/" ] || [ ! -f "$ROOT/docker-compose.yml" ] || [ ! -f "$ROOT/go.mod" ] || [ ! -d "$ROOT/plugins/hackathonkit/skills" ]; then
   echo "[uninstall] refusing: '$ROOT' does not look like the hackathonkit repository root" >&2
   exit 1
 fi
@@ -58,7 +61,11 @@ if command -v codex >/dev/null 2>&1; then
       echo "[uninstall] warning: codex marketplace remove failed" >&2
       CODEX_FAIL=1
     fi
-    echo "[uninstall] removed hackathonkit plugin and marketplace"
+    if [ "$CODEX_FAIL" -eq 0 ]; then
+      echo "[uninstall] removed hackathonkit plugin and marketplace"
+    else
+      echo "[uninstall] plugin/marketplace removal reported warnings" >&2
+    fi
   else
     echo "would run: codex plugin remove hackathonkit"
     echo "would run: codex plugin marketplace remove hackathonkit-local"
@@ -88,7 +95,7 @@ if [ "$APPLY" != "1" ]; then
 fi
 
 if [ "$FAILURES" -gt 0 ] || [ "$CODEX_FAIL" -ne 0 ]; then
-  echo "[uninstall] finished with warnings ($FAILURES path failure(s))" >&2
+  echo "[uninstall] finished with warnings ($FAILURES path failure(s), codex failures: $CODEX_FAIL)" >&2
   exit 1
 fi
-echo "[uninstall] done. data/, logs/ and committed files were kept."
+echo "[uninstall] done. data/input, data/artifacts, logs/ and committed files were kept (data/control was removed)."

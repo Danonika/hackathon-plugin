@@ -55,7 +55,7 @@ trap restore_echo EXIT
 trap on_interrupt INT TERM
 
 if [ ! -t 0 ]; then
-  echo "[resources] non-interactive stdin: every unanswered prompt defaults to no" >&2
+  echo "[resources] non-interactive stdin: prompts read from the pipe and unanswered/EOF prompts default to no; secrets are only stored when supplied" >&2
 fi
 echo "[resources] answering stores booleans in configs/resources.json; keys go to .env only"
 
@@ -70,12 +70,26 @@ if ask_yes "Do you have a ChatGPT/Codex Pro subscription?"; then CODEX_PRO=1; fi
 printf 'Track (number 01-10 or slug, empty to skip): '
 read -r TRACK || TRACK=""
 case "$TRACK" in
-  ""|[0-9]|[0-9][0-9]|[0-9][0-9]-[a-z-]*|[a-z][a-z-]*) ;;
+  "") ;;
+  [0-9]|[0-9][0-9]) ;;
+  [0-9][0-9]-[a-z0-9-]*) ;;
   *)
-    echo "[resources] ignoring invalid track '$TRACK' (expected e.g. 08 or 08-innovation)" >&2
+    echo "[resources] ignoring invalid track '$TRACK' (expected 01-10 or 08-innovation)" >&2
     TRACK=""
     ;;
 esac
+if [ -n "$TRACK" ]; then
+  NUM=${TRACK%%-*}
+  NUM=${NUM#0}
+  [ -z "$NUM" ] && NUM=0
+  case "$NUM" in
+    ''|*[!0-9]*) echo "[resources] ignoring invalid track '$TRACK'" >&2; TRACK="" ;;
+    *) if [ "$NUM" -lt 1 ] || [ "$NUM" -gt 10 ]; then
+         echo "[resources] ignoring out-of-range track '$TRACK' (expected 01-10)" >&2
+         TRACK=""
+       fi ;;
+  esac
+fi
 
 # Collect secrets first and only claim a provider when its key was stored.
 if [ "$OPENAI" = 1 ] && ! set_key OPENAI_API_KEY "$(read_secret 'OPENAI_API_KEY (empty to skip)')"; then

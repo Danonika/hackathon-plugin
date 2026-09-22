@@ -20,8 +20,9 @@ count_dirs() {
 
 COUNT_SRC=$(count_dirs "$SRC")
 
-# Build the mirror in a temporary directory and swap it in, so consumers never
-# observe a missing or half-populated mirror when the copy fails.
+# Build the mirror in a temporary directory and swap it in with a rollback on
+# failure. The swap is two renames, so a reader can briefly observe no mirror;
+# it can never observe a half-populated one.
 TMP="$DST.tmp.$$"
 cleanup_tmp() { rm -rf "$TMP"; }
 on_signal() { cleanup_tmp; exit 130; }
@@ -39,6 +40,12 @@ SKILLS_DST=$(find "$TMP" -name SKILL.md | wc -l | tr -d ' ')
 if [ "$COUNT_SRC" != "$COUNT_DST" ] || [ "$FILES_SRC" != "$FILES_DST" ] || [ "$SKILLS_SRC" != "$SKILLS_DST" ]; then
   echo "[sync-skills] mirror mismatch: dirs $COUNT_SRC/$COUNT_DST files $FILES_SRC/$FILES_DST SKILL.md $SKILLS_SRC/$SKILLS_DST" >&2
   exit 1
+fi
+if command -v diff >/dev/null 2>&1; then
+  if ! diff -r "$SRC" "$TMP" >/dev/null 2>&1; then
+    echo "[sync-skills] mirror content differs from the source" >&2
+    exit 1
+  fi
 fi
 
 # Serialize concurrent mirror runs so two writers cannot interleave the swap.

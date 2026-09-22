@@ -14,9 +14,14 @@ if ! command -v python3 >/dev/null 2>&1; then
 fi
 
 JSON_FILE=$(mktemp "${TMPDIR:-/tmp}/hackathonkit-plugin-list.XXXXXX")
+cleanup_plugin_check() { rm -f "$JSON_FILE" "$ERR_FILE"; }
+trap cleanup_plugin_check EXIT
+trap 'cleanup_plugin_check; exit 130' INT
+trap 'cleanup_plugin_check; exit 143' TERM
 ERR_FILE=$(mktemp "${TMPDIR:-/tmp}/hackathonkit-plugin-list-err.XXXXXX")
-trap 'rm -f "$JSON_FILE" "$ERR_FILE"' EXIT INT TERM
-if ! codex plugin list --json >"$JSON_FILE" 2>"$ERR_FILE"; then
+if codex plugin list --json >"$JSON_FILE" 2>"$ERR_FILE"; then
+  :
+else
   status=$?
   echo "[plugin-check] codex plugin list failed (exit $status):" >&2
   tail -3 "$ERR_FILE" >&2 || true
@@ -55,16 +60,20 @@ if entry is None:
 source = ""
 if isinstance(entry.get("source"), dict):
     source = entry["source"].get("path") or ""
-source = os.path.abspath(str(source)) if source else ""
+source = os.path.realpath(os.path.expanduser(str(source))) if source else ""
 if not source:
     print("[plugin-check] installed plugin has no source.path; re-run scripts/setup.sh", file=sys.stderr)
     sys.exit(1)
 
-# The manifest is about to be executed: refuse a world-writable plugin tree.
+# The manifest is about to be executed: refuse a symlinked or group/world-
+# writable plugin tree (another user could replace what we run).
 try:
-    mode = os.stat(source).st_mode
-    if mode & stat.S_IWOTH:
-        print("[plugin-check] refusing to execute a world-writable plugin directory: %s" % source, file=sys.stderr)
+    st = os.lstat(source)
+    if stat.S_ISLNK(st.st_mode):
+        print("[plugin-check] refusing to execute a symlinked plugin directory: %s" % source, file=sys.stderr)
+        sys.exit(1)
+    if st.st_mode & (stat.S_IWGRP | stat.S_IWOTH):
+        print("[plugin-check] refusing to execute a group/world-writable plugin directory: %s" % source, file=sys.stderr)
         sys.exit(1)
 except OSError as exc:
     print("[plugin-check] cannot inspect the plugin directory: %s" % exc, file=sys.stderr)
@@ -103,7 +112,11 @@ requests = "\n".join([
                 "params": {"name": "system.context", "arguments": {}}}),
 ]) + "\n"
 
-cmd = [server["command"]] + [str(arg) for arg in args]
+command = server["command"]
+if not os.path.isabs(command):
+    # A relative command must resolve against the plugin, not the temp cwd.
+    command = os.path.join(source, command)
+cmd = [command] + [str(arg) for arg in args]
 with tempfile.TemporaryDirectory(prefix="hackathonkit-plugin-check-") as tmp:
     try:
         proc = subprocess.run(cmd, input=requests, text=True, errors="replace",
@@ -127,9 +140,10 @@ for line in (proc.stdout or "").splitlines():
         obj = json.loads(line)
     except ValueError:
         continue
-    if isinstance(obj, dict) and obj.get("id") in (1, 2, 3):
-        responses[obj["id"]] = obj
-    if isinstance(obj, dict) and obj.get("id") in (1, 2, 3) and obj.get("error"):
+    rid = obj.get("id") if isinstance(obj, dict) else None
+    if isinstance(rid, int) and not isinstance(rid, bool) and rid in (1, 2, 3):
+        responses[rid] = obj
+    if isinstance(rid, int) and not isinstance(rid, bool) and rid in (1, 2, 3) and obj.get("error"):
         message = (obj.get("error") or {}).get("message", "unknown error")
         print("[plugin-check] FAIL: error response for id=%s: %s" % (obj["id"], message), file=sys.stderr)
         sys.exit(1)

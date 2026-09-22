@@ -12,11 +12,11 @@ mkdir -p "$ROOT/logs" "$ROOT/evals" "$ROOT/data/artifacts" "$ROOT/data/index" "$
 PROFILE="full"
 if [ -f "$ROOT/configs/install-state.json" ]; then
   DETECTED=$(sed -n 's/^[[:space:]]*"profile": *"\([^"]*\)".*/\1/p' "$ROOT/configs/install-state.json" | head -n 1)
-  if [ -n "$DETECTED" ]; then
-    PROFILE="$DETECTED"
-  else
-    echo "[repair] warning: could not read the profile; using 'full'" >&2
-  fi
+  case "$DETECTED" in
+    core|full) PROFILE="$DETECTED" ;;
+    "") echo "[repair] warning: could not read the profile; using 'full'" >&2 ;;
+    *) echo "[repair] warning: unknown profile '$DETECTED' in install-state; using 'full'" >&2 ;;
+  esac
 fi
 RUNTIME="binary"
 if command -v docker >/dev/null 2>&1; then
@@ -32,19 +32,23 @@ fi
 if { [ ! -x "$ROOT/bin/hackathonkit-mcp" ] || [ ! -x "$ROOT/bin/hackathonkit-demo-api" ] || [ ! -x "$ROOT/bin/hackathonkit-ctl" ]; } && [ "$RUNTIME" = "binary" ]; then
   if command -v go >/dev/null 2>&1; then
     mkdir -p "$ROOT/bin"
+    MCP_TMP=$(mktemp "$ROOT/bin/hackathonkit-mcp.tmp.XXXXXX")
+    DEMO_TMP=$(mktemp "$ROOT/bin/hackathonkit-demo-api.tmp.XXXXXX")
+    CTL_TMP=$(mktemp "$ROOT/bin/hackathonkit-ctl.tmp.XXXXXX")
+    cleanup_bin() { rm -f "$MCP_TMP" "$DEMO_TMP" "$CTL_TMP"; }
     (
       cd "$ROOT"
-      go build -o "$ROOT/bin/hackathonkit-mcp.tmp" ./cmd/hackathonkit-mcp &&
-        go build -o "$ROOT/bin/hackathonkit-demo-api.tmp" ./cmd/demo-api &&
-        go build -o "$ROOT/bin/hackathonkit-ctl.tmp" ./cmd/hackathonkit-ctl
+      go build -o "$MCP_TMP" ./cmd/hackathonkit-mcp &&
+        go build -o "$DEMO_TMP" ./cmd/demo-api &&
+        go build -o "$CTL_TMP" ./cmd/hackathonkit-ctl
     ) || {
-      rm -f "$ROOT/bin/hackathonkit-mcp.tmp" "$ROOT/bin/hackathonkit-demo-api.tmp" "$ROOT/bin/hackathonkit-ctl.tmp"
+      cleanup_bin
       echo "[repair] go build failed" >&2
       exit 1
     }
-    mv "$ROOT/bin/hackathonkit-mcp.tmp" "$ROOT/bin/hackathonkit-mcp"
-    mv "$ROOT/bin/hackathonkit-demo-api.tmp" "$ROOT/bin/hackathonkit-demo-api"
-    mv "$ROOT/bin/hackathonkit-ctl.tmp" "$ROOT/bin/hackathonkit-ctl"
+    mv "$MCP_TMP" "$ROOT/bin/hackathonkit-mcp"
+    mv "$DEMO_TMP" "$ROOT/bin/hackathonkit-demo-api"
+    mv "$CTL_TMP" "$ROOT/bin/hackathonkit-ctl"
     echo "[repair] rebuilt local binaries in bin/"
   else
     echo "[repair] no Go toolchain and no docker engine; MCP runtime unavailable" >&2

@@ -31,7 +31,7 @@ cd "$ROOT"
 
 # Containers may run as root over a repo owned by another user; disable VCS
 # stamping so git's dubious-ownership check cannot fail the build.
-GOFLAGS=$(printf '%s' "${GOFLAGS:-}" | sed -E 's/[[:space:]]*-buildvcs=[^[:space:]]*//g; s/^[[:space:]]+//; s/[[:space:]]+$//')
+GOFLAGS=$(printf '%s' "${GOFLAGS:-}" | sed -E 's/(^|[[:space:]])-buildvcs=[^[:space:]]*/\1/g; s/^[[:space:]]+//; s/[[:space:]]+$//')
 if [ -n "$GOFLAGS" ]; then
   GOFLAGS="$GOFLAGS -buildvcs=false"
 else
@@ -39,13 +39,24 @@ else
 fi
 export GOFLAGS
 
-if ! TEST_OUT=$(go test ./... -count=1 -coverprofile="$PROFILE" 2>&1); then
+TEST_LOG=$(mktemp "${TMPDIR:-/tmp}/hackathonkit-coverage-test.XXXXXX")
+if ! go test ./... -count=1 -coverprofile="$PROFILE" >"$TEST_LOG" 2>&1; then
   echo "[coverage] test suite failed" >&2
-  printf '%s\n' "$TEST_OUT" | tail -30 >&2
+  tail -30 "$TEST_LOG" >&2
+  rm -f "$TEST_LOG"
   exit 1
 fi
+rm -f "$TEST_LOG"
 
-TOTAL=$(go tool cover -func="$PROFILE" | awk '/^total:/ {gsub(/%/, "", $3); print $3}')
+COVER_LOG=$(mktemp "${TMPDIR:-/tmp}/hackathonkit-coverage-func.XXXXXX")
+if ! go tool cover -func="$PROFILE" >"$COVER_LOG" 2>&1; then
+  echo "[coverage] go tool cover failed" >&2
+  tail -5 "$COVER_LOG" >&2
+  rm -f "$COVER_LOG"
+  exit 1
+fi
+TOTAL=$(awk '/^total:/ {gsub(/%/, "", $3); print $3}' "$COVER_LOG")
+rm -f "$COVER_LOG"
 if [ -z "$TOTAL" ]; then
   echo "[coverage] could not read a total from the coverage profile" >&2
   exit 1

@@ -43,23 +43,34 @@ cd "$ROOT"
 echo "[setup] repository root: $ROOT (profile: $PROFILE)"
 
 if [ ! -f .env ]; then
+  if [ ! -f .env.example ]; then
+    echo "[setup] .env.example is missing; cannot create .env" >&2
+    exit 1
+  fi
   (umask 077 && cp .env.example .env)
   echo "[setup] created .env from .env.example (set OPENAI_API_KEY for speech/vision)"
 fi
 # .env holds credentials: never leave it group/other readable.
 if [ -f .env ]; then
-  ENV_MODE=$(stat -c '%a' .env 2>/dev/null || stat -f '%Lp' .env 2>/dev/null || echo 600)
+  ENV_MODE=$(stat -c '%a' .env 2>/dev/null || stat -f '%Lp' .env 2>/dev/null || true)
+  if [ -z "$ENV_MODE" ]; then
+    echo "[setup] warning: cannot read the mode of .env; forcing 600" >&2
+    ENV_MODE=600
+  fi
   case "$ENV_MODE" in
     *00) ;;
-    *) chmod 600 .env 2>/dev/null || true ;;
+    *) chmod 600 .env 2>/dev/null || echo "[setup] warning: could not chmod .env to 600" >&2 ;;
   esac
 fi
 # A deterministic demo token protects the demo API without manual steps.
 if ! grep -q '^HACKATHONKIT_DEMO_TOKEN=.' .env 2>/dev/null; then
   TOKEN=$(od -An -N16 -tx1 /dev/urandom 2>/dev/null | tr -d ' \n' || true)
   if [ -n "$TOKEN" ]; then
-    sh "$ROOT/scripts/env-set.sh" .env HACKATHONKIT_DEMO_TOKEN "$TOKEN"
+    # Pass the secret on stdin so it never appears in the process argv.
+    printf '%s' "$TOKEN" | sh "$ROOT/scripts/env-set.sh" .env HACKATHONKIT_DEMO_TOKEN
     echo "[setup] generated HACKATHONKIT_DEMO_TOKEN for the demo API"
+  else
+    echo "[setup] warning: could not generate a demo token (od/urandom unavailable); set HACKATHONKIT_DEMO_TOKEN manually" >&2
   fi
 fi
 
@@ -96,7 +107,8 @@ if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
     RUNTIME="docker"
     echo "[setup] MCP image built, infrastructure started"
   else
-    echo "[setup] docker path failed; falling back to local binaries" >&2
+    echo "[setup] docker path failed (partial containers may be running); falling back to local binaries" >&2
+    docker compose -f "$ROOT/docker-compose.yml" ps >&2 2>/dev/null || true
   fi
 fi
 

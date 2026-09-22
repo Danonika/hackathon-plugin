@@ -11,6 +11,12 @@ if [ -x "$BIN" ]; then
   # sources are newer and a toolchain is available.
   if command -v go >/dev/null 2>&1; then
     NEWEST=$(find "$ROOT/cmd" "$ROOT/internal" -name '*.go' -newer "$BIN" 2>/dev/null | head -n 1)
+    for extra in "$ROOT/go.mod" "$ROOT/go.sum"; do
+      if [ -f "$extra" ] && [ "$extra" -nt "$BIN" ]; then
+        NEWEST="$extra"
+        break
+      fi
+    done
     if [ -n "$NEWEST" ]; then
       echo "[quality-gate] bin/hackathonkit-mcp is older than $NEWEST; rebuilding" >&2
       USE_BIN=0
@@ -23,18 +29,20 @@ fi
 
 if command -v go >/dev/null 2>&1; then
   TMP_BIN=$(mktemp "${TMPDIR:-/tmp}/hackathonkit-mcp-quality.XXXXXX")
+  # Resolve to an absolute path before cd so a relative TMPDIR still works.
+  TMP_BIN="$(CDPATH= cd -- "$(dirname -- "$TMP_BIN")" && pwd)/$(basename -- "$TMP_BIN")"
   cleanup_tmp() { rm -f "$TMP_BIN"; }
-  on_signal() { cleanup_tmp; exit 130; }
   trap cleanup_tmp EXIT
-  trap on_signal INT TERM
+  trap 'cleanup_tmp; exit 130' INT
+  trap 'cleanup_tmp; exit 143' TERM
   cd "$ROOT"
   go build -buildvcs=false -o "$TMP_BIN" ./cmd/hackathonkit-mcp || {
     echo "[quality-gate] go build failed" >&2
     exit 1
   }
   # No exec: the EXIT trap must run to remove the temporary binary.
-  "$TMP_BIN" --repo-root "$ROOT" --quality-gate
-  exit $?
+  "$TMP_BIN" --repo-root "$ROOT" --quality-gate || exit $?
+  exit 0
 fi
 
 echo "[quality-gate] no runtime available; build one with scripts/setup.sh" >&2

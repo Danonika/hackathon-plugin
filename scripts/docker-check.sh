@@ -93,8 +93,9 @@ if [ "$MODE" = "full" ]; then
 fi
 
 echo "[docker-check] start infrastructure (postgres, redis, minio)"
-docker compose up -d postgres redis minio
+# Mark started before `up` so a partial failure still triggers teardown.
 INFRA_STARTED=1
+docker compose up -d postgres redis minio
 
 echo "[docker-check] wait for postgres and minio"
 tries=0
@@ -117,9 +118,10 @@ until docker compose exec -T redis redis-cli ping 2>/dev/null | grep -q PONG; do
   sleep 2
 done
 
+MINIO_PORT="${HACKATHONKIT_MINIO_PORT:-9000}"
 if command -v curl >/dev/null 2>&1; then
   tries=0
-  until curl -fsS http://127.0.0.1:9000/minio/health/live >/dev/null 2>&1; do
+  until curl -fsS "http://127.0.0.1:${MINIO_PORT}/minio/health/live" >/dev/null 2>&1; do
     tries=$((tries + 1))
     if [ "$tries" -ge 30 ]; then
       echo "[docker-check] minio did not become ready" >&2
@@ -130,7 +132,9 @@ if command -v curl >/dev/null 2>&1; then
 else
   echo "[docker-check] curl not found; probing the minio health endpoint from inside the stack"
   MINIO_OK=0
-  for _ in $(seq 1 30); do
+  tries=0
+  while [ "$tries" -lt 30 ]; do
+    tries=$((tries + 1))
     if docker compose exec -T minio sh -c 'curl -fsS http://127.0.0.1:9000/minio/health/live >/dev/null 2>&1 || wget -q -O- http://127.0.0.1:9000/minio/health/live >/dev/null 2>&1' >/dev/null 2>&1; then
       MINIO_OK=1
       break
