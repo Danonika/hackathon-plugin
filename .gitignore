@@ -28,6 +28,8 @@ data/judge-bundles/
 # catch-all `data/*/` with an explicit `!data/input/` negation).
 .agents/skills/
 .claude/skills/
+.opencode/commands/
+.claude/commands/
 # Generated at install time by scripts/write-install-state.sh / setup-resources.sh;
 # never committed. Regenerate with `sh scripts/write-install-state.sh . full binary`
 # and `sh scripts/setup-resources.sh`.

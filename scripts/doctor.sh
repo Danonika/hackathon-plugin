@@ -132,6 +132,18 @@ else
   check "session hooks" 0 "missing plugins/hackathonkit/hooks/codex-hooks.json"
 fi
 
+if [ -f "$ROOT/plugins/hackathonkit/commands/verify.md" ]; then
+  check "verify command" 1 "/verify runs 7 checks incl. coverage"
+else
+  check "verify command" 0 "missing plugins/hackathonkit/commands/verify.md; run scripts/repair.sh"
+fi
+
+if sh "$ROOT/scripts/verify-prompt.sh" status >/dev/null 2>&1; then
+  check "verify prompt (codex)" 1 "installed in $HOME/.codex/prompts"
+else
+  check "verify prompt (codex)" 0 "not installed; run scripts/verify-prompt.sh install"
+fi
+
 AGENT_COUNT=0
 if [ -d "$ROOT/.codex/agents" ]; then
   AGENT_COUNT=$(find "$ROOT/.codex/agents" -name '*.toml' | wc -l | tr -d ' ')

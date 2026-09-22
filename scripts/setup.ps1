@@ -41,6 +41,10 @@ $global:LASTEXITCODE = 0
 & (Join-Path $root "scripts\sync-harness.ps1")
 if ($LASTEXITCODE -ne 0) { Fail "[setup] sync-harness failed" }
 
+# Codex plugins cannot bundle slash commands; install /verify as a custom prompt.
+& (Join-Path $root "scripts\verify-prompt.ps1") install
+if ($LASTEXITCODE -ne 0) { Write-Warning "[setup] could not install the Codex /verify prompt" }
+
 if ($Profile -eq "core") {
   foreach ($dir in @((Join-Path $root ".agents\skills"), (Join-Path $root ".claude\skills"))) {
     if (-not (Test-Path $dir)) { continue }

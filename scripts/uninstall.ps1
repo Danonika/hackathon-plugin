@@ -57,6 +57,13 @@ $targets = @(
   "data\control",
   "bin"
 )
+# Remove the /verify custom prompt this installer placed for Codex.
+if ($Yes) {
+  & (Join-Path $root "scripts\verify-prompt.ps1") remove | Out-Null
+} else {
+  Write-Host "would remove: $HOME\.codex\prompts\verify.md (if unmodified)"
+}
+
 $Failures = 0
 foreach ($rel in $targets) {
   $target = Join-Path $root $rel

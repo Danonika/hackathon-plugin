@@ -24,7 +24,6 @@ if (-not (Test-Path -LiteralPath (Join-Path $Root "docker-compose.yml"))) {
 }
 
 $global:LASTEXITCODE = 0
-$global:LASTEXITCODE = 0
 & (Join-Path $PSScriptRoot "sync-skills.ps1")
 if ($LASTEXITCODE -ne 0) {
   Fail "[sync-harness] sync-skills failed with exit code $LASTEXITCODE"
@@ -73,6 +72,18 @@ try {
   if ($ClaudeOld -and (Test-Path -LiteralPath $ClaudeOld)) { Remove-Item -LiteralPath $ClaudeOld -Recurse -Force -ErrorAction SilentlyContinue }
 }
 
+# Mirror the plugin commands into the harness project command directories.
+$CmdsSrc = Join-Path $Root "plugins\hackathonkit\commands"
+if (-not (Test-Path -LiteralPath $CmdsSrc)) {
+  Fail "[sync-harness] commands source not found: $CmdsSrc"
+}
+foreach ($dest in @((Join-Path $Root ".opencode\commands"), (Join-Path $Root ".claude\commands"))) {
+  New-Item -ItemType Directory -Force -Path $dest | Out-Null
+  Get-ChildItem -LiteralPath $CmdsSrc -Filter *.md | ForEach-Object {
+    Copy-Item -LiteralPath $_.FullName -Destination (Join-Path $dest $_.Name) -Force
+  }
+}
+
 $Required = @(
   "AGENTS.md",
   ".codex\AGENTS.md",
@@ -84,7 +95,9 @@ $Required = @(
   ".claude-plugin\marketplace.json",
   ".opencode\opencode.json",
   ".cursor\rules\hackathonkit.mdc",
-  "plugins\hackathonkit\hooks\codex-hooks.json"
+  "plugins\hackathonkit\hooks\codex-hooks.json",
+  "plugins\hackathonkit\commands\verify.md",
+  ".codex\prompts\verify.md"
 )
 $Missing = 0
 foreach ($f in $Required) {

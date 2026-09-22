@@ -10,7 +10,7 @@ import (
 func registerQuality(reg *mcp.Registry, d Deps) {
 	reg.Register(tool(
 		"quality.gate",
-		"Read the latest build/verify gate evidence (evals/quality/<sha>/gate.json): gofmt, build, vet, tests, MCP selftest and skill validation. Produce evidence with scripts/quality-gate.sh or `docker compose run --rm quality`.",
+		"Read the latest build/verify gate evidence (evals/quality/<sha>/gate.json): gofmt, build, vet, tests, test coverage (target 80%, HACKATHONKIT_COVERAGE_TARGET), MCP selftest and skill validation. Produce evidence with scripts/quality-gate.sh or `docker compose run --rm quality`; the /verify command runs the gate and reports every check.",
 		map[string]any{},
 		nil,
 		func(ctx context.Context, args map[string]any) (any, error) {

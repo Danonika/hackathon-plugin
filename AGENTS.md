@@ -74,11 +74,15 @@ go run ./cmd/hackathonkit-mcp --list-tools
 go run ./cmd/hackathonkit-mcp --session-context
 go run ./cmd/hackathonkit-mcp --validate-skills
 go run ./cmd/fly-bench
-scripts/quality-gate.sh   # gofmt/build/vet/test/selftest/skills -> evals/quality/
+scripts/quality-gate.sh   # gofmt/build/vet/test/coverage/selftest/skills -> evals/quality/
 scripts/setup.sh          # install plugin, mirrors, adapters, infrastructure
 scripts/doctor.sh         # verify runtime, plugin, hooks, adapters, skills, handshake
 scripts/repair.sh         # regenerate missing generated artifacts
 ```
+
+Before claiming work is done, run `/verify` (or `scripts/quality-gate.sh`): it runs the
+seven gate checks including **test coverage** (default 80%, `/verify --target N`) and
+reports each one. Never claim done on a failed or stale gate.
 
 ## Security
 
