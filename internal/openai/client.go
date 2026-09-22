@@ -173,6 +173,9 @@ func (c *Client) Embed(ctx context.Context, texts []string) ([][]float64, error)
 	}
 	result := make([][]float64, len(texts))
 	for _, d := range out.Data {
+		if d.Index == nil {
+			return nil, fmt.Errorf("embeddings response mixes indexed and unindexed entries")
+		}
 		index := *d.Index
 		if index < 0 || index >= len(texts) {
 			return nil, fmt.Errorf("embeddings response index %d out of range for %d inputs", index, len(texts))

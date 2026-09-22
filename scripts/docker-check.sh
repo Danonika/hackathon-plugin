@@ -48,7 +48,7 @@ sh "$ROOT/scripts/env-set.sh" .env HACKATHONKIT_GID "$(id -g)"
 mkdir -p logs evals data/artifacts data/index data/control data/judge-bundles
 
 redact_logs() {
-  sed -E 's/(password|PASSWORD|token|TOKEN|secret|SECRET|dsn|DSN)([=: ]+)[^ "]+/\1\2[redacted]/g'
+  sed -E -e 's#://[^/@ ]+@#://***@#g' -e 's/([A-Za-z_]*(PASSWORD|PASS|TOKEN|SECRET|DSN|KEY)[A-Za-z_]*)([=: ]+)[^ "]+/\1\3[redacted]/g'
 }
 
 diagnostics() {

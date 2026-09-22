@@ -663,14 +663,11 @@ func ApplyCommission(ranking Ranking, commission Commission) (Ranking, error) {
 	for _, sha := range ranking.Unresolved {
 		unresolvedSet[sha] = true
 	}
-	rest := make([]RankEntry, 0, len(ranking.Entries))
 	group := map[string]RankEntry{}
 	for _, entry := range ranking.Entries {
 		if unresolvedSet[entry.SnapshotSHA] {
 			group[entry.SnapshotSHA] = entry
-			continue
 		}
-		rest = append(rest, entry)
 	}
 	ordered := append([]string{}, ranking.Unresolved...)
 	sort.SliceStable(ordered, func(i, j int) bool {
@@ -679,10 +676,24 @@ func ApplyCommission(ranking Ranking, commission Commission) (Ranking, error) {
 		}
 		return ordered[i] < ordered[j]
 	})
-	for _, sha := range ordered {
-		entry := group[sha]
-		entry.TieBreak = "commission"
-		rest = append(rest, entry)
+	// Replace the contiguous tie group in place so the commission result keeps
+	// the original rank position (the tie is not necessarily last).
+	rest := make([]RankEntry, 0, len(ranking.Entries))
+	inserted := false
+	for _, entry := range ranking.Entries {
+		if !unresolvedSet[entry.SnapshotSHA] {
+			rest = append(rest, entry)
+			continue
+		}
+		if inserted {
+			continue
+		}
+		for _, sha := range ordered {
+			resolved := group[sha]
+			resolved.TieBreak = "commission"
+			rest = append(rest, resolved)
+		}
+		inserted = true
 	}
 	for i := range rest {
 		rest[i].Rank = i + 1

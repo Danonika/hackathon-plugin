@@ -1,6 +1,11 @@
 #!/usr/bin/env sh
 set -e
-SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+SELF="$0"
+case "$SELF" in
+  */*) ;;
+  *) SELF=$(command -v -- "$SELF" 2>/dev/null || echo "$SELF") ;;
+esac
+SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$SELF")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 
 if [ ! -f "$REPO_ROOT/docker-compose.yml" ]; then

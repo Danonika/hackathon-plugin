@@ -25,7 +25,14 @@ if [ "$COUNT_SRC" != "$COUNT_DST" ]; then
   exit 1
 fi
 
-rm -rf "$DST"
-mv "$TMP" "$DST"
+OLD="$DST.old.$$"
+if [ -d "$DST" ]; then
+  mv "$DST" "$OLD"
+fi
+if ! mv "$TMP" "$DST"; then
+  [ -d "$OLD" ] && mv "$OLD" "$DST"
+  exit 1
+fi
+rm -rf "$OLD"
 trap - EXIT INT TERM
 echo "[sync-skills] mirrored $COUNT_DST of $COUNT_SRC skills to .agents/skills"

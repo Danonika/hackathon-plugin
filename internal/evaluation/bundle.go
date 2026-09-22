@@ -134,6 +134,11 @@ func FreezeBundle(opts BundleOptions) (Bundle, error) {
 	}
 	excludeRules := compileExcludes(excludes)
 
+	if entries, err := os.ReadDir(outAbs); err == nil && len(entries) > 0 {
+		if _, err := os.Stat(filepath.Join(outAbs, "bundle.json")); err != nil {
+			return Bundle{}, fmt.Errorf("refusing to delete %s: not a previous bundle (missing bundle.json)", outDir)
+		}
+	}
 	if err := os.RemoveAll(outAbs); err != nil {
 		return Bundle{}, err
 	}
@@ -150,7 +155,7 @@ func FreezeBundle(opts BundleOptions) (Bundle, error) {
 
 	var copied int
 	var copiedBytes int64
-	err = filepath.WalkDir(root, func(path string, d fs.DirEntry, walkErr error) error {
+	err = filepath.WalkDir(rootResolved, func(path string, d fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
 		}

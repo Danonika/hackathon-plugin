@@ -124,13 +124,14 @@ func Plan(matrix Matrix, statuses []Status, trackRef string) (TrackPlan, []Decis
 		} else if decision.Chosen.Provider == "" && chosenIndex > 0 {
 			decision.Degraded = true
 		}
-		if decision.Chosen.Provider == "" {
-			if decision.Degraded {
-				decision.Reason = "no provider configured; deterministic fallback"
-			} else {
-				decision.Reason = "deterministic by design"
-			}
-		} else {
+		switch {
+		case decision.Degraded && decision.Chosen.Provider == "":
+			decision.Reason = "no provider configured; deterministic fallback"
+		case decision.Degraded:
+			decision.Reason = "no ready provider; " + decision.Chosen.Provider + " fallback is unavailable"
+		case decision.Chosen.Provider == "":
+			decision.Reason = "deterministic by design"
+		default:
 			decision.Reason = decision.Chosen.Provider + " is ready"
 		}
 		for _, variant := range variants {

@@ -31,6 +31,22 @@ if command -v codex >/dev/null 2>&1; then
           PLUGIN_STATE=enabled
         fi
       fi
+    elif command -v python3 >/dev/null 2>&1; then
+      PLUGIN_STATE=$(printf '%s' "$PLUGIN_JSON" | python3 -c '
+import json, sys
+try:
+    data = json.load(sys.stdin)
+except Exception:
+    sys.exit(0)
+state = ""
+for entry in data.get("installed", []):
+    if entry.get("name") == "hackathonkit":
+        state = "enabled" if entry.get("enabled") else "disabled"
+print(state)
+' 2>/dev/null)
+      if [ -z "$PLUGIN_STATE" ]; then
+        PLUGIN_STATE=missing
+      fi
     elif PLUGIN_STATE=$(printf '%s' "$PLUGIN_JSON" | awk '
       { text = text $0 }
       END {

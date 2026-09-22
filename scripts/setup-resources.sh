@@ -45,7 +45,12 @@ set_key() {
   printf '%s' "$2" | sh "$ROOT/scripts/env-set.sh" "$ROOT/.env" "$1"
 }
 
-trap restore_echo EXIT INT TERM
+on_interrupt() {
+  restore_echo
+  exit 130
+}
+trap restore_echo EXIT
+trap on_interrupt INT TERM
 
 echo "[resources] answering stores booleans in configs/resources.json; keys go to .env only"
 

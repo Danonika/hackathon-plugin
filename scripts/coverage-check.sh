@@ -14,7 +14,7 @@ if ! awk -v t="$TARGET" 'BEGIN { exit (t + 0 >= 0 && t + 0 <= 100) ? 0 : 1 }'; t
   echo "[coverage] HACKATHONKIT_COVERAGE_TARGET must be between 0 and 100, got '$TARGET'" >&2
   exit 2
 fi
-PROFILE="${TMPDIR:-/tmp}/hackathonkit-coverage.$$"
+PROFILE=$(mktemp "${TMPDIR:-/tmp}/hackathonkit-coverage.XXXXXX")
 trap 'rm -f "$PROFILE"' EXIT INT TERM
 cd "$ROOT"
 

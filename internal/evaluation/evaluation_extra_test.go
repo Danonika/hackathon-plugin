@@ -488,3 +488,39 @@ func TestCompareEpsilonBoundaries(t *testing.T) {
 		t.Fatalf("an unknown mode must default to technical, got %s/%s", out.Mode, out.Decision)
 	}
 }
+
+func TestApplyCommissionKeepsTiePosition(t *testing.T) {
+	ranking, err := Rank([]Aggregate{
+		rankAggregate("a", 90, 18, 20, 15),
+		rankAggregate("b", 80, 16, 20, 15),
+		rankAggregate("c", 80, 16, 20, 15),
+		rankAggregate("d", 70, 14, 20, 15),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	decided, err := ApplyCommission(ranking, Commission{
+		Members: []string{"j1", "j2", "j3"},
+		Votes:   map[string]int{"b": 2, "c": 1},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	order := make([]string, 0, len(decided.Entries))
+	ranks := map[string]int{}
+	breaks := map[string]string{}
+	for _, e := range decided.Entries {
+		order = append(order, e.SnapshotSHA)
+		ranks[e.SnapshotSHA] = e.Rank
+		breaks[e.SnapshotSHA] = e.TieBreak
+	}
+	if strings.Join(order, ",") != "a,b,c,d" {
+		t.Fatalf("commission order = %v, want [a b c d]", order)
+	}
+	if ranks["a"] != 1 || ranks["b"] != 2 || ranks["c"] != 3 || ranks["d"] != 4 {
+		t.Fatalf("ranks = %v, want a=1 b=2 c=3 d=4", ranks)
+	}
+	if breaks["b"] != "commission" || breaks["c"] != "commission" {
+		t.Fatalf("tie breaks = %v", breaks)
+	}
+}

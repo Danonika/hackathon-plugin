@@ -55,7 +55,10 @@ func registerResources(reg *mcp.Registry, d Deps) {
 				if !ok {
 					continue
 				}
-				value, _ := raw.(bool)
+				value, isBool := raw.(bool)
+				if !isBool {
+					return mcp.Fail(trace(ctx), fmt.Sprintf("%s must be a boolean", def.ID)), nil
+				}
 				if err := resources.SetAnswer(&profile, def.ID, value); err != nil {
 					return mcp.Fail(trace(ctx), err.Error()), nil
 				}

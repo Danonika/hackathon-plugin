@@ -240,8 +240,9 @@ const clock = new THREE.Clock();
 const COLOR_IDLE = new THREE.Color(0x2b3a55), COLOR_REWARD = new THREE.Color(0x1f4d33), COLOR_PUNISH = new THREE.Color(0x3f1d1d);
 function animate() {
   requestAnimationFrame(animate);
+  const delta = clock.getDelta();
   const t = clock.getElapsedTime();
-  if (window.__flyMixer) window.__flyMixer.update(Math.min(0.1, clock.getDelta()));
+  if (window.__flyMixer) window.__flyMixer.update(Math.min(0.1, delta));
   wings.forEach((w, i) => { w.rotation.z = Math.sin(t * 40) * .5 * (i ? 1 : -1); });
   const hover = Math.sin(t * 2.2) * .18;
   if (state.mode === 'reward' || state.mode === 'punish') {

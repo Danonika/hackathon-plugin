@@ -111,9 +111,9 @@ func (s *Store) ingestJSONL(ctx context.Context, name, path string, handle func(
 		}
 		var record map[string]any
 		if err := json.Unmarshal(line, &record); err != nil {
-			// Malformed line: stop and retry from here next cycle.
-			consumed -= nl + 1
-			break
+			// Skip malformed lines: one bad record must not stall the rest of
+			// the stream. The cursor still advances past it.
+			continue
 		}
 		if err := handle(ctx, record); err != nil {
 			// Records handled before this line were applied; persist the cursor

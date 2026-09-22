@@ -60,11 +60,15 @@ func tokenize(text string) []string {
 }
 
 func chunkText(text string, size, overlap int) []string {
-	if size <= 0 {
+	if size <= 0 || size > 20000 {
 		size = 800
 	}
+	// Keep a real stride: an overlap of size-1 would make step 1 and turn
+	// chunking into O(n^2).
 	if overlap < 0 || overlap >= size {
 		overlap = size / 8
+	} else if overlap > size/2 {
+		overlap = size / 2
 	}
 	r := []rune(text)
 	if len(r) == 0 {
@@ -126,7 +130,17 @@ func registerKnowledge(reg *mcp.Registry, d Deps) {
 			} else {
 				return mcp.Fail(trace(ctx), "either path or artifact_id is required"), nil
 			}
-			chunks := chunkText(text, argInt(args, "chunk_chars", 800), argInt(args, "overlap", 100))
+			chunkSize := argInt(args, "chunk_chars", 800)
+			if chunkSize <= 0 || chunkSize > 20000 {
+				chunkSize = 800
+			}
+			chunkOverlap := argInt(args, "overlap", 100)
+			if chunkOverlap < 0 || chunkOverlap >= chunkSize {
+				chunkOverlap = chunkSize / 8
+			} else if chunkOverlap > chunkSize/2 {
+				chunkOverlap = chunkSize / 2
+			}
+			chunks := chunkText(text, chunkSize, chunkOverlap)
 			if len(chunks) == 0 {
 				return mcp.Fail(trace(ctx), "no text to index"), nil
 			}

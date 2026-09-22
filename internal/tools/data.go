@@ -313,6 +313,9 @@ func registerData(reg *mcp.Registry, d Deps) {
 			for i := 0; i < len(numeric); i++ {
 				for j := i + 1; j < len(numeric); j++ {
 					idxA, idxB := t.columnIndex(numeric[i]), t.columnIndex(numeric[j])
+					if idxA < 0 || idxB < 0 {
+						continue
+					}
 					var xs, ys []float64
 					for _, row := range t.Rows {
 						if idxA >= len(row) || idxB >= len(row) {

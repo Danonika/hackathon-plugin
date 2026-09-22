@@ -13,8 +13,15 @@ trap 'rm -rf "$CLAUDE_TMP"' EXIT INT TERM
 rm -rf "$CLAUDE_TMP"
 mkdir -p "$CLAUDE_TMP"
 cp -R "$ROOT/plugins/hackathonkit/skills/." "$CLAUDE_TMP/"
-rm -rf "$CLAUDE_DST"
-mv "$CLAUDE_TMP" "$CLAUDE_DST"
+CLAUDE_OLD="$CLAUDE_DST.old.$$"
+if [ -d "$CLAUDE_DST" ]; then
+  mv "$CLAUDE_DST" "$CLAUDE_OLD"
+fi
+if ! mv "$CLAUDE_TMP" "$CLAUDE_DST"; then
+  [ -d "$CLAUDE_OLD" ] && mv "$CLAUDE_OLD" "$CLAUDE_DST"
+  exit 1
+fi
+rm -rf "$CLAUDE_OLD"
 trap - EXIT INT TERM
 
 MISSING=0

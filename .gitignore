@@ -5,6 +5,8 @@ bin/
 /hackathonkit-rehearse
 *.exe
 .env
+.env.*
+!.env.example
 logs/
 plugins/hackathonkit/.mcp.json
 data/fly-viz/

@@ -32,7 +32,8 @@ if { [ ! -x "$ROOT/bin/hackathonkit-mcp" ] || [ ! -x "$ROOT/bin/hackathonkit-dem
     )
     echo "[repair] rebuilt local binaries in bin/"
   else
-    echo "[repair] warning: no Go toolchain and no docker engine; MCP runtime unavailable" >&2
+    echo "[repair] no Go toolchain and no docker engine; MCP runtime unavailable" >&2
+    exit 1
   fi
 fi
 

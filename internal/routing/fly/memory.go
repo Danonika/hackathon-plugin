@@ -118,6 +118,9 @@ func (r *Router) loadMemory() memoryFile {
 	}
 	var mem memoryFile
 	if json.Unmarshal(data, &mem) != nil {
+		// Quarantine the corrupt file so the next save does not silently
+		// overwrite recoverable data with an empty memory.
+		_ = os.Rename(r.memoryPath, r.memoryPath+".corrupt")
 		return memoryFile{}
 	}
 	return mem

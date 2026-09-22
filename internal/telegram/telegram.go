@@ -551,7 +551,13 @@ func ChunkHTML(text string, limit int) []string {
 		next, closers := scanTags(body, stack)
 		for len([]rune(prefix+body+closers)) > limit && cut > pos+1 {
 			cut--
+			if cut <= pos {
+				cut = pos + 1
+			}
 			cut = cutOutsideTag(runes, pos, cut)
+			if cut <= pos {
+				cut = pos + 1
+			}
 			body = string(runes[pos:cut])
 			next, closers = scanTags(body, stack)
 		}

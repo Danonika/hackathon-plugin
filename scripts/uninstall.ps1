@@ -34,7 +34,8 @@ $targets = @(
 $Failures = 0
 foreach ($rel in $targets) {
   $target = Join-Path $root $rel
-  if (-not $target.StartsWith($root, [System.StringComparison]::OrdinalIgnoreCase)) {
+  $rootPrefix = $root.TrimEnd('\') + '\'
+  if (-not $target.StartsWith($rootPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
     Write-Warning "[uninstall] refusing to remove a path outside the repository: $target"
     $Failures++
     continue

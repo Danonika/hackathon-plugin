@@ -4,7 +4,15 @@ set -e
 ROOT="$1"
 PROFILE="${2:-full}"
 RUNTIME="${3:-unknown}"
+if [ -z "$ROOT" ] || [ "$ROOT" = "/" ] || [ ! -f "$ROOT/docker-compose.yml" ]; then
+  echo "[install-state] refusing: '$ROOT' does not look like the hackathonkit repository root" >&2
+  exit 1
+fi
 mkdir -p "$ROOT/configs"
+
+json_escape() {
+  printf '%s' "$1" | tr -d '\r\n' | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g'
+}
 
 PLUGIN_JSON="$ROOT/plugins/hackathonkit/.codex-plugin/plugin.json"
 VERSION=$(sed -n 's/.*"version": *"\([^"]*\)".*/\1/p' "$PLUGIN_JSON" 2>/dev/null | head -n 1)
@@ -19,11 +27,14 @@ if [ -d "$ROOT/.agents/skills" ]; then
 fi
 
 STAMP=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+VERSION_JSON=$(json_escape "$VERSION")
+PROFILE_JSON=$(json_escape "$PROFILE")
+RUNTIME_JSON=$(json_escape "$RUNTIME")
 cat > "$ROOT/configs/install-state.json" <<EOF
 {
-  "version": "$VERSION",
-  "profile": "$PROFILE",
-  "runtime": "$RUNTIME",
+  "version": "$VERSION_JSON",
+  "profile": "$PROFILE_JSON",
+  "runtime": "$RUNTIME_JSON",
   "skills": $SKILLS,
   "components": {
     "hooks": true,

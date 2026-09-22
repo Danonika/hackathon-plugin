@@ -91,7 +91,7 @@ for line, want in zip(lines, expected):
     exit 1
   fi
 else
-  GOT_IDS=$(printf '%s\n' "$OUT" | grep -o '"id":[0-9]*' | sed 's/"id"://' | paste -sd, -)
+  GOT_IDS=$(printf '%s\n' "$OUT" | grep -o '"id": *[0-9]*' | sed 's/.*: *//' | paste -sd, -)
   if [ "$GOT_IDS" != "1,2,3" ]; then
     echo "[smoke] MCP handshake FAILED: expected response ids 1,2,3 in order, got '$GOT_IDS'" >&2
     exit 1

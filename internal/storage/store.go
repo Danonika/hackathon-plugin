@@ -208,6 +208,9 @@ func (s *Store) WriteIndex(rel string, data []byte) (string, error) {
 		return "", err
 	}
 	full := filepath.Join(s.root, s.indexDir, clean)
+	if err := s.ensureWithin(full); err != nil {
+		return "", err
+	}
 	if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
 		return "", err
 	}
@@ -222,7 +225,11 @@ func (s *Store) ReadIndex(rel string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	return os.ReadFile(filepath.Join(s.root, s.indexDir, clean))
+	full := filepath.Join(s.root, s.indexDir, clean)
+	if err := s.ensureWithin(full); err != nil {
+		return nil, err
+	}
+	return os.ReadFile(full)
 }
 
 func (s *Store) ListIndexes() ([]string, error) {

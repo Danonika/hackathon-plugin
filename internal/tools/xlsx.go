@@ -289,6 +289,7 @@ func readSheetRows(f *zip.File, shared []string, styles xlsxStyles) ([][]string,
 	defer rc.Close()
 	dec := xml.NewDecoder(io.LimitReader(rc, maxXLSXSheetBytes))
 	var rows [][]string
+	totalCells := 0
 	var curRow []string
 	var curVal strings.Builder
 	var curType, curRef string
@@ -369,6 +370,14 @@ func readSheetRows(f *zip.File, shared []string, styles xlsxStyles) ([][]string,
 				if col >= maxXLSXCols {
 					continue
 				}
+				newCells := col + 1 - len(curRow)
+				if newCells < 1 {
+					newCells = 1
+				}
+				totalCells += newCells
+				if totalCells > maxXLSXCells {
+					return nil, fmt.Errorf("worksheet exceeds %d cells", maxXLSXCells)
+				}
 				for len(curRow) <= col {
 					curRow = append(curRow, "")
 				}
@@ -406,6 +415,7 @@ const (
 	maxXLSXSharedBytes   = 64 << 20
 	maxXLSXSharedStrings = 1000000
 	maxXLSXSheetBytes    = 256 << 20
+	maxXLSXCells         = 5000000
 )
 
 type xlsxStyles struct {
