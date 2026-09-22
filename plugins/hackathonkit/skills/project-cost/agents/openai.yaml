@@ -1,7 +1,7 @@
 interface:
   display_name: "Hackathon Agent Kit Project Cost"
-  short_description: "Score technical readiness of the current snapshot, evidence only."
-  default_prompt: "Use $project-cost to score the current snapshot."
+  short_description: "Evidence-only technical readiness score 0-100 with a loop decision."
+  default_prompt: "Use $project-cost to score the current snapshot's technical readiness."
 
 policy:
   allow_implicit_invocation: false

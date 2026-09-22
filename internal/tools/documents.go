@@ -3,7 +3,9 @@ package tools
 import (
 	"archive/zip"
 	"context"
+	"encoding/json"
 	"encoding/xml"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -14,6 +16,21 @@ import (
 	"hackathonkit.local/agentkit/internal/mcp"
 	"github.com/ledongthuc/pdf"
 )
+
+// errDocxTruncated reports that word/document.xml hit the size cap; callers
+// keep the partial text and surface a warning.
+var errDocxTruncated = errors.New("docx: word/document.xml exceeds the size limit")
+
+type countingReader struct {
+	r io.Reader
+	n int64
+}
+
+func (c *countingReader) Read(p []byte) (int, error) {
+	n, err := c.r.Read(p)
+	c.n += int64(n)
+	return n, err
+}
 
 const maxExtractedChars = 10_000_000
 const maxRawTextBytes = 20 << 20
@@ -59,6 +76,9 @@ func extractText(path string) (string, []string, error) {
 	switch ext {
 	case "docx":
 		text, err := docxText(path)
+		if errors.Is(err, errDocxTruncated) {
+			return text, []string{"docx: word/document.xml exceeded the size limit; text was truncated"}, nil
+		}
 		return text, nil, err
 	case "xlsx":
 		sheets, warnings, err := readXLSXSheets(path)
@@ -79,7 +99,7 @@ func extractText(path string) (string, []string, error) {
 	case "pdf":
 		text, truncated, err := pdfText(path)
 		if err != nil {
-			return "", []string{"pdf text extraction failed: " + err.Error()}, nil
+			return "", nil, fmt.Errorf("pdf text extraction failed: %w", err)
 		}
 		warnings := []string{}
 		if truncated {
@@ -133,6 +153,8 @@ func tableAsText(t *table) string {
 	return b.String()
 }
 
+const maxDocxXMLBytes = 64 << 20
+
 func docxText(path string) (string, error) {
 	zr, err := zip.OpenReader(path)
 	if err != nil {
@@ -154,7 +176,9 @@ func docxText(path string) (string, error) {
 		return "", err
 	}
 	defer rc.Close()
-	dec := xml.NewDecoder(rc)
+	counter := &countingReader{r: rc}
+	limited := io.LimitReader(counter, maxDocxXMLBytes+1)
+	dec := xml.NewDecoder(limited)
 	var b strings.Builder
 	for {
 		tok, err := dec.Token()
@@ -179,6 +203,9 @@ func docxText(path string) (string, error) {
 				b.WriteString("\n")
 			}
 		}
+	}
+	if counter.n > maxDocxXMLBytes {
+		return strings.TrimSpace(b.String()), errDocxTruncated
 	}
 	return strings.TrimSpace(b.String()), nil
 }
@@ -205,20 +232,30 @@ func registerDocuments(reg *mcp.Registry, d Deps) {
 				return mcp.Fail(trace(ctx), err.Error()), nil
 			}
 			base := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
-			stamp := time.Now().UTC().Format("20060102-150405")
+			stamp := time.Now().UTC().Format("20060102-150405.000000000")
 			artifact, werr := d.Store.WriteArtifact(
-				fmt.Sprintf("extracted/%s-%s-%s.txt", slugify(base), shortHash(path), stamp),
+				fmt.Sprintf("extracted/%s-%s-%s.txt", slugify(base), shortHash(text), stamp),
 				[]byte(text),
 			)
 			if werr != nil {
 				return mcp.Fail(trace(ctx), werr.Error()), nil
 			}
-			meta := fmt.Sprintf(`{"source":%q,"artifact_id":%q,"chars":%d,"extracted_at":%q}`,
-				path, artifact, len([]rune(text)), time.Now().UTC().Format(time.RFC3339))
-			_, _ = d.Store.WriteArtifact(
-				fmt.Sprintf("extracted/%s-%s-%s.meta.json", slugify(base), shortHash(path), stamp),
+			metaBytes, merr := json.Marshal(map[string]any{
+				"source":       path,
+				"artifact_id":  artifact,
+				"chars":        len([]rune(text)),
+				"extracted_at": time.Now().UTC().Format(time.RFC3339),
+			})
+			if merr != nil {
+				return mcp.Fail(trace(ctx), merr.Error()), nil
+			}
+			meta := string(metaBytes)
+			if _, werr := d.Store.WriteArtifact(
+				fmt.Sprintf("extracted/%s-%s-%s.meta.json", slugify(base), shortHash(text), stamp),
 				[]byte(meta),
-			)
+			); werr != nil {
+				warnings = append(warnings, "metadata artifact not stored: "+werr.Error())
+			}
 			env := mcp.OK(trace(ctx), map[string]any{
 				"artifact_id": artifact,
 				"chars":       len([]rune(text)),
@@ -256,6 +293,9 @@ func registerDocuments(reg *mcp.Registry, d Deps) {
 			if maxChars <= 0 || maxChars > 10_000_000 {
 				maxChars = d.Cfg.Config().Tools.MaxTextChars
 			}
+			if maxChars > 10_000_000 {
+				maxChars = 10_000_000
+			}
 			if maxChars <= 0 {
 				maxChars = 60000
 			}
@@ -266,9 +306,10 @@ func registerDocuments(reg *mcp.Registry, d Deps) {
 				truncated = true
 			}
 			env := mcp.OK(trace(ctx), map[string]any{
-				"text":      text,
-				"chars":     len(r),
-				"truncated": truncated,
+				"text":        text,
+				"chars":       len([]rune(text)),
+				"total_chars": len(r),
+				"truncated":   truncated,
 			})
 			if truncated {
 				env = env.WithWarnings("text truncated; use documents.ingest and knowledge.index for large documents")
@@ -303,6 +344,9 @@ func registerDocuments(reg *mcp.Registry, d Deps) {
 			}
 			if maxChars <= 0 {
 				maxChars = 60000
+			}
+			if maxChars > 10_000_000 {
+				maxChars = 10_000_000
 			}
 			offset := argInt(args, "offset", 0)
 			if offset < 0 {

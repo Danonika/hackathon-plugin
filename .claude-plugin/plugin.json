@@ -1,0 +1,25 @@
+{
+  "name": "hackathonkit",
+  "version": "0.16.28",
+  "description": "Hackathon Agent Kit: local MCP capability layer, skills, evaluation and learning for hackathon builds.",
+  "author": {
+    "name": "Hackathon Agent Kit"
+  },
+  "keywords": [
+    "mcp",
+    "skills",
+    "evaluation",
+    "hackathon",
+    "telemetry",
+    "documents"
+  ],
+  "skills": [
+    "./plugins/hackathonkit/skills"
+  ],
+  "mcpServers": {
+    "hackathonkit": {
+      "command": "${CLAUDE_PLUGIN_ROOT}/plugins/hackathonkit/scripts/hackathonkit-mcp-launcher.sh",
+      "args": []
+    }
+  }
+}

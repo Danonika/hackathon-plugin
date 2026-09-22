@@ -21,17 +21,26 @@ func (r *Router) ActivationSnapshot(ctx context.Context, task string, topN int) 
 		"activation_available": false, "activation_complete": false, "active_kc_count": 0,
 	}
 	brain := r.loadBrain()
-	if brain != nil {
+	if brain != nil && brain.KC > 0 {
 		empty["kc_total"] = brain.KC
 	}
-	if brain == nil || r.embedder == nil {
+	if brain == nil {
+		empty["reason"] = "brain not loaded"
+		return empty
+	}
+	if r.embedder == nil {
+		empty["reason"] = "no embedder configured"
 		return empty
 	}
 	vec, ok := r.embedTask(ctx, task)
 	if !ok {
 		return empty
 	}
-	scores, code, ok := brain.scores(vec)
+	scores, code, ok := func() (map[string]float64, []float64, bool) {
+		brainMu.Lock()
+		defer brainMu.Unlock()
+		return brain.scores(vec)
+	}()
 	if !ok {
 		return empty
 	}

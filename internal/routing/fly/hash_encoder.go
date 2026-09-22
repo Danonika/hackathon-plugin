@@ -7,6 +7,7 @@ import (
 	"math"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 )
 
 type HashEncoder struct {
@@ -21,13 +22,17 @@ func NewHashEncoder(dims int) *HashEncoder {
 }
 
 func (h *HashEncoder) Embed(ctx context.Context, texts []string) ([][]float64, error) {
+	if h == nil || h.Dims <= 0 {
+		return nil, fmt.Errorf("hash encoder: invalid dimensions %d", dimsOf(h))
+	}
 	out := make([][]float64, 0, len(texts))
+	hasher := fnv.New64a()
 	for _, text := range texts {
 		vector := make([]float64, h.Dims)
 		for _, token := range tokenizeFly(text) {
-			hash := fnv.New64a()
-			_, _ = hash.Write([]byte(token))
-			value := hash.Sum64()
+			hasher.Reset()
+			_, _ = hasher.Write([]byte(token))
+			value := hasher.Sum64()
 			index := int(value % uint64(h.Dims))
 			sign := 1.0
 			if (value>>63)&1 == 1 {
@@ -54,7 +59,7 @@ func tokenizeFly(text string) []string {
 	var out []string
 	var current strings.Builder
 	flush := func() {
-		if current.Len() >= 2 {
+		if utf8.RuneCountInString(current.String()) >= 2 {
 			out = append(out, strings.ToLower(current.String()))
 		}
 		current.Reset()
@@ -80,13 +85,37 @@ func NewChainEmbedder(primary, fallback Embedder) *ChainEmbedder {
 }
 
 func (c *ChainEmbedder) Embed(ctx context.Context, texts []string) ([][]float64, error) {
+	var primaryErr error
 	if c.Primary != nil {
-		if vectors, err := c.Primary.Embed(ctx, texts); err == nil && len(vectors) == len(texts) {
+		vectors, err := c.Primary.Embed(ctx, texts)
+		if err == nil && len(vectors) == len(texts) {
 			return vectors, nil
+		}
+		if err != nil {
+			primaryErr = err
+		} else {
+			primaryErr = fmt.Errorf("primary returned %d vectors for %d texts", len(vectors), len(texts))
 		}
 	}
 	if c.Fallback != nil {
-		return c.Fallback.Embed(ctx, texts)
+		vectors, err := c.Fallback.Embed(ctx, texts)
+		if err != nil {
+			if primaryErr != nil {
+				return nil, fmt.Errorf("primary embedder failed: %w; fallback failed: %v", primaryErr, err)
+			}
+			return nil, err
+		}
+		return vectors, nil
+	}
+	if primaryErr != nil {
+		return nil, fmt.Errorf("primary embedder failed: %w", primaryErr)
 	}
 	return nil, fmt.Errorf("no embedder available")
+}
+
+func dimsOf(h *HashEncoder) int {
+	if h == nil {
+		return 0
+	}
+	return h.Dims
 }

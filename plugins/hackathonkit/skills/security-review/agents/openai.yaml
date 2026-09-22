@@ -1,0 +1,4 @@
+interface:
+  display_name: "Security Review"
+  short_description: "Review code and untrusted content for injection and secret risks."
+  default_prompt: "Use $security-review to scan this code and content for security risks."

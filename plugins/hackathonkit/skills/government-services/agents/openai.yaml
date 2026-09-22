@@ -1,4 +1,4 @@
 interface:
   display_name: "Government Services"
-  short_description: "Source-grounded answers about government procedures."
-  default_prompt: "Use $government-services to answer this question from the regulation corpus."
+  short_description: "Cited answers on procedures, documents, fees and deadlines."
+  default_prompt: "Use $government-services to answer this question from the provided regulation corpus."

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Build Planner"
+  short_description: "Stage S0-S6 build plan with gates, timeboxes and exit evidence."
+  default_prompt: "Use $build-planner to plan this build in stages before we start."

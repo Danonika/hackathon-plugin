@@ -1,0 +1,4 @@
+interface:
+  display_name: "Hackathon Agent Kit Verification Loop"
+  short_description: "Verify before claiming done: gate, scenario, artifacts, warnings."
+  default_prompt: "Use $verification-loop to verify this work before claiming it is done."

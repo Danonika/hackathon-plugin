@@ -2,23 +2,32 @@ package main
 
 import (
 	"context"
+	"crypto/subtle"
+	"database/sql"
 	"embed"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net"
 	"net/http"
 	"net/url"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
+	"syscall"
 	"time"
 
+	"hackathonkit.local/agentkit/internal/atomicfile"
 	"hackathonkit.local/agentkit/internal/config"
+	"hackathonkit.local/agentkit/internal/control"
 	"hackathonkit.local/agentkit/internal/metadata"
 	"hackathonkit.local/agentkit/internal/observability"
+	"hackathonkit.local/agentkit/internal/plans"
 )
 
 //go:embed static/*.html static/*.js
@@ -50,6 +59,42 @@ func main() {
 	}
 	token := os.Getenv("HACKATHONKIT_DEMO_TOKEN")
 
+	addr := net.JoinHostPort(host, port)
+	server := &http.Server{
+		Addr:              addr,
+		Handler:           newHandler(root, mgr, meta, token, logger),
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		WriteTimeout:      60 * time.Second,
+		IdleTimeout:       120 * time.Second,
+	}
+	observability.Log(logger, "info", "demo_api_start", map[string]any{"addr": addr, "root": root})
+
+	errCh := make(chan error, 1)
+	go func() { errCh <- server.ListenAndServe() }()
+
+	stop := make(chan os.Signal, 1)
+	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
+	select {
+	case err := <-errCh:
+		if err != nil && err != http.ErrServerClosed {
+			fmt.Fprintln(os.Stderr, "demo-api error:", err)
+			meta.Close()
+			os.Exit(1)
+		}
+	case <-stop:
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if err := server.Shutdown(ctx); err != nil {
+			fmt.Fprintln(os.Stderr, "demo-api shutdown error:", err)
+		}
+	}
+	meta.Close()
+}
+
+func newHandler(root string, mgr *config.Manager, meta metadata.Recorder, token string, logger *log.Logger) http.Handler {
+	// Serializes the read-compare-write of a plan decision.
+	var decisionMu sync.Mutex
 	mux := http.NewServeMux()
 	mux.Handle("/fly-live", newFlyLiveHandler(root))
 	mux.HandleFunc("/fly-static/", func(w http.ResponseWriter, r *http.Request) {
@@ -77,10 +122,8 @@ func main() {
 			http.Error(w, "static page missing", http.StatusInternalServerError)
 			return
 		}
-		quoted, _ := json.Marshal(token)
-		rendered := strings.ReplaceAll(string(page), `"__HACKATHONKIT_DEMO_TOKEN__"`, string(quoted))
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		_, _ = w.Write([]byte(rendered))
+		_, _ = w.Write(page)
 	})
 	mux.HandleFunc("/fly-model-list", func(w http.ResponseWriter, r *http.Request) {
 		base := filepath.Join(root, "data", "fly-viz", "neuromechfly")
@@ -184,7 +227,129 @@ func main() {
 			return
 		}
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, _ = w.Write([]byte(strings.ReplaceAll(string(page), "__HACKATHONKIT_DEMO_TOKEN__", token)))
+	})
+	mux.HandleFunc("/control", func(w http.ResponseWriter, r *http.Request) {
+		page, err := staticFS.ReadFile("static/control.html")
+		if err != nil {
+			http.Error(w, "static page missing", http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		_, _ = w.Write(page)
+	})
+	mux.HandleFunc("/control/api/sessions", func(w http.ResponseWriter, r *http.Request) {
+		store, err := control.OpenReadOnly(control.DefaultPath(root))
+		if err != nil {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]any{
+				"error": "control database not available; run `hackathonkit-ctl ingest` or `hackathonkit-ctl daemon start`",
+			})
+			return
+		}
+		defer store.Close()
+		sessions, err := store.Sessions(r.Context(), queryLimit(r, 50))
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"sessions": sessions})
+	})
+	mux.HandleFunc("/control/api/session", func(w http.ResponseWriter, r *http.Request) {
+		id := r.URL.Query().Get("id")
+		if id == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "id is required"})
+			return
+		}
+		store, err := control.OpenReadOnly(control.DefaultPath(root))
+		if err != nil {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": "control database not available"})
+			return
+		}
+		defer store.Close()
+		session, err := store.Session(r.Context(), id)
+		if err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				writeJSON(w, http.StatusNotFound, map[string]any{"error": "session not found"})
+			} else {
+				writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "session lookup failed"})
+			}
+			return
+		}
+		events, eventsErr := store.Events(r.Context(), id, queryLimit(r, 50))
+		outputs, outputsErr := store.Outputs(r.Context(), id, 10)
+		payload := map[string]any{"session": session, "events": events, "outputs": outputs}
+		if eventsErr != nil || outputsErr != nil {
+			payload["errors"] = strings.TrimSpace(fmt.Sprintf("%v %v", eventsErr, outputsErr))
+		}
+		writeJSON(w, http.StatusOK, payload)
+	})
+	mux.HandleFunc("/plan", func(w http.ResponseWriter, r *http.Request) {
+		page, err := staticFS.ReadFile("static/plan.html")
+		if err != nil {
+			http.Error(w, "static page missing", http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, _ = w.Write(page)
+	})
+	mux.HandleFunc("/plan/api/latest", func(w http.ResponseWriter, r *http.Request) {
+		plan, ok := plans.Latest(root)
+		if !ok {
+			writeJSON(w, http.StatusOK, map[string]any{"plan": nil, "approval": nil})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"plan":     plan,
+			"approval": readApproval(root, plan.Slug),
+		})
+	})
+	mux.HandleFunc("/plan/decision", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"error": "method not allowed"})
+			return
+		}
+		if !authorizeMutation(w, r, token) {
+			return
+		}
+		decisionMu.Lock()
+		defer decisionMu.Unlock()
+		var body struct {
+			Slug     string `json:"slug"`
+			Revision int    `json:"revision"`
+			Decision string `json:"decision"`
+			Note     string `json:"note"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid json: " + err.Error()})
+			return
+		}
+		if body.Decision != "approve" && body.Decision != "request_changes" {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "decision must be approve or request_changes"})
+			return
+		}
+		plan, ok := plans.Latest(root)
+		if body.Slug != "" {
+			loaded, err := plans.Load(root, body.Slug)
+			if err != nil {
+				writeJSON(w, http.StatusNotFound, map[string]any{"error": "plan not found"})
+				return
+			}
+			plan, ok = loaded, true
+		}
+		if !ok {
+			writeJSON(w, http.StatusNotFound, map[string]any{"error": "no plan to review"})
+			return
+		}
+		if body.Revision > 0 && body.Revision != plan.Revision {
+			writeJSON(w, http.StatusConflict, map[string]any{"error": "plan revision changed; reload before deciding", "revision": plan.Revision})
+			return
+		}
+		record, err := writeApproval(root, plan.Slug, plan.Revision, body.Decision, body.Note)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"approval": record})
 	})
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{
@@ -198,12 +363,7 @@ func main() {
 		case http.MethodGet:
 			writeJSON(w, http.StatusOK, mgr.Routing())
 		case http.MethodPost:
-			if !originAllowed(r) {
-				writeJSON(w, http.StatusForbidden, map[string]any{"error": "forbidden origin"})
-				return
-			}
-			if token != "" && r.Header.Get("X-HackathonKit-Token") != token {
-				writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "missing or invalid X-HackathonKit-Token"})
+			if !authorizeMutation(w, r, token) {
 				return
 			}
 			var body struct {
@@ -268,17 +428,50 @@ func main() {
 		fmt.Fprintf(w, "hackathonkit_routing_mode{mode=%q} 1\n", mgr.Routing().Mode)
 	})
 
-	addr := net.JoinHostPort(host, port)
-	server := &http.Server{
-		Addr:              addr,
-		Handler:           withCORS(mux),
-		ReadHeaderTimeout: 5 * time.Second,
+	return withCORS(mux)
+}
+
+type planApproval struct {
+	Slug      string    `json:"slug"`
+	Revision  int       `json:"revision"`
+	Decision  string    `json:"decision"`
+	Note      string    `json:"note,omitempty"`
+	DecidedAt time.Time `json:"decided_at"`
+}
+
+func approvalPath(root, slug string) string {
+	return filepath.Join(plans.Dir(root), slug+".approval.json")
+}
+
+func readApproval(root, slug string) *planApproval {
+	data, err := os.ReadFile(approvalPath(root, slug))
+	if err != nil {
+		return nil
 	}
-	observability.Log(logger, "info", "demo_api_start", map[string]any{"addr": addr, "root": root})
-	if err := server.ListenAndServe(); err != nil {
-		fmt.Fprintln(os.Stderr, "demo-api error:", err)
-		os.Exit(1)
+	var record planApproval
+	if json.Unmarshal(data, &record) != nil {
+		return nil
 	}
+	return &record
+}
+
+func writeApproval(root, slug string, revision int, decision, note string) (planApproval, error) {
+	record := planApproval{
+		Slug:      slug,
+		Revision:  revision,
+		Decision:  decision,
+		Note:      note,
+		DecidedAt: time.Now().UTC(),
+	}
+	data, err := json.MarshalIndent(record, "", "  ")
+	if err != nil {
+		return record, err
+	}
+	path := approvalPath(root, slug)
+	if err := atomicfile.Write(path, append(data, '\n'), atomicfile.ModeState); err != nil {
+		return record, err
+	}
+	return record, nil
 }
 
 func tail(logger *log.Logger, root, rel string, limit int) []json.RawMessage {
@@ -338,6 +531,27 @@ func listFiles(mgr *config.Manager, relDir string) ([]fileInfo, error) {
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Path < out[j].Path })
 	return out, err
+}
+
+// authorizeMutation guards state-changing endpoints. With a configured token
+// the header must match (constant time); without one, browser-driven mutations
+// still require a loopback Origin so a random page cannot POST to the daemon.
+func authorizeMutation(w http.ResponseWriter, r *http.Request, token string) bool {
+	if !originAllowed(r) {
+		writeJSON(w, http.StatusForbidden, map[string]any{"error": "forbidden origin"})
+		return false
+	}
+	if token == "" {
+		// Origin is client-controlled and spoofable by any local process, so it
+		// is not sufficient authorization for a mutation.
+		writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "mutations require HACKATHONKIT_DEMO_TOKEN to be set (and sent as X-HackathonKit-Token)"})
+		return false
+	}
+	if subtle.ConstantTimeCompare([]byte(r.Header.Get("X-HackathonKit-Token")), []byte(token)) != 1 {
+		writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "missing or invalid X-HackathonKit-Token"})
+		return false
+	}
+	return true
 }
 
 func originAllowed(r *http.Request) bool {

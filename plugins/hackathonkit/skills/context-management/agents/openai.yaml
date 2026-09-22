@@ -1,0 +1,4 @@
+interface:
+  display_name: "Context Management"
+  short_description: "Keep the context window lean and offload long results to artifacts."
+  default_prompt: "Use $context-management to measure and trim the context budget."

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Hackathon Agent Kit TDD Workflow"
+  short_description: "Red, green, refactor with gate evidence on the plan stage."
+  default_prompt: "Use $tdd-workflow to implement the next stage test-first."

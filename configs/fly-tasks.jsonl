@@ -1,0 +1,12 @@
+# Fly router A/B task suite: one JSON object per line.
+# task: natural-language request; expected: capabilities that must be in top-k.
+{"task":"Find anomalies in equipment telemetry csv with timestamps","expected":["timeseries.analyze","timeseries.detect_anomalies"],"metadata":{"types":["csv"],"has_timestamp":true}}
+{"task":"Extract text from the scanned contract pdf and summarize obligations","expected":["documents.ingest","documents.extract"],"metadata":{"types":["pdf"]}}
+{"task":"Profile the sales xlsx workbook and show correlations between columns","expected":["data.inspect","data.analyze"],"metadata":{"types":["xlsx"]}}
+{"task":"Search the policy corpus for the answer to a regulatory question with citations","expected":["knowledge.search"],"metadata":{}}
+{"task":"Transcribe the Kazakh interview audio and build subtitles","expected":["audio.transcribe"],"metadata":{"types":["audio"]}}
+{"task":"Analyze this product screenshot and describe the visible UI issues","expected":["vision.analyze"],"metadata":{"types":["image"]}}
+{"task":"Classify these support logs as spam or fraud","expected":["classification.classify"],"metadata":{"types":["log"]}}
+{"task":"Build a report from the analysis results with charts","expected":["reports.create"],"metadata":{}}
+{"task":"Index the contract documents and search them for deadlines","expected":["knowledge.index","knowledge.search"],"metadata":{"types":["docx"]}}
+{"task":"Detect anomalies and plot the sensor trend over time","expected":["timeseries.detect_anomalies","charts.create"],"metadata":{"types":["csv"],"has_timestamp":true,"rows":72}}

@@ -1,0 +1,22 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "instructions": [
+    "AGENTS.md"
+  ],
+  "mcp": {
+    "hackathonkit": {
+      "type": "local",
+      "command": [
+        "docker",
+        "compose",
+        "-f",
+        "docker-compose.yml",
+        "run",
+        "--rm",
+        "-T",
+        "hackathonkit-mcp"
+      ],
+      "enabled": true
+    }
+  }
+}

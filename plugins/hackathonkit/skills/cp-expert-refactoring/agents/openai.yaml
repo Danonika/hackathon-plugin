@@ -1,7 +1,7 @@
 interface:
   display_name: "Hackathon Agent Kit CP Expert"
-  short_description: "Algorithmic and performance review of hot paths."
-  default_prompt: "Use $cp-expert-refactoring to review the current snapshot."
+  short_description: "Review and fix hot-path complexity and performance in Go."
+  default_prompt: "Use $cp-expert-refactoring to review the hot paths in this snapshot."
 
 policy:
   allow_implicit_invocation: false

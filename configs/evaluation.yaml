@@ -5,7 +5,11 @@ evaluation:
   max_technical_iterations: 2
   max_judge_rounds: 2
 
-  judges: 10
+  judges: 3
+  # Regulation 9.5: a project needs at least three valid scores from
+  # non-conflicted jury members. Dropped or conflicted reports are replaced by
+  # substitute passes, never counted as zero.
+  min_valid_judges: 3
   roast_agents: 3
 
   parallel_judges: true

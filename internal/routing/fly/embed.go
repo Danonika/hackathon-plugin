@@ -9,8 +9,10 @@ import (
 	"log"
 	"math"
 	"os"
-	"path/filepath"
 	"sort"
+	"time"
+
+	"hackathonkit.local/agentkit/internal/atomicfile"
 )
 
 type Embedder interface {
@@ -63,7 +65,37 @@ var categoryExemplars = map[string][]string{
 type embeddingCache struct {
 	Model     string               `json:"model"`
 	Hash      string               `json:"hash"`
+	Dims      int                  `json:"dims,omitempty"`
 	Centroids map[string][]float64 `json:"centroids"`
+}
+
+// centroidDims returns the vector dimension of the cached centroids (0 if the
+// map is empty or ragged).
+func centroidDims(centroids map[string][]float64) int {
+	dims := 0
+	for _, vec := range centroids {
+		if dims == 0 {
+			dims = len(vec)
+		} else if len(vec) != dims {
+			return 0
+		}
+	}
+	return dims
+}
+
+// cacheDimsMatch rejects a cache whose recorded dimension does not match the
+// centroids it carries (e.g. a hash-encoder fallback persisted under the
+// primary model's tag).
+func cacheDimsMatch(cache embeddingCache) bool {
+	actual := centroidDims(cache.Centroids)
+	if actual == 0 {
+		return false
+	}
+	if cache.Dims == 0 {
+		// Older cache without a recorded dimension: accept but treat as unknown.
+		return true
+	}
+	return cache.Dims == actual
 }
 
 func exemplarHash() string {
@@ -83,14 +115,28 @@ func exemplarHash() string {
 }
 
 func (r *Router) embedTask(ctx context.Context, task string) ([]float64, bool) {
+	// One-entry cache: Recommend embeds the same task for the embedding, kNN
+	// and mushroom-body signals, which would otherwise be three provider calls.
+	r.embedCacheMu.Lock()
+	if r.embedCacheSet && r.embedCacheTask == task {
+		vec, ok := r.embedCacheVec, r.embedCacheOK
+		r.embedCacheMu.Unlock()
+		return vec, ok
+	}
+	r.embedCacheMu.Unlock()
 	if r.embedder == nil {
 		return nil, false
 	}
 	vectors, err := r.embedder.Embed(ctx, []string{task})
-	if err != nil || len(vectors) != 1 {
-		return nil, false
+	ok := err == nil && len(vectors) == 1
+	var vec []float64
+	if ok {
+		vec = normalizeVector(vectors[0])
 	}
-	return normalizeVector(vectors[0]), true
+	r.embedCacheMu.Lock()
+	r.embedCacheTask, r.embedCacheVec, r.embedCacheOK, r.embedCacheSet = task, vec, ok, true
+	r.embedCacheMu.Unlock()
+	return vec, ok
 }
 
 func (r *Router) embeddingCategoryScores(ctx context.Context, task string) (map[string]float64, bool) {
@@ -104,6 +150,11 @@ func (r *Router) embeddingCategoryScores(ctx context.Context, task string) (map[
 	}
 	sims := map[string]float64{}
 	for cat, centroid := range centroids {
+		if len(centroid) != len(taskVec) {
+			// Stale cache from another embedding model: skip instead of
+			// silently comparing truncated vectors.
+			continue
+		}
 		sims[cat] = cosine(taskVec, centroid)
 	}
 	if len(sims) == 0 {
@@ -123,12 +174,25 @@ func (r *Router) embeddingCategoryScores(ctx context.Context, task string) (map[
 			maxSim = s
 		}
 	}
+	if len(sims) == 1 {
+		for cat, s := range sims {
+			absolute := (s - embFloor) / (embCeil - embFloor)
+			if absolute < 0 {
+				absolute = 0
+			}
+			if absolute > 1 {
+				absolute = 1
+			}
+			return map[string]float64{cat: absolute}, true
+		}
+	}
+	if maxSim-minSim < 1e-9 {
+		// All similarities are (nearly) equal: no usable ranking signal.
+		return nil, false
+	}
 	out := map[string]float64{}
 	for cat, s := range sims {
-		rank := 0.0
-		if maxSim-minSim >= 1e-9 {
-			rank = (s - minSim) / (maxSim - minSim)
-		}
+		rank := (s - minSim) / (maxSim - minSim)
 		absolute := (s - embFloor) / (embCeil - embFloor)
 		if absolute < 0 {
 			absolute = 0
@@ -153,6 +217,12 @@ func (r *Router) ensureCentroids(ctx context.Context) (map[string][]float64, boo
 		cached := r.centroids
 		r.mu.Unlock()
 		return cached, true
+	}
+	// Negative cache: do not re-run the full exemplar batch on every call while
+	// the embedder is failing.
+	if !r.centroidFailAt.IsZero() && time.Since(r.centroidFailAt) < 30*time.Second {
+		r.mu.Unlock()
+		return nil, false
 	}
 	if r.building != nil {
 		wait := r.building
@@ -185,6 +255,9 @@ func (r *Router) ensureCentroids(ctx context.Context) (map[string][]float64, boo
 	r.mu.Lock()
 	if ok {
 		r.centroids = centroids
+		r.centroidFailAt = time.Time{}
+	} else {
+		r.centroidFailAt = time.Now()
 	}
 	close(r.building)
 	r.building = nil
@@ -206,7 +279,8 @@ func (r *Router) buildCentroids(ctx context.Context) (map[string][]float64, bool
 			if json.Unmarshal(data, &cache) == nil &&
 				cache.Hash == hash &&
 				cache.Model == r.modelTag &&
-				len(cache.Centroids) > 0 {
+				len(cache.Centroids) > 0 &&
+				cacheDimsMatch(cache) {
 				return cache.Centroids, true
 			}
 		}
@@ -269,7 +343,7 @@ func (r *Router) buildCentroids(ctx context.Context) (map[string][]float64, bool
 	}
 
 	if r.cachePath != "" {
-		cache := embeddingCache{Model: r.modelTag, Hash: hash, Centroids: centroids}
+		cache := embeddingCache{Model: r.modelTag, Hash: hash, Dims: centroidDims(centroids), Centroids: centroids}
 		if data, err := json.Marshal(cache); err == nil {
 			writeFileAtomic(r.cachePath, data)
 		}
@@ -278,34 +352,10 @@ func (r *Router) buildCentroids(ctx context.Context) (map[string][]float64, bool
 }
 
 // writeFileAtomic writes data via a unique temp file + rename so concurrent
-// writers cannot leave a truncated or interleaved cache behind.
+// writers cannot leave a truncated or interleaved cache behind. Cache writes
+// are best-effort: a failed write is retried on the next save.
 func writeFileAtomic(path string, data []byte) {
-	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return
-	}
-	tmp, err := os.CreateTemp(dir, "fly-embeddings-*.tmp")
-	if err != nil {
-		return
-	}
-	tmpName := tmp.Name()
-	if _, err := tmp.Write(data); err != nil {
-		tmp.Close()
-		os.Remove(tmpName)
-		return
-	}
-	if err := tmp.Chmod(0o644); err != nil {
-		tmp.Close()
-		os.Remove(tmpName)
-		return
-	}
-	if err := tmp.Close(); err != nil {
-		os.Remove(tmpName)
-		return
-	}
-	if err := os.Rename(tmpName, path); err != nil {
-		os.Remove(tmpName)
-	}
+	_ = atomicfile.Write(path, data, atomicfile.ModeContent)
 }
 
 func normalizeVector(v []float64) []float64 {
@@ -315,7 +365,8 @@ func normalizeVector(v []float64) []float64 {
 	}
 	norm = math.Sqrt(norm)
 	if norm == 0 {
-		return v
+		// Return a copy: callers may store this slice and must not alias input.
+		return append([]float64(nil), v...)
 	}
 	out := make([]float64, len(v))
 	for i, x := range v {
@@ -325,13 +376,11 @@ func normalizeVector(v []float64) []float64 {
 }
 
 func cosine(a, b []float64) float64 {
-	n := len(a)
-	if len(b) < n {
-		n = len(b)
-	}
-	if n == 0 {
+	if len(a) != len(b) || len(a) == 0 {
+		// Mismatched dimensions are not comparable; never truncate silently.
 		return 0
 	}
+	n := len(a)
 	sum := 0.0
 	for i := 0; i < n; i++ {
 		sum += a[i] * b[i]

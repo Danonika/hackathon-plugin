@@ -1,7 +1,25 @@
 {
   "name": "hackathonkit",
-  "version": "0.4.1",
-  "description": "Hackathon Agent Kit: local MCP capability layer with Normal/Fly routing, document, knowledge, data, timeseries, media and report capabilities.",
+  "version": "0.16.28",
+  "description": "Hackathon Agent Kit: local MCP capability layer with Normal/Fly routing, document, knowledge, data, timeseries, media, report, evaluation and learning capabilities.",
   "skills": "./skills/",
-  "mcpServers": "./.mcp.json"
+  "mcpServers": "./.mcp.json",
+  "hooks": "./hooks/codex-hooks.json",
+  "interface": {
+    "displayName": "Hackathon Agent Kit",
+    "shortDescription": "MCP capabilities, skills, evaluation and learning for hackathon builds.",
+    "longDescription": "Hackathon Agent Kit packages a typed local MCP server, 29 standard-compliant skills, the experimental Fly router, a deterministic evaluation subsystem, durable learnings, session hooks and a staged build planner for hackathon teams working in Codex.",
+    "developerName": "Hackathon Agent Kit",
+    "category": "Developer Tools",
+    "capabilities": [
+      "Interactive",
+      "Read",
+      "Write"
+    ],
+    "defaultPrompt": [
+      "Use $task-router to select capabilities for this task.",
+      "Use $build-planner to plan this build in stages with gates.",
+      "Use $judge to score the frozen snapshot with the official rubric."
+    ]
+  }
 }

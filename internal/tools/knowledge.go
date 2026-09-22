@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 	"unicode"
+	"unicode/utf8"
 
 	"hackathonkit.local/agentkit/internal/mcp"
 )
@@ -39,7 +40,7 @@ func tokenize(text string) []string {
 	var out []string
 	var cur strings.Builder
 	flush := func() {
-		if cur.Len() >= 2 {
+		if utf8.RuneCountInString(cur.String()) >= 2 {
 			token := cur.String()
 			if !stopwords[token] {
 				out = append(out, token)
@@ -59,11 +60,15 @@ func tokenize(text string) []string {
 }
 
 func chunkText(text string, size, overlap int) []string {
-	if size <= 0 {
+	if size <= 0 || size > 20000 {
 		size = 800
 	}
+	// Keep a real stride: an overlap of size-1 would make step 1 and turn
+	// chunking into O(n^2).
 	if overlap < 0 || overlap >= size {
 		overlap = size / 8
+	} else if overlap > size/2 {
+		overlap = size / 2
 	}
 	r := []rune(text)
 	if len(r) == 0 {
@@ -125,7 +130,17 @@ func registerKnowledge(reg *mcp.Registry, d Deps) {
 			} else {
 				return mcp.Fail(trace(ctx), "either path or artifact_id is required"), nil
 			}
-			chunks := chunkText(text, argInt(args, "chunk_chars", 800), argInt(args, "overlap", 100))
+			chunkSize := argInt(args, "chunk_chars", 800)
+			if chunkSize <= 0 || chunkSize > 20000 {
+				chunkSize = 800
+			}
+			chunkOverlap := argInt(args, "overlap", 100)
+			if chunkOverlap < 0 || chunkOverlap >= chunkSize {
+				chunkOverlap = chunkSize / 8
+			} else if chunkOverlap > chunkSize/2 {
+				chunkOverlap = chunkSize / 2
+			}
+			chunks := chunkText(text, chunkSize, chunkOverlap)
 			if len(chunks) == 0 {
 				return mcp.Fail(trace(ctx), "no text to index"), nil
 			}
@@ -192,6 +207,7 @@ func registerKnowledge(reg *mcp.Registry, d Deps) {
 				textChars = 300
 			}
 			corpus := argString(args, "corpus")
+			warnings := []string{}
 			allowed := map[string]bool{}
 			for _, id := range argStringSlice(args, "index_ids") {
 				allowed[id] = true
@@ -218,15 +234,18 @@ func registerKnowledge(reg *mcp.Registry, d Deps) {
 				}
 				raw, err := d.Store.ReadIndex(name)
 				if err != nil {
+					warnings = append(warnings, "index "+name+" is unreadable and was skipped")
 					continue
 				}
 				var doc indexDoc
-				if json.Unmarshal(raw, &doc) == nil {
-					if corpus != "" && doc.Corpus != corpus {
-						continue
-					}
-					docs = append(docs, loadedDoc{ID: name, Doc: doc})
+				if json.Unmarshal(raw, &doc) != nil {
+					warnings = append(warnings, "index "+name+" is corrupt and was skipped")
+					continue
 				}
+				if corpus != "" && doc.Corpus != corpus {
+					continue
+				}
+				docs = append(docs, loadedDoc{ID: name, Doc: doc})
 			}
 			if len(docs) == 0 {
 				return mcp.Partial(trace(ctx), map[string]any{"hits": []any{}, "index_count": 0},
@@ -281,6 +300,7 @@ func registerKnowledge(reg *mcp.Registry, d Deps) {
 				}
 			}
 			sort.Slice(hits, func(i, j int) bool { return hits[i].Score > hits[j].Score })
+			matchedTotal := len(hits)
 			if len(hits) > limit {
 				hits = hits[:limit]
 			}
@@ -288,7 +308,7 @@ func registerKnowledge(reg *mcp.Registry, d Deps) {
 				"hits":         hits,
 				"index_count":  len(docs),
 				"total_chunks": totalChunks,
-				"matched":      len(hits),
+				"matched":      matchedTotal,
 			})
 			for _, h := range hits {
 				artifactID := h.ArtifactID
@@ -302,6 +322,9 @@ func registerKnowledge(reg *mcp.Registry, d Deps) {
 			}
 			if len(hits) == 0 {
 				env = env.WithWarnings("no matches for the query")
+			}
+			if len(warnings) > 0 {
+				env = env.WithWarnings(warnings...)
 			}
 			return env, nil
 		},

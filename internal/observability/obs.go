@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log"
 	"os"
@@ -47,6 +48,10 @@ func (m *Metrics) Inc(name string) {
 }
 
 func (m *Metrics) Add(name string, delta int64) {
+	if v, ok := m.counters.Load(name); ok {
+		v.(*atomic.Int64).Add(delta)
+		return
+	}
 	v, _ := m.counters.LoadOrStore(name, new(atomic.Int64))
 	v.(*atomic.Int64).Add(delta)
 }
@@ -75,16 +80,28 @@ func Log(l *log.Logger, level, msg string, fields map[string]any) {
 	if l == nil {
 		return
 	}
-	b, err := json.Marshal(Entry{
+	entry := Entry{
 		Time:   time.Now().UTC().Format(time.RFC3339Nano),
 		Level:  level,
 		Msg:    msg,
 		Fields: fields,
-	})
-	if err != nil {
-		return
 	}
-	l.Println(string(b))
+	b, err := json.Marshal(entry)
+	if err != nil {
+		// Never drop the log line because a field is not marshalable.
+		fallback, ferr := json.Marshal(Entry{Time: entry.Time, Level: level, Msg: msg, Fields: map[string]any{"log_error": err.Error()}})
+		if ferr != nil {
+			return
+		}
+		b = fallback
+	}
+	if err := l.Output(2, string(b)); err != nil {
+		// A partial write can leave a record without a trailing newline,
+		// concatenating the next record onto it; close the line through the
+		// logger so its mutex serializes the write.
+		_ = l.Output(2, "")
+		fmt.Fprintf(os.Stderr, "observability: log write failed: %v\n", err)
+	}
 }
 
 func AppendJSONL(path string, entry any) error {
@@ -112,8 +129,10 @@ func AppendJSONL(path string, entry any) error {
 // are not complete JSON (a concurrent writer may be mid-append), and copies
 // every returned line so the backing buffer can be garbage collected.
 func TailJSONL(path string, limit int) ([]json.RawMessage, error) {
-	if limit <= 0 || limit > 1000 {
+	if limit <= 0 {
 		limit = 50
+	} else if limit > 1000 {
+		limit = 1000
 	}
 	f, err := os.Open(path)
 	if err != nil {
@@ -146,8 +165,19 @@ func TailJSONL(path string, limit int) ([]json.RawMessage, error) {
 			break
 		}
 		buf = append(tmp[:n], buf...)
+		// Enough newlines buffered means the requested tail is complete; the
+		// maxTailBytes cap below only bounds memory for pathological files.
 		if bytes.Count(buf, []byte{'\n'}) > limit+1 {
 			break
+		}
+	}
+	// When the read stopped before offset 0 the buffer starts mid-record; drop
+	// that partial first line.
+	if offset > 0 {
+		if idx := bytes.IndexByte(buf, '\n'); idx >= 0 {
+			buf = buf[idx+1:]
+		} else {
+			buf = nil
 		}
 	}
 	lines := []json.RawMessage{}

@@ -1,0 +1,151 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Hackathon Agent Kit plan review</title>
+<style>
+  :root { color-scheme: dark; }
+  body { margin: 0; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; background: #0f1115; color: #e6e6e6; }
+  header { padding: 16px 24px; border-bottom: 1px solid #23262d; display: flex; gap: 16px; align-items: baseline; }
+  h1 { font-size: 18px; margin: 0; color: #ff7ac6; }
+  a { color: #7ac6ff; text-decoration: none; }
+  main { padding: 16px 24px; max-width: 900px; }
+  table { border-collapse: collapse; width: 100%; font-size: 13px; margin: 12px 0; }
+  th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid #23262d; }
+  th { color: #8b93a1; font-weight: 500; }
+  .status-todo { color: #8b93a1; }
+  .status-doing { color: #fbbf24; }
+  .status-done { color: #4ade80; }
+  .status-failed { color: #f87171; }
+  .status-cut { color: #a78bfa; }
+  button { font: inherit; padding: 8px 14px; border-radius: 6px; border: 1px solid #3b4150; background: #1d2230; color: #e6e6e6; cursor: pointer; }
+  button.approve { border-color: #2f6b45; }
+  button.changes { border-color: #7a4a4a; }
+  textarea { width: 100%; min-height: 60px; background: #14171d; color: #e6e6e6; border: 1px solid #23262d; border-radius: 6px; padding: 8px; font: inherit; }
+  .muted { color: #8b93a1; }
+  .banner { margin-top: 12px; padding: 10px; border-radius: 6px; display: none; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Plan review</h1>
+  <a href="/">dashboard</a>
+  <a href="/control">control</a>
+</header>
+<main>
+  <div id="meta" class="muted">loading...</div>
+  <table>
+    <thead><tr><th>stage</th><th>goal</th><th>status</th><th>evidence</th></tr></thead>
+    <tbody id="stages"></tbody>
+  </table>
+  <div id="approval" class="muted"></div>
+  <textarea id="note" placeholder="Note for request changes (optional for approve)"></textarea>
+  <p><input id="token" type="password" placeholder="X-HackathonKit-Token (when configured)" autocomplete="off" style="width:100%;padding:6px"></p>
+  <p>
+    <button class="approve" onclick="decide('approve')">Approve plan</button>
+    <button class="changes" onclick="decide('request_changes')">Request changes</button>
+  </p>
+  <div id="banner" class="banner"></div>
+</main>
+<script>
+let TOKEN = sessionStorage.getItem("hackathonkitToken") || "";
+let current = null;
+let reviewed = null;
+
+function esc(v) { return String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])); }
+
+let planLoading = false;
+let planPending = false;
+async function load() {
+  if (planLoading) { planPending = true; return; }
+  planLoading = true;
+  try {
+  const res = await fetch("/plan/api/latest");
+  if (!res.ok) throw new Error("plan API -> " + res.status);
+  const data = await res.json();
+  const meta = document.getElementById("meta");
+  const tbody = document.getElementById("stages");
+  tbody.innerHTML = "";
+  if (!data.plan) {
+    meta.textContent = "No plan yet. Create one with the plan.create MCP tool.";
+    document.getElementById("approval").textContent = "";
+    current = null;
+    reviewed = null;
+    return;
+  }
+  current = data.plan;
+  // Snapshot the exact revision being reviewed; decide() sends this, not
+  // whatever a later poll may have swapped in.
+  reviewed = { slug: data.plan.slug, revision: data.plan.revision };
+  meta.textContent = "plan " + data.plan.slug + " r" + data.plan.revision + (data.plan.task ? " - " + data.plan.task : "");
+  for (const s of data.plan.stages || []) {
+    const tr = document.createElement("tr");
+    tr.innerHTML = "<td>" + esc(s.id) + "</td><td>" + esc(s.goal) + '</td><td class="status-' + esc(s.status) + '">' + esc(s.status) + "</td><td>" + esc((s.evidence || []).join(", ")) + "</td>";
+    tbody.appendChild(tr);
+  }
+  document.getElementById("approval").textContent = data.approval
+    ? "last decision: " + data.approval.decision + " on r" + data.approval.revision + (data.approval.note ? " - " + data.approval.note : "")
+    : "no decision recorded";
+  } catch (err) {
+    const banner = document.getElementById("banner");
+    banner.style.display = "block";
+    banner.style.background = "#2a1b1b";
+    banner.textContent = "plan load failed: " + err.message;
+  } finally {
+    planLoading = false;
+    if (planPending) { planPending = false; load(); }
+  }
+}
+
+async function decide(decision) {
+  if (!reviewed) return;
+  const banner = document.getElementById("banner");
+  const field = document.getElementById("token");
+  TOKEN = (field && field.value.trim()) || TOKEN;
+  if (TOKEN) sessionStorage.setItem("hackathonkitToken", TOKEN);
+  const headers = { "Content-Type": "application/json" };
+  if (TOKEN) headers["X-HackathonKit-Token"] = TOKEN;
+  const buttons = document.querySelectorAll("button");
+  buttons.forEach((b) => { b.disabled = true; });
+  try {
+    const res = await fetch("/plan/decision", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ slug: reviewed.slug, revision: reviewed.revision, decision, note: document.getElementById("note").value })
+    });
+    let data = {};
+    try {
+      data = await res.json();
+    } catch (_) {
+      data = { error: res.statusText };
+    }
+    banner.style.display = "block";
+    if (!res.ok) {
+      banner.style.background = "#2a1b1b";
+      banner.textContent = (data.error || res.statusText) + (res.status === 401 ? " - enter the demo token above" : "");
+      return;
+    }
+    if (!data.approval || typeof data.approval.decision !== "string") {
+      banner.style.background = "#2a1b1b";
+      banner.textContent = "unexpected response from /plan/decision";
+      return;
+    }
+    banner.style.background = "#1b2a20";
+    banner.textContent = "recorded: " + data.approval.decision + " (r" + data.approval.revision + ")";
+    load();
+  } catch (err) {
+    banner.style.display = "block";
+    banner.style.background = "#2a1b1b";
+    banner.textContent = "request failed: " + err.message;
+  } finally {
+    buttons.forEach((b) => { b.disabled = false; });
+  }
+}
+
+document.getElementById("token").value = TOKEN;
+load();
+setInterval(load, 5000);
+</script>
+</body>
+</html>

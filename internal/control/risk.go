@@ -1,0 +1,128 @@
+package control
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"log"
+	"math"
+	"regexp"
+	"strings"
+	"time"
+)
+
+const (
+	riskToolError    = 8.0
+	riskToolErrorCap = 40.0
+	riskPanic        = 15.0
+	riskPanicCap     = 30.0
+	riskRollback     = 25.0
+	riskRollbackCap  = 50.0
+	riskStalled      = 10.0
+	stallWindow      = 2 * time.Hour
+)
+
+// EvaluateRisk is deterministic: the same session and events always produce
+// the same score and reasons.
+func EvaluateRisk(sess Session, events []Event, now time.Time) (float64, []string) {
+	score := 0.0
+	reasons := []string{}
+
+	toolErrors := 0
+	panics := 0
+	rollbacks := 0
+	for _, ev := range events {
+		switch ev.Type {
+		case "mcp_call":
+			if strings.EqualFold(ev.Status, "error") {
+				toolErrors++
+			}
+			if payloadHasPanic(ev.Payload) {
+				panics++
+			}
+		case "eval_decision":
+			if decision, _ := ev.Payload["decision"].(string); strings.EqualFold(strings.TrimSpace(decision), "rollback") {
+				rollbacks++
+			}
+		}
+	}
+	if toolErrors > 0 {
+		score += math.Min(riskToolErrorCap, float64(toolErrors)*riskToolError)
+		reasons = append(reasons, fmt.Sprintf("%d failed tool call(s)", toolErrors))
+	}
+	if panics > 0 {
+		score += math.Min(riskPanicCap, float64(panics)*riskPanic)
+		reasons = append(reasons, fmt.Sprintf("%d tool panic(s)", panics))
+	}
+	if rollbacks > 0 {
+		score += math.Min(riskRollbackCap, float64(rollbacks)*riskRollback)
+		reasons = append(reasons, fmt.Sprintf("%d eval rollback(s)", rollbacks))
+	}
+	if sess.Status == "active" && !sess.UpdatedAt.IsZero() && now.Sub(sess.UpdatedAt) > stallWindow {
+		score += riskStalled
+		reasons = append(reasons, "session stalled without events")
+	}
+	if score > 100 {
+		score = 100
+	}
+	return math.Round(score*100) / 100, reasons
+}
+
+var panicWord = regexp.MustCompile(`(?i)(^|[^a-z])panic`)
+
+func payloadHasPanic(payload map[string]any) bool {
+	if len(payload) == 0 {
+		return false
+	}
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return false
+	}
+	text := strings.ToLower(string(data))
+	// "no panic observed" and similar prose must not count as a panic event.
+	// Strip common negated prose before matching.
+	text = regexp.MustCompile(`(?i)no\s+(errors?\s+or\s+)?panic`).ReplaceAllString(text, "")
+	return panicWord.MatchString(text)
+}
+
+// RecomputeRisk refreshes risk for every session, attributing global MCP call
+// events to sessions by their time window.
+// riskScanLimit caps how many rows a single risk pass loads.
+const riskScanLimit = 200000
+
+func (s *Store) RecomputeRisk(ctx context.Context) (int, error) {
+	sessions, err := s.Sessions(ctx, riskScanLimit)
+	if err != nil {
+		return 0, err
+	}
+	if len(sessions) == riskScanLimit {
+		log.Printf("control: risk scan truncated at %d sessions; older sessions were not rescored", riskScanLimit)
+	}
+	now := time.Now().UTC()
+	updated := 0
+	for _, sess := range sessions {
+		events, err := s.Events(ctx, sess.ID, riskScanLimit)
+		if err != nil {
+			return updated, err
+		}
+		// A session's window ends at its own end (or now); global events after
+		// that must not be attributed to it.
+		end := now
+		if sess.EndedAt != nil && sess.EndedAt.Before(end) {
+			end = *sess.EndedAt
+		}
+		globals, err := s.EventsBetween(ctx, sess.CreatedAt, end, riskScanLimit)
+		if err != nil {
+			return updated, err
+		}
+		combined := append(append([]Event{}, events...), globals...)
+		score, reasons := EvaluateRisk(sess, combined, now)
+		if score != sess.RiskScore || strings.Join(reasons, "|") != strings.Join(sess.RiskReasons, "|") {
+			if err := s.UpdateRisk(ctx, sess.ID, score, reasons); err != nil {
+				return updated, err
+			}
+			updated++
+		}
+	}
+	return updated, nil
+}

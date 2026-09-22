@@ -1,6 +1,7 @@
 package config
 
 import (
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -9,8 +10,12 @@ import (
 func LoadDotEnv(root string) {
 	data, err := os.ReadFile(filepath.Join(root, ".env"))
 	if err != nil {
+		if !os.IsNotExist(err) {
+			log.Printf("dotenv: cannot read %s: %v", filepath.Join(root, ".env"), err)
+		}
 		return
 	}
+	fileSet := map[string]bool{}
 	for _, line := range strings.Split(string(data), "\n") {
 		line = strings.TrimSpace(strings.TrimSuffix(line, "\r"))
 		line = strings.TrimSpace(strings.TrimPrefix(line, "export "))
@@ -27,16 +32,70 @@ func LoadDotEnv(root string) {
 		}
 		value := strings.TrimSpace(line[eq+1:])
 		value = unquoteEnvValue(value)
-		if os.Getenv(key) == "" {
-			_ = os.Setenv(key, value)
+		if !validEnvKey(key) {
+			log.Printf("dotenv: ignoring invalid key %q", key)
+			continue
+		}
+		// A key already present in the process environment wins, but a later
+		// duplicate line in this file overrides an earlier one.
+		if _, set := os.LookupEnv(key); !set || fileSet[key] {
+			if err := os.Setenv(key, value); err != nil {
+				log.Printf("dotenv: cannot set %s: %v", key, err)
+			} else {
+				fileSet[key] = true
+			}
 		}
 	}
 }
 
+func validEnvKey(key string) bool {
+	if key == "" {
+		return false
+	}
+	for i, r := range key {
+		if r == '_' || r >= 'A' && r <= 'Z' || r >= 'a' && r <= 'z' || (i > 0 && r >= '0' && r <= '9') {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
 func unquoteEnvValue(value string) string {
 	if len(value) > 0 {
-		if q := value[0]; q == '"' || q == '\'' {
-			if end := strings.IndexByte(value[1:], q); end >= 0 {
+		switch q := value[0]; q {
+		case '"':
+			var b strings.Builder
+			escaped := false
+			for _, r := range value[1:] {
+				if escaped {
+					switch r {
+					case 'n':
+						b.WriteByte('\n')
+					case 't':
+						b.WriteByte('\t')
+					case 'r':
+						b.WriteByte('\r')
+					default:
+						// Preserve the backslash for unrecognized escapes.
+						b.WriteByte('\\')
+						b.WriteRune(r)
+					}
+					escaped = false
+					continue
+				}
+				if r == '\\' {
+					escaped = true
+					continue
+				}
+				if r == '"' {
+					return b.String()
+				}
+				b.WriteRune(r)
+			}
+			return b.String()
+		case '\'':
+			if end := strings.IndexByte(value[1:], '\''); end >= 0 {
 				return value[1 : 1+end]
 			}
 			return value[1:]

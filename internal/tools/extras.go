@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -94,9 +95,9 @@ func registerClassification(reg *mcp.Registry, d Deps) {
 					scores[category] = round2(score)
 					sort.Strings(terms)
 					matched[category] = terms
-					if float64(hits) > bestScore {
+					if score > bestScore {
 						best = category
-						bestScore = float64(hits)
+						bestScore = score
 					}
 				}
 			}
@@ -132,7 +133,7 @@ func registerCharts(reg *mcp.Registry, d Deps) {
 		},
 		[]string{"series"},
 		func(ctx context.Context, args map[string]any) (any, error) {
-			series, err := parseChartSeries(args)
+			series, warnings, err := parseChartSeries(args)
 			if err != nil {
 				return mcp.Fail(trace(ctx), err.Error()), nil
 			}
@@ -140,12 +141,19 @@ func registerCharts(reg *mcp.Registry, d Deps) {
 			if kind != "bar" {
 				kind = "line"
 			}
+			if kind == "bar" && len(series) > 1 {
+				warnings = append(warnings, "bar charts draw only the first series")
+			}
 			title := argString(args, "title")
 			if title == "" {
 				title = "Hackathon Agent Kit chart"
 			}
 			svg := renderChartSVG(title, kind, series)
-			stamp := time.Now().UTC().Format("20060102-150405")
+			drawn := len(series)
+			if kind == "bar" {
+				drawn = 1
+			}
+			stamp := time.Now().UTC().Format("20060102-150405.000")
 			artifact, werr := d.Store.WriteArtifact(
 				fmt.Sprintf("charts/%s-%s.svg", slugify(title), stamp),
 				[]byte(svg),
@@ -157,22 +165,29 @@ func registerCharts(reg *mcp.Registry, d Deps) {
 			for _, s := range series {
 				total += len(s.Points)
 			}
-			return mcp.OK(trace(ctx), map[string]any{
-				"artifact_id": artifact,
-				"chart_type":  kind,
-				"series":      len(series),
-				"points":      total,
-			}).WithSources(mcp.Source{ArtifactID: artifact, Block: "chart"}), nil
+			envelope := mcp.OK(trace(ctx), map[string]any{
+				"artifact_id":  artifact,
+				"chart_type":   kind,
+				"series":       len(series),
+				"series_drawn": drawn,
+				"points":       total,
+			}).WithSources(mcp.Source{ArtifactID: artifact, Block: "chart"})
+			if len(warnings) > 0 {
+				envelope = envelope.WithWarnings(warnings...)
+			}
+			return envelope, nil
 		},
 	))
 }
 
-func parseChartSeries(args map[string]any) ([]chartSeries, error) {
+func parseChartSeries(args map[string]any) ([]chartSeries, []string, error) {
 	raw, _ := args["series"].([]any)
 	out := []chartSeries{}
-	for _, item := range raw {
+	warnings := []string{}
+	for i, item := range raw {
 		m, ok := item.(map[string]any)
 		if !ok {
+			warnings = append(warnings, fmt.Sprintf("series[%d] is not an object and was skipped", i))
 			continue
 		}
 		label := "series"
@@ -181,14 +196,15 @@ func parseChartSeries(args map[string]any) ([]chartSeries, error) {
 		}
 		points := parseChartPoints(m["points"])
 		if len(points) == 0 {
+			warnings = append(warnings, fmt.Sprintf("series %q has no usable points and was skipped", label))
 			continue
 		}
 		out = append(out, chartSeries{Label: label, Points: points})
 	}
 	if len(out) == 0 {
-		return nil, fmt.Errorf("series with at least one point is required")
+		return nil, warnings, fmt.Errorf("series with at least one point is required")
 	}
-	return out, nil
+	return out, warnings, nil
 }
 
 func parseChartPoints(raw any) []chartPoint {
@@ -214,19 +230,55 @@ func parseChartPoints(raw any) []chartPoint {
 			}
 		}
 		var y float64
+		usable := true
 		switch yv := m["y"].(type) {
 		case float64:
 			y = yv
 		case int:
 			y = float64(yv)
+		case json.Number:
+			if parsed, perr := yv.Float64(); perr == nil {
+				y = parsed
+			} else {
+				usable = false
+			}
 		default:
 			if vv, ok := m["v"].(float64); ok {
 				y = vv
+			} else {
+				usable = false
 			}
+		}
+		if !usable {
+			// Never fabricate a zero datum: drop points with no numeric Y.
+			continue
 		}
 		out = append(out, chartPoint{X: x, Y: y})
 	}
 	return out
+}
+
+// chartXValues returns a numeric X value per point (numbers or timestamps) when
+// every point has one, so line charts honour real spacing instead of indices.
+func chartXValues(series []chartSeries) ([]float64, bool) {
+	values := []float64{}
+	for _, s := range series {
+		for _, p := range s.Points {
+			if p.X == "" {
+				return nil, false
+			}
+			if v, ok := parseNumber(p.X); ok {
+				values = append(values, v)
+				continue
+			}
+			if ts, ok := parseTimeValue(p.X); ok {
+				values = append(values, float64(ts.Unix()))
+				continue
+			}
+			return nil, false
+		}
+	}
+	return values, len(values) > 0
 }
 
 func renderChartSVG(title, kind string, series []chartSeries) string {
@@ -258,6 +310,25 @@ func renderChartSVG(title, kind string, series []chartSeries) string {
 			return left + plotW/2
 		}
 		return left + float64(i)*plotW/float64(n-1)
+	}
+	xVals, useX := chartXValues(series)
+	xMinV, xMaxV := 0.0, 0.0
+	if useX {
+		xMinV, xMaxV = xVals[0], xVals[0]
+		for _, v := range xVals {
+			if v < xMinV {
+				xMinV = v
+			}
+			if v > xMaxV {
+				xMaxV = v
+			}
+		}
+	}
+	xPosValue := func(v float64) float64 {
+		if xMaxV == xMinV {
+			return left + plotW/2
+		}
+		return left + (v-xMinV)/(xMaxV-xMinV)*plotW
 	}
 	yPos := func(v float64) float64 {
 		return top + plotH - (v-yMin)/(yMax-yMin)*plotH
@@ -297,40 +368,44 @@ func renderChartSVG(title, kind string, series []chartSeries) string {
 			}
 		}
 	} else {
+		offset := 0
 		for si, s := range series {
 			color := colors[si%len(colors)]
 			pts := make([]string, 0, len(s.Points))
 			for i, p := range s.Points {
-				pts = append(pts, fmt.Sprintf("%.1f,%.1f", xPos(i, len(s.Points)), yPos(p.Y)))
+				x := xPos(i, len(s.Points))
+				if useX && offset+i < len(xVals) {
+					x = xPosValue(xVals[offset+i])
+				}
+				pts = append(pts, fmt.Sprintf("%.1f,%.1f", x, yPos(p.Y)))
 			}
+			offset += len(s.Points)
 			fmt.Fprintf(&b, `<polyline fill="none" stroke="%s" stroke-width="2" points="%s"/>`+"\n", color, strings.Join(pts, " "))
 		}
 	}
 
-	longest := series[0]
-	for _, s := range series {
-		if len(s.Points) > len(longest.Points) {
-			longest = s
-		}
-	}
-	if len(longest.Points) > 0 {
-		positions := []int{0, len(longest.Points) / 2, len(longest.Points) - 1}
+	labelSeries := series[0]
+	if len(labelSeries.Points) > 0 {
+		positions := []int{0, len(labelSeries.Points) / 2, len(labelSeries.Points) - 1}
 		seen := map[int]bool{}
 		for _, idx := range positions {
 			if seen[idx] {
 				continue
 			}
 			seen[idx] = true
-			label := longest.Points[idx].X
+			label := labelSeries.Points[idx].X
 			if label == "" {
 				label = fmt.Sprintf("%d", idx)
 			}
 			if runes := []rune(label); len(runes) > 24 {
 				label = string(runes[:24]) + "..."
 			}
-			labelX := xPos(idx, len(longest.Points))
+			labelX := xPos(idx, len(labelSeries.Points))
+			if useX && idx < len(xVals) {
+				labelX = xPosValue(xVals[idx])
+			}
 			if kind == "bar" {
-				slot := plotW / float64(len(longest.Points))
+				slot := plotW / float64(len(labelSeries.Points))
 				labelX = left + slot*float64(idx) + slot/2
 			}
 			fmt.Fprintf(&b, `<text x="%.0f" y="%.0f" font-size="11" fill="#6b7280" text-anchor="middle">%s</text>`+"\n",
@@ -431,7 +506,7 @@ func registerReports(reg *mcp.Registry, d Deps) {
 				}
 				content = b.String()
 			}
-			stamp := time.Now().UTC().Format("20060102-150405")
+			stamp := time.Now().UTC().Format("20060102-150405.000")
 			artifact, werr := d.Store.WriteArtifact(
 				fmt.Sprintf("reports/%s-%s%s", slugify(title), stamp, ext),
 				[]byte(content),
@@ -468,14 +543,14 @@ func registerMedia(reg *mcp.Registry, d Deps) {
 				return mcp.Fail(trace(ctx), err.Error()), nil
 			}
 			if !d.OpenAI.Available() {
-				return mcp.Fail(trace(ctx), "OPENAI_API_KEY is not configured; audio.transcribe requires OpenAI"), nil
+				return mcp.Fail(trace(ctx), "OPENAI_API_KEY is not configured; audio.transcribe requires OpenAI. Set it with: sh scripts/env-set.sh .env OPENAI_API_KEY <value> (see system.resources for the asr variant)"), nil
 			}
 			text, terr := d.OpenAI.Transcribe(ctx, full, argString(args, "language"))
 			if terr != nil {
 				return mcp.Fail(trace(ctx), terr.Error()), nil
 			}
 			base := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
-			stamp := time.Now().UTC().Format("20060102-150405")
+			stamp := time.Now().UTC().Format("20060102-150405.000")
 			artifact, werr := d.Store.WriteArtifact(
 				fmt.Sprintf("audio/%s-%s.txt", slugify(base), stamp),
 				[]byte(text),
@@ -509,7 +584,7 @@ func registerMedia(reg *mcp.Registry, d Deps) {
 				return mcp.Fail(trace(ctx), err.Error()), nil
 			}
 			if !d.OpenAI.Available() {
-				return mcp.Fail(trace(ctx), "OPENAI_API_KEY is not configured; vision.analyze requires OpenAI"), nil
+				return mcp.Fail(trace(ctx), "OPENAI_API_KEY is not configured; vision.analyze requires OpenAI. Set it with: sh scripts/env-set.sh .env OPENAI_API_KEY <value> (see system.resources for the vision variant)"), nil
 			}
 			st, serr := os.Stat(full)
 			if serr != nil {
@@ -518,9 +593,13 @@ func registerMedia(reg *mcp.Registry, d Deps) {
 			if st.Size() > 20<<20 {
 				return mcp.Fail(trace(ctx), "image larger than 20MB is not supported"), nil
 			}
-			raw, rerr := os.ReadFile(full)
+			// Re-cap on read so a file that grew after Stat cannot bypass the limit.
+			raw, rerr := readCapped(full, 20<<20+1)
 			if rerr != nil {
 				return mcp.Fail(trace(ctx), rerr.Error()), nil
+			}
+			if len(raw) > 20<<20 {
+				return mcp.Fail(trace(ctx), "image larger than 20MB is not supported"), nil
 			}
 			prompt := argString(args, "prompt")
 			if prompt == "" {
@@ -532,7 +611,7 @@ func registerMedia(reg *mcp.Registry, d Deps) {
 				return mcp.Fail(trace(ctx), aerr.Error()), nil
 			}
 			base := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
-			stamp := time.Now().UTC().Format("20060102-150405")
+			stamp := time.Now().UTC().Format("20060102-150405.000")
 			artifact, werr := d.Store.WriteArtifact(
 				fmt.Sprintf("vision/%s-%s.md", slugify(base), stamp),
 				[]byte(result),

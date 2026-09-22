@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -43,6 +44,15 @@ func TestSetRoutingMode(t *testing.T) {
 	}
 	if got := mgr.Routing().Mode; got != "fly" {
 		t.Fatalf("expected cached state fly, got %s", got)
+	}
+	if runtime.GOOS != "windows" {
+		info, err := os.Stat(mgr.RoutingPath())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if info.Mode().Perm() != 0o644 {
+			t.Fatalf("routing.yaml mode = %v, want 0644", info.Mode().Perm())
+		}
 	}
 	if _, err := mgr.SetRoutingMode("turbo"); err == nil {
 		t.Fatal("expected error for invalid mode")
@@ -92,5 +102,85 @@ func TestConfigNonPositiveMaxTextCharsIgnored(t *testing.T) {
 	mgr := NewManager(root)
 	if got := mgr.Config().Tools.MaxTextChars; got != 60000 {
 		t.Fatalf("non-positive max_text_chars must keep the default 60000, got %d", got)
+	}
+}
+
+func TestEvaluationDefaultsAndLivePatch(t *testing.T) {
+	root := t.TempDir()
+	mgr := NewManager(root)
+	settings := mgr.Evaluation()
+	if settings.TechnicalTarget != 95 || settings.DemoDayTarget != 90 {
+		t.Fatalf("unexpected default targets %+v", settings)
+	}
+	if !settings.ParallelJudges || !settings.FullCleanroomOnFinalFreeze || settings.FullCleanroomEachIteration {
+		t.Fatalf("unexpected default booleans %+v", settings)
+	}
+	if settings.MinDelta != 0.5 || settings.Judges != 3 || settings.FinalizationReserveMinutes != 45 {
+		t.Fatalf("unexpected default numbers %+v", settings)
+	}
+
+	dir := filepath.Join(root, "configs")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	content := "evaluation:\n  technical_target: 90\n  parallel_judges: false\n  max_technical_iterations: 3\n"
+	if err := os.WriteFile(filepath.Join(dir, "evaluation.yaml"), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	settings = mgr.Evaluation()
+	if settings.TechnicalTarget != 90 {
+		t.Fatalf("live re-read must pick up technical_target 90, got %v", settings.TechnicalTarget)
+	}
+	if settings.ParallelJudges {
+		t.Fatal("explicit parallel_judges: false must override the default true")
+	}
+	if settings.MaxTechnicalIterations != 3 {
+		t.Fatalf("max_technical_iterations = %d, want 3", settings.MaxTechnicalIterations)
+	}
+	if settings.DemoDayTarget != 90 || settings.MinDelta != 0.5 {
+		t.Fatalf("absent keys must keep defaults, got %+v", settings)
+	}
+}
+
+func TestEvaluationInvalidValuesIgnored(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "configs")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	content := "evaluation:\n  judges: 0\n  min_delta: -1\n  finalization_reserve_minutes: -5\n"
+	if err := os.WriteFile(filepath.Join(dir, "evaluation.yaml"), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	mgr := NewManager(root)
+	settings := mgr.Evaluation()
+	if settings.Judges != 3 || settings.MinDelta != 0.5 || settings.FinalizationReserveMinutes != 45 {
+		t.Fatalf("invalid values must be ignored, got %+v", settings)
+	}
+}
+
+func TestEvaluationMinValidJudges(t *testing.T) {
+	root := t.TempDir()
+	mgr := NewManager(root)
+	if got := mgr.Evaluation().MinValidJudges; got != 3 {
+		t.Fatalf("default min_valid_judges = %d, want 3", got)
+	}
+
+	dir := filepath.Join(root, "configs")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "evaluation.yaml"), []byte("evaluation:\n  min_valid_judges: 4\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := mgr.Evaluation().MinValidJudges; got != 4 {
+		t.Fatalf("min_valid_judges = %d, want 4", got)
+	}
+
+	if err := os.WriteFile(filepath.Join(dir, "evaluation.yaml"), []byte("evaluation:\n  min_valid_judges: 0\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := mgr.Evaluation().MinValidJudges; got != 3 {
+		t.Fatalf("invalid min_valid_judges must fall back to the default 3, got %d", got)
 	}
 }

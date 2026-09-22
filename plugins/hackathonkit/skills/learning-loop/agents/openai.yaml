@@ -1,0 +1,4 @@
+interface:
+  display_name: "Learning Loop"
+  short_description: "Record, recall and promote durable learnings from task outcomes."
+  default_prompt: "Use $learning-loop to recall prior learnings and record this task's outcome."

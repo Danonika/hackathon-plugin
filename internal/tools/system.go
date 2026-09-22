@@ -2,8 +2,8 @@ package tools
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
-	"strings"
 	"time"
 
 	"hackathonkit.local/agentkit/internal/mcp"
@@ -53,6 +53,10 @@ func registerSystem(reg *mcp.Registry, d Deps) {
 				"classification": available["classification.classify"],
 				"charts":         available["charts.create"],
 				"reports":        available["reports.create"],
+				"evaluation":     available["eval.aggregate"],
+				"learning":       available["learning.recall"],
+				"context_budget": available["system.context_budget"],
+				"telegram":       available["telegram.send"],
 			}
 			experimental := map[string]any{"fly_router": available["routing.fly_recommend"]}
 			groups["fly_router_available"] = available["routing.fly_recommend"]
@@ -87,6 +91,15 @@ func registerSystem(reg *mcp.Registry, d Deps) {
 			}
 			res := d.Router.Recommend(ctx, task, argMap(args, "input_metadata"), available)
 			if len(res.Recommendations) == 0 {
+				if d.Store != nil {
+					_ = observability.AppendJSONL(filepath.Join(d.Store.Root(), "logs", "fly-events.jsonl"), map[string]any{
+						"ts":       time.Now().UTC().Format(time.RFC3339Nano),
+						"trace_id": trace(ctx),
+						"route":    "unknown",
+						"encoder":  res.Encoder,
+						"task":     snippet(task, 200),
+					})
+				}
 				return mcp.Partial(trace(ctx), map[string]any{
 					"route":           "unknown",
 					"recommendations": []any{},
@@ -117,9 +130,7 @@ func registerSystem(reg *mcp.Registry, d Deps) {
 					"recommendations": res.Recommendations,
 					"task":            snippet(task, 200),
 				})
-			}
-			if d.Store != nil {
-				snapshot := d.Router.ActivationSnapshot(ctx, task, 0)
+				snapshot := d.Router.ActivationSnapshot(ctx, task, 64)
 				_ = observability.AppendJSONL(filepath.Join(d.Store.Root(), "logs", "fly-neuron-events.jsonl"), map[string]any{
 					"ts":                   time.Now().UTC().Format(time.RFC3339Nano),
 					"type":                 "recommend",
@@ -171,11 +182,16 @@ func registerSystem(reg *mcp.Registry, d Deps) {
 			if source == "" {
 				source = "accepted"
 			}
+			switch source {
+			case "accepted", "codex-correction", "normal-teacher", "fallback":
+			default:
+				return mcp.Fail(trace(ctx), fmt.Sprintf("invalid source %q (expected accepted, codex-correction, normal-teacher or fallback)", source)), nil
+			}
 			recommended := []fly.Recommendation{}
 			for _, name := range argStringSlice(args, "recommended") {
 				recommended = append(recommended, fly.Recommendation{Capability: name})
 			}
-			size, err := d.Router.AddFeedback(ctx, fly.FeedbackEvent{
+			size, learned, err := d.Router.AddFeedback(ctx, fly.FeedbackEvent{
 				Task:          task,
 				Recommended:   recommended,
 				Chosen:        chosen,
@@ -213,12 +229,8 @@ func registerSystem(reg *mcp.Registry, d Deps) {
 			return mcp.OK(trace(ctx), map[string]any{
 				"stored":  size,
 				"source":  source,
-				"learned": true,
+				"learned": learned,
 			}).WithMetrics(map[string]any{"memory_size": size}), nil
 		},
 	))
-}
-
-func toolNameIsExperimental(name string) bool {
-	return strings.HasPrefix(name, "routing.")
 }

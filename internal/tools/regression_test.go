@@ -183,8 +183,14 @@ func TestXLSXFormatClassification(t *testing.T) {
 	if got := builtinFormatKind(18); got != (fmtKind{time: true}) {
 		t.Fatalf("builtin 18 (h:mm) must be time-only, got %+v", got)
 	}
-	if got := builtinFormatKind(45); got != (fmtKind{elapsed: true}) {
-		t.Fatalf("builtin 45 (mm:ss) must be elapsed, got %+v", got)
+	if got := builtinFormatKind(45); got != (fmtKind{time: true}) {
+		t.Fatalf("builtin 45 (mm:ss) is a clock time, got %+v", got)
+	}
+	if got := builtinFormatKind(46); got != (fmtKind{elapsed: true}) {
+		t.Fatalf("builtin 46 ([h]:mm:ss) must be elapsed, got %+v", got)
+	}
+	if got := builtinFormatKind(47); got != (fmtKind{time: true}) {
+		t.Fatalf("builtin 47 (mmss.0) is a clock time, got %+v", got)
 	}
 	if got := builtinFormatKind(14); got != (fmtKind{date: true}) {
 		t.Fatalf("builtin 14 must be a date, got %+v", got)
@@ -210,5 +216,22 @@ func TestSlugifyTruncatesRunes(t *testing.T) {
 	}
 	if !utf8.ValidString(got) {
 		t.Fatalf("slug is not valid UTF-8: %q", got)
+	}
+}
+
+func TestStddevLargeMagnitude(t *testing.T) {
+	// Regression: the hand-rolled sqrt halved from x=v and was wrong for large
+	// values (1e14 returned ~9.1e15 instead of 1e14).
+	values := []float64{0, 1e14, 2e14}
+	got := stddev(values)
+	if got < 9.9e13 || got > 1.01e14 {
+		t.Fatalf("stddev = %v, want ~1e14", got)
+	}
+	if r := pearson(values, values); r != 1 {
+		t.Fatalf("pearson of identical columns = %v, want 1", r)
+	}
+	small := stddev([]float64{2, 4, 4, 4, 5, 5, 7, 9})
+	if small < 2.13 || small > 2.14 {
+		t.Fatalf("stddev = %v, want ~2.138", small)
 	}
 }

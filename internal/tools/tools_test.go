@@ -10,13 +10,20 @@ import (
 	"time"
 
 	"hackathonkit.local/agentkit/internal/config"
+	"hackathonkit.local/agentkit/internal/learning"
 	"hackathonkit.local/agentkit/internal/mcp"
 	"hackathonkit.local/agentkit/internal/observability"
 	"hackathonkit.local/agentkit/internal/routing/fly"
 	"hackathonkit.local/agentkit/internal/storage"
+	"hackathonkit.local/agentkit/internal/telegram"
 )
 
 func testRegistry(t *testing.T) (*mcp.Registry, string) {
+	t.Helper()
+	return testRegistryWith(t, telegram.New(telegram.Settings{}))
+}
+
+func testRegistryWith(t *testing.T, telegramClient *telegram.Client) (*mcp.Registry, string) {
 	t.Helper()
 	root := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(root, "configs"), 0o755); err != nil {
@@ -33,11 +40,12 @@ func testRegistry(t *testing.T) (*mcp.Registry, string) {
 	mgr := config.NewManager(root)
 	reg := mcp.NewRegistry()
 	RegisterAll(reg, Deps{
-		Cfg:     mgr,
-		Store:   storage.New(root, mgr.Config().Storage),
-		Metrics: observability.NewMetrics(),
-		Router:  fly.NewRouter(mgr.Config().Routing),
-		Version: "test",
+		Cfg:      mgr,
+		Store:    storage.New(root, mgr.Config().Storage),
+		Metrics:  observability.NewMetrics(),
+		Router:   fly.NewRouter(mgr.Config().Routing),
+		Learning: learning.NewStore(filepath.Join(root, "data", "index", "learnings.json"), learning.ProjectKey(root)),
+		Telegram: telegramClient,
 	})
 	return reg, root
 }

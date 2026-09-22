@@ -32,7 +32,8 @@ type Client struct {
 func newSessionID() string {
 	b := make([]byte, 16)
 	if _, err := rand.Read(b); err != nil {
-		return "hackathonkit-session"
+		// Fall back to time+pid rather than a constant shared by every client.
+		return fmt.Sprintf("hackathonkit-session-%d-%d", time.Now().UnixNano(), os.Getpid())
 	}
 	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16])
 }
@@ -75,7 +76,13 @@ func (c *Client) doJSON(ctx context.Context, path string, payload any, out any) 
 		return err
 	}
 	defer resp.Body.Close()
-	data, _ := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
+	data, rerr := io.ReadAll(io.LimitReader(resp.Body, 8<<20+1))
+	if rerr != nil {
+		return fmt.Errorf("openai %s: reading response: %w", path, rerr)
+	}
+	if len(data) > 8<<20 {
+		return fmt.Errorf("openai %s: response exceeds 8MB", path)
+	}
 	if resp.StatusCode >= 300 {
 		return fmt.Errorf("openai %s: status %d: %s", path, resp.StatusCode, truncate(string(data), 400))
 	}
@@ -143,18 +150,54 @@ func (c *Client) Embed(ctx context.Context, texts []string) ([][]float64, error)
 	payload := map[string]any{"model": c.EmbeddingModel, "input": texts}
 	var out struct {
 		Data []struct {
+			Index     *int      `json:"index"`
 			Embedding []float64 `json:"embedding"`
 		} `json:"data"`
 	}
 	if err := c.doJSON(ctx, "/embeddings", payload, &out); err != nil {
 		return nil, err
 	}
-	result := make([][]float64, 0, len(out.Data))
+	indexed := false
 	for _, d := range out.Data {
-		result = append(result, d.Embedding)
+		if d.Index != nil {
+			indexed = true
+			break
+		}
+	}
+	if !indexed {
+		// Providers that omit the index field return vectors in input order.
+		if len(out.Data) != len(texts) {
+			return nil, fmt.Errorf("embeddings response returned %d vectors for %d inputs", len(out.Data), len(texts))
+		}
+		result := make([][]float64, len(texts))
+		for i, d := range out.Data {
+			if d.Embedding == nil {
+				return nil, fmt.Errorf("embeddings response missing a vector for input %d", i)
+			}
+			result[i] = d.Embedding
+		}
+		return result, nil
+	}
+	result := make([][]float64, len(texts))
+	for _, d := range out.Data {
+		if d.Index == nil {
+			return nil, fmt.Errorf("embeddings response mixes indexed and unindexed entries")
+		}
+		index := *d.Index
+		if index < 0 || index >= len(texts) {
+			return nil, fmt.Errorf("embeddings response index %d out of range for %d inputs", index, len(texts))
+		}
+		result[index] = d.Embedding
+	}
+	for i, vector := range result {
+		if vector == nil {
+			return nil, fmt.Errorf("embeddings response missing a vector for input %d", i)
+		}
 	}
 	return result, nil
 }
+
+const maxAudioBytes = 25 << 20
 
 func (c *Client) Transcribe(ctx context.Context, path string, language string) (string, error) {
 	f, err := os.Open(path)
@@ -163,12 +206,25 @@ func (c *Client) Transcribe(ctx context.Context, path string, language string) (
 	}
 	defer f.Close()
 
+	st, serr := f.Stat()
+	if serr != nil {
+		return "", serr
+	}
+	if st.Size() > maxAudioBytes {
+		return "", fmt.Errorf("audio file exceeds %d bytes", maxAudioBytes)
+	}
 	var buf bytes.Buffer
 	w := multipart.NewWriter(&buf)
-	_ = w.WriteField("model", c.TranscribeModel)
-	_ = w.WriteField("response_format", "json")
+	if err := w.WriteField("model", c.TranscribeModel); err != nil {
+		return "", err
+	}
+	if err := w.WriteField("response_format", "json"); err != nil {
+		return "", err
+	}
 	if language != "" {
-		_ = w.WriteField("language", language)
+		if err := w.WriteField("language", language); err != nil {
+			return "", err
+		}
 	}
 	part, err := w.CreateFormFile("file", filepath.Base(path))
 	if err != nil {
@@ -193,7 +249,10 @@ func (c *Client) Transcribe(ctx context.Context, path string, language string) (
 		return "", err
 	}
 	defer resp.Body.Close()
-	data, _ := io.ReadAll(io.LimitReader(resp.Body, 32<<20))
+	data, rerr := io.ReadAll(io.LimitReader(resp.Body, 32<<20))
+	if rerr != nil {
+		return "", fmt.Errorf("openai transcribe: reading response: %w", rerr)
+	}
 	if resp.StatusCode >= 300 {
 		return "", fmt.Errorf("openai transcribe: status %d: %s", resp.StatusCode, truncate(string(data), 400))
 	}
@@ -215,8 +274,12 @@ func (c *Client) ClassifyTask(ctx context.Context, task string, categories []str
 	}
 	raw = strings.TrimSpace(raw)
 	if start := strings.Index(raw, "{"); start >= 0 {
-		if end := strings.LastIndex(raw, "}"); end > start {
-			raw = raw[start : end+1]
+		// Decode exactly one JSON object so trailing prose or a second object
+		// does not corrupt the payload.
+		dec := json.NewDecoder(strings.NewReader(raw[start:]))
+		var payload json.RawMessage
+		if err := dec.Decode(&payload); err == nil {
+			raw = string(payload)
 		}
 	}
 	var parsed map[string]float64
@@ -244,8 +307,9 @@ func (c *Client) ClassifyTask(ctx context.Context, task string, categories []str
 }
 
 func truncate(s string, n int) string {
-	if len(s) <= n {
+	runes := []rune(s)
+	if len(runes) <= n {
 		return s
 	}
-	return s[:n] + "..."
+	return string(runes[:n]) + "..."
 }

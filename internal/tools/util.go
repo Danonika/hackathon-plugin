@@ -2,6 +2,7 @@ package tools
 
 import (
 	"hash/fnv"
+	"math"
 	"strconv"
 	"strings"
 	"time"
@@ -14,12 +15,46 @@ func parseNumber(s string) (float64, bool) {
 		return 0, false
 	}
 	if v, err := strconv.ParseFloat(s, 64); err == nil {
+		if math.IsNaN(v) || math.IsInf(v, 0) {
+			return 0, false
+		}
 		return v, true
 	}
-	if v, err := strconv.ParseFloat(strings.ReplaceAll(s, ",", "."), 64); err == nil {
+	if strings.Contains(s, ",") {
+		if strings.Contains(s, ".") {
+			// Both separators: the last one is the decimal separator.
+			if strings.LastIndex(s, ",") > strings.LastIndex(s, ".") {
+				s = strings.ReplaceAll(s, ".", "")
+				s = strings.ReplaceAll(s, ",", ".")
+			} else {
+				s = strings.ReplaceAll(s, ",", "")
+			}
+		} else if commaIsThousands(s) {
+			s = strings.ReplaceAll(s, ",", "")
+		} else {
+			s = strings.ReplaceAll(s, ",", ".")
+		}
+	}
+	if v, err := strconv.ParseFloat(s, 64); err == nil {
 		return v, true
 	}
 	return 0, false
+}
+
+// commaIsThousands reports whether every comma-separated group after the first
+// has exactly three digits ("1,234", "1,234,567"), which is a thousands
+// separator rather than a decimal mark ("1,5").
+func commaIsThousands(s string) bool {
+	parts := strings.Split(s, ",")
+	if len(parts) < 2 || len(parts[0]) == 0 || len(parts[0]) > 3 {
+		return false
+	}
+	for _, part := range parts[1:] {
+		if len(part) != 3 {
+			return false
+		}
+	}
+	return true
 }
 
 var timeLayouts = []string{
@@ -44,9 +79,13 @@ func parseTimeValue(s string) (time.Time, bool) {
 	}
 	if v, err := strconv.ParseInt(s, 10, 64); err == nil {
 		switch {
-		case v > 1e12:
+		case v >= 1e17: // nanoseconds
+			return time.Unix(0, v), true
+		case v >= 1e14: // microseconds
+			return time.UnixMicro(v), true
+		case v >= 1e11: // milliseconds (1973+)
 			return time.UnixMilli(v), true
-		case v > 1e9:
+		case v >= 1e8: // seconds (1973+)
 			return time.Unix(v, 0), true
 		}
 	}
@@ -59,9 +98,18 @@ func parseTimeValue(s string) (time.Time, bool) {
 }
 
 func timestampHeader(name string) bool {
-	n := strings.ToLower(name)
-	for _, kw := range []string{"time", "date", "timestamp", "datetime", "ts_", "дата", "время", "период"} {
-		if strings.Contains(n, kw) {
+	n := strings.ToLower(strings.TrimSpace(name))
+	if n == "ts" || strings.HasPrefix(n, "ts_") || strings.HasSuffix(n, "_ts") {
+		return true
+	}
+	// Whole-token matching avoids false positives such as "update", "runtime"
+	// or "lifetime" that merely contain a keyword.
+	tokens := strings.FieldsFunc(n, func(r rune) bool {
+		return !(r >= 'a' && r <= 'z' || r >= 'а' && r <= 'я' || r >= '0' && r <= '9')
+	})
+	for _, token := range tokens {
+		switch token {
+		case "time", "date", "timestamp", "datetime", "дата", "время", "период":
 			return true
 		}
 	}
@@ -69,14 +117,51 @@ func timestampHeader(name string) bool {
 }
 
 func xmlEscape(s string) string {
-	r := strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;", `"`, "&quot;", "'", "&apos;")
-	return r.Replace(s)
+	var b strings.Builder
+	b.Grow(len(s))
+	for _, r := range s {
+		switch {
+		case r == '&':
+			b.WriteString("&amp;")
+		case r == '<':
+			b.WriteString("&lt;")
+		case r == '>':
+			b.WriteString("&gt;")
+		case r == '"':
+			b.WriteString("&quot;")
+		case r == '\'':
+			b.WriteString("&apos;")
+		case r == 0x9 || r == 0xA || r == 0xD ||
+			(r >= 0x20 && r <= 0xD7FF) ||
+			(r >= 0xE000 && r <= 0xFFFD) ||
+			(r >= 0x10000 && r <= 0x10FFFF):
+			b.WriteRune(r)
+		default:
+			// Control characters and surrogates are illegal in XML 1.0.
+		}
+	}
+	return b.String()
 }
 
 func shortHash(s string) string {
-	h := fnv.New32a()
+	h := fnv.New64a()
 	_, _ = h.Write([]byte(s))
-	return strconv.FormatUint(uint64(h.Sum32()), 16)
+	return strconv.FormatUint(h.Sum64(), 16)
+}
+
+// truncateRunes cuts s to at most n bytes without splitting a UTF-8 rune.
+func truncateRunes(s string, n int) string {
+	if n <= 0 {
+		return ""
+	}
+	if len(s) <= n {
+		return s
+	}
+	cut := n
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+	return s[:cut]
 }
 
 func slugify(s string) string {
@@ -149,15 +234,14 @@ func stddev(values []float64) float64 {
 	return sqrt(sum / float64(len(values)-1))
 }
 
+// sqrt delegates to math.Sqrt: the previous hand-rolled Newton iteration
+// started at x=v and halved toward the root, so large magnitudes (for example
+// 1e14) returned wrong values after a fixed iteration count.
 func sqrt(v float64) float64 {
 	if v <= 0 {
 		return 0
 	}
-	x := v
-	for i := 0; i < 40; i++ {
-		x = 0.5 * (x + v/x)
-	}
-	return x
+	return math.Sqrt(v)
 }
 
 func pearson(xs, ys []float64) float64 {

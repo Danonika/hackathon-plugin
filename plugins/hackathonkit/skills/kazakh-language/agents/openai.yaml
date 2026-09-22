@@ -1,4 +1,4 @@
 interface:
   display_name: "Kazakh Language"
-  short_description: "Kazakh transcription, normalization and subtitles."
+  short_description: "Kazakh transcription, normalization and subtitle packaging."
   default_prompt: "Use $kazakh-language to process this Kazakh audio or text."

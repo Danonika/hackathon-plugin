@@ -5,10 +5,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
 	"runtime/debug"
+	"strings"
 	"time"
 
 	"hackathonkit.local/agentkit/internal/observability"
@@ -24,6 +26,9 @@ type ServerOptions struct {
 	CallTimeoutSec int
 	CallLogPath    string
 }
+
+// oversizeFrame marks a discarded over-long input line in the line channel.
+var oversizeFrame = []byte{0x00}
 
 type Server struct {
 	registry *Registry
@@ -51,6 +56,14 @@ func (s *Server) Serve(ctx context.Context) error {
 	return s.ServeStreams(ctx, nil, nil)
 }
 
+func sanitizeRPCError(msg string) string {
+	msg = strings.TrimSpace(msg)
+	if len(msg) > 500 {
+		msg = msg[:500] + "..."
+	}
+	return msg
+}
+
 func (s *Server) ServeStreams(ctx context.Context, in io.Reader, out io.Writer) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -60,26 +73,67 @@ func (s *Server) ServeStreams(ctx context.Context, in io.Reader, out io.Writer) 
 	if out == nil {
 		out = stdoutWriter()
 	}
+	// The reader goroutine blocks inside Read; closing a caller-provided
+	// Closer unblocks it when ServeStreams returns early.
+	if closer, ok := in.(io.Closer); ok {
+		defer closer.Close()
+	}
 	lines := make(chan []byte)
 	scanErr := make(chan error, 1)
 	go func() {
 		defer close(lines)
-		scanner := bufio.NewScanner(in)
-		scanner.Buffer(make([]byte, 0, 64*1024), 32*1024*1024)
-		for scanner.Scan() {
-			line := bytes.TrimSpace(scanner.Bytes())
-			if len(line) == 0 {
+		reader := bufio.NewReaderSize(in, 64*1024)
+		for {
+			scanner := bufio.NewScanner(reader)
+			scanner.Buffer(make([]byte, 0, 64*1024), 32*1024*1024)
+			for scanner.Scan() {
+				line := bytes.TrimSpace(scanner.Bytes())
+				if len(line) == 0 {
+					continue
+				}
+				// A bare NUL frame would equal the in-band oversize sentinel;
+				// treat it as a control byte and drop it.
+				if len(line) == 1 && line[0] == 0x00 {
+					continue
+				}
+				buf := append([]byte(nil), line...)
+				select {
+				case lines <- buf:
+				case <-ctx.Done():
+					scanErr <- ctx.Err()
+					return
+				}
+			}
+			err := scanner.Err()
+			if errors.Is(err, bufio.ErrTooLong) {
+				// Discard the remainder of the oversized frame in bounded
+				// chunks and keep serving the session.
+				for {
+					_, derr := reader.ReadSlice('\n')
+					if derr == nil {
+						break
+					}
+					if errors.Is(derr, bufio.ErrBufferFull) {
+						continue
+					}
+					if errors.Is(derr, io.EOF) {
+						scanErr <- nil
+					} else {
+						scanErr <- derr
+					}
+					return
+				}
+				select {
+				case lines <- oversizeFrame:
+				case <-ctx.Done():
+					scanErr <- ctx.Err()
+					return
+				}
 				continue
 			}
-			buf := append([]byte(nil), line...)
-			select {
-			case lines <- buf:
-			case <-ctx.Done():
-				scanErr <- ctx.Err()
-				return
-			}
+			scanErr <- err
+			return
 		}
-		scanErr <- scanner.Err()
 	}()
 	enc := json.NewEncoder(out)
 	for {
@@ -90,12 +144,20 @@ func (s *Server) ServeStreams(ctx context.Context, in io.Reader, out io.Writer) 
 			if !ok {
 				return <-scanErr
 			}
+			if bytes.Equal(line, oversizeFrame) {
+				_ = enc.Encode(Response{
+					JSONRPC: "2.0",
+					ID:      json.RawMessage("null"),
+					Error:   &RPCError{Code: CodeInvalidParams, Message: "request exceeds the maximum frame size"},
+				})
+				continue
+			}
 			var req Request
 			if err := json.Unmarshal(line, &req); err != nil {
 				_ = enc.Encode(Response{
 					JSONRPC: "2.0",
 					ID:      json.RawMessage("null"),
-					Error:   &RPCError{Code: CodeParseError, Message: "parse error: " + err.Error()},
+					Error:   &RPCError{Code: CodeParseError, Message: "parse error: " + sanitizeRPCError(err.Error())},
 				})
 				continue
 			}
@@ -168,7 +230,7 @@ func (s *Server) handleToolCall(ctx context.Context, req *Request, resp *Respons
 		Arguments map[string]any `json:"arguments"`
 	}
 	if err := json.Unmarshal(req.Params, &p); err != nil {
-		resp.Error = &RPCError{Code: CodeInvalidParams, Message: "invalid tools/call params: " + err.Error()}
+		resp.Error = &RPCError{Code: CodeInvalidParams, Message: "invalid tools/call params: " + sanitizeRPCError(err.Error())}
 		return
 	}
 	tool, ok := s.registry.Get(p.Name)
@@ -183,7 +245,12 @@ func (s *Server) handleToolCall(ctx context.Context, req *Request, resp *Respons
 	if s.opts.Metrics != nil {
 		s.opts.Metrics.Inc("mcp_tool_calls_total")
 	}
-	callCtx, cancel := context.WithTimeout(ctx, time.Duration(s.opts.CallTimeoutSec)*time.Second)
+	const maxTimeoutSec = int(24 * time.Hour / time.Second)
+	timeout := 30 * time.Second
+	if s.opts.CallTimeoutSec > 0 && s.opts.CallTimeoutSec <= maxTimeoutSec {
+		timeout = time.Duration(s.opts.CallTimeoutSec) * time.Second
+	}
+	callCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	callCtx = observability.WithTrace(callCtx, observability.NewTraceID())
 
@@ -197,8 +264,8 @@ func (s *Server) handleToolCall(ctx context.Context, req *Request, resp *Respons
 	}
 	if err != nil {
 		result = Envelope{
-			Status:  "error",
-			Data:    map[string]any{"error": err.Error()},
+			Status:  StatusError,
+			Data:    map[string]any{"error": sanitizeRPCError(err.Error())},
 			TraceID: observability.TraceFrom(callCtx),
 		}
 	}

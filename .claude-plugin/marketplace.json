@@ -1,0 +1,18 @@
+{
+  "name": "hackathonkit-local",
+  "owner": {
+    "name": "Hackathon Agent Kit"
+  },
+  "metadata": {
+    "description": "Local Hackathon Agent Kit marketplace: MCP capabilities, skills, evaluation and learning."
+  },
+  "plugins": [
+    {
+      "name": "hackathonkit",
+      "source": "./",
+      "description": "Local MCP capability layer with Normal/Fly routing, skills, deterministic evaluation, learning and session hooks.",
+      "version": "0.16.28",
+      "category": "Developer Tools"
+    }
+  ]
+}

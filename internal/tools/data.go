@@ -26,18 +26,16 @@ func readAnyTable(path string, sheet string) (*table, []string, error) {
 	case "xls":
 		return nil, nil, fmt.Errorf("legacy .xls (BIFF) tables are not supported; convert the file to .xlsx or .csv first")
 	case "tsv":
-		t, err := readCSVTable(path, "\t")
-		return t, nil, err
+		return readCSVTable(path, "\t")
 	default:
-		t, err := readCSVTable(path, "")
-		return t, nil, err
+		return readCSVTable(path, "")
 	}
 }
 
-func readCSVTable(path string, delimiter string) (*table, error) {
+func readCSVTable(path string, delimiter string) (*table, []string, error) {
 	f, err := os.Open(path)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	defer f.Close()
 	r := csv.NewReader(f)
@@ -51,26 +49,83 @@ func readCSVTable(path string, delimiter string) (*table, error) {
 	}
 	records, err := r.ReadAll()
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if len(records) == 0 {
-		return nil, fmt.Errorf("empty table")
+		return nil, nil, fmt.Errorf("empty table")
 	}
-	return &table{Headers: records[0], Rows: records[1:]}, nil
+	headers := records[0]
+	if len(headers) > 0 {
+		headers[0] = strings.TrimPrefix(headers[0], "\ufeff")
+	}
+	rows := records[1:]
+	warnings := []string{}
+	ragged := 0
+	for _, row := range rows {
+		if len(row) != len(headers) {
+			ragged++
+		}
+	}
+	if ragged > 0 {
+		warnings = append(warnings, fmt.Sprintf("%d row(s) do not match the header column count; short rows are padded with empty values", ragged))
+	}
+	return &table{Headers: headers, Rows: rows}, warnings, nil
 }
 
 func (t *table) columnIndex(name string) int {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return -1
+	}
 	for i, h := range t.Headers {
-		if strings.EqualFold(strings.TrimSpace(h), strings.TrimSpace(name)) {
+		if strings.EqualFold(strings.TrimSpace(h), name) {
 			return i
 		}
 	}
+	needle := strings.ToLower(name)
+	// Prefer prefix/suffix matches before a loose contains, so "id" does not
+	// silently bind to an unrelated header such as "grid". Ambiguity is still
+	// refused: two headers sharing the prefix return -1.
+	prefixMatch, suffixMatch := -1, -1
 	for i, h := range t.Headers {
-		if strings.Contains(strings.ToLower(h), strings.ToLower(name)) {
-			return i
+		lower := strings.ToLower(strings.TrimSpace(h))
+		if strings.HasPrefix(lower, needle) {
+			if prefixMatch == -1 {
+				prefixMatch = i
+			} else {
+				prefixMatch = -2
+			}
+		}
+		if strings.HasSuffix(lower, needle) {
+			if suffixMatch == -1 {
+				suffixMatch = i
+			} else {
+				suffixMatch = -2
+			}
 		}
 	}
-	return -1
+	if prefixMatch == -2 || suffixMatch == -2 {
+		// Ambiguous prefix/suffix matches are refused, as documented.
+		return -1
+	}
+	if prefixMatch >= 0 {
+		return prefixMatch
+	}
+	if suffixMatch >= 0 {
+		return suffixMatch
+	}
+	match := -1
+	for i, h := range t.Headers {
+		if strings.Contains(strings.ToLower(h), needle) {
+			if match >= 0 {
+				// Ambiguous partial match: refuse instead of silently picking
+				// the first containing header.
+				return -1
+			}
+			match = i
+		}
+	}
+	return match
 }
 
 type columnProfile struct {
@@ -147,23 +202,61 @@ func profileColumns(t *table, selected []string) []columnProfile {
 	return out
 }
 
-func (d Deps) loadTable(ctx context.Context, args map[string]any) (string, *table, []string, *mcp.Envelope) {
+const (
+	maxTableBytes = 64 << 20
+	maxTableRows  = 2_000_000
+)
+
+func (d Deps) loadTable(ctx context.Context, args map[string]any) (*table, []string, *mcp.Envelope) {
 	path := argString(args, "path")
 	if path == "" {
 		env := mcp.Fail(trace(ctx), "path is required")
-		return "", nil, nil, &env
+		return nil, nil, &env
 	}
 	full, err := d.Store.InputPath(path)
 	if err != nil {
 		env := mcp.Fail(trace(ctx), err.Error())
-		return "", nil, nil, &env
+		return nil, nil, &env
+	}
+	if info, serr := os.Stat(full); serr == nil && info.Size() > maxTableBytes {
+		env := mcp.Fail(trace(ctx), fmt.Sprintf("table %s is %d bytes; exceeds the %d-byte limit", path, info.Size(), maxTableBytes))
+		return nil, nil, &env
 	}
 	t, warnings, err := readAnyTable(full, argString(args, "sheet"))
 	if err != nil {
 		env := mcp.Fail(trace(ctx), err.Error())
-		return "", nil, nil, &env
+		return nil, nil, &env
 	}
-	return full, t, warnings, nil
+	if len(t.Rows) > maxTableRows {
+		warnings = append(warnings, fmt.Sprintf("table has %d rows; only the first %d were loaded", len(t.Rows), maxTableRows))
+		t.Rows = t.Rows[:maxTableRows]
+	}
+	if err := ctx.Err(); err != nil {
+		env := mcp.Fail(trace(ctx), err.Error())
+		return nil, nil, &env
+	}
+	return t, warnings, nil
+}
+
+// uniqueHeaderKeys builds output keys that stay unique when headers collide
+// after trimming (e.g. "id" and "id ") or are blank.
+func uniqueHeaderKeys(headers []string) []string {
+	keys := make([]string, len(headers))
+	seen := map[string]int{}
+	for i, h := range headers {
+		base := strings.TrimSpace(h)
+		if base == "" {
+			base = fmt.Sprintf("column_%d", i)
+		}
+		if n, ok := seen[base]; ok {
+			seen[base] = n + 1
+			keys[i] = fmt.Sprintf("%s_%d", base, n+1)
+		} else {
+			seen[base] = 0
+			keys[i] = base
+		}
+	}
+	return keys
 }
 
 func registerData(reg *mcp.Registry, d Deps) {
@@ -177,11 +270,17 @@ func registerData(reg *mcp.Registry, d Deps) {
 		},
 		[]string{"path"},
 		func(ctx context.Context, args map[string]any) (any, error) {
-			_, t, warnings, fail := d.loadTable(ctx, args)
+			t, warnings, fail := d.loadTable(ctx, args)
 			if fail != nil {
 				return *fail, nil
 			}
-			profiles := profileColumns(t, argStringSlice(args, "columns"))
+			requested := argStringSlice(args, "columns")
+			profiles := profileColumns(t, requested)
+			for _, name := range requested {
+				if t.columnIndex(name) < 0 {
+					warnings = append(warnings, "unknown column requested: "+name)
+				}
+			}
 			if len(t.Headers) > 64 {
 				warnings = append(warnings, "more than 64 columns detected; consider a column subset")
 			}
@@ -210,15 +309,18 @@ func registerData(reg *mcp.Registry, d Deps) {
 		},
 		[]string{"path"},
 		func(ctx context.Context, args map[string]any) (any, error) {
-			_, t, warnings, fail := d.loadTable(ctx, args)
+			t, warnings, fail := d.loadTable(ctx, args)
 			if fail != nil {
 				return *fail, nil
 			}
 			rows := t.Rows
 			if where := argString(args, "where"); where != "" {
-				filtered, ferr := applyWhere(t, where)
+				filtered, skipped, ferr := applyWhere(t, where)
 				if ferr != nil {
 					return mcp.Fail(trace(ctx), ferr.Error()), nil
+				}
+				if skipped > 0 {
+					warnings = append(warnings, fmt.Sprintf("%d row(s) skipped: the column value is not numeric for an ordering comparison", skipped))
 				}
 				rows = filtered
 			}
@@ -238,10 +340,13 @@ func registerData(reg *mcp.Registry, d Deps) {
 				}
 			}
 			limit := argInt(args, "limit", 20)
-			if limit <= 0 || limit > 200 {
+			if limit <= 0 {
 				limit = 20
+			} else if limit > 200 {
+				limit = 200
 			}
 			out := make([]map[string]string, 0, limit)
+			outKeys := uniqueHeaderKeys(t.Headers)
 			for i, row := range rows {
 				if i >= limit {
 					break
@@ -252,7 +357,7 @@ func registerData(reg *mcp.Registry, d Deps) {
 					if idx < len(row) {
 						value = row[idx]
 					}
-					record[strings.TrimSpace(t.Headers[idx])] = value
+					record[outKeys[idx]] = value
 				}
 				out = append(out, record)
 			}
@@ -278,11 +383,17 @@ func registerData(reg *mcp.Registry, d Deps) {
 		},
 		[]string{"path"},
 		func(ctx context.Context, args map[string]any) (any, error) {
-			_, t, warnings, fail := d.loadTable(ctx, args)
+			t, warnings, fail := d.loadTable(ctx, args)
 			if fail != nil {
 				return *fail, nil
 			}
-			profiles := profileColumns(t, argStringSlice(args, "columns"))
+			requested := argStringSlice(args, "columns")
+			profiles := profileColumns(t, requested)
+			for _, name := range requested {
+				if t.columnIndex(name) < 0 {
+					warnings = append(warnings, "unknown column requested: "+name)
+				}
+			}
 			numeric := []string{}
 			for _, p := range profiles {
 				if p.Kind == "numeric" {
@@ -298,6 +409,9 @@ func registerData(reg *mcp.Registry, d Deps) {
 			for i := 0; i < len(numeric); i++ {
 				for j := i + 1; j < len(numeric); j++ {
 					idxA, idxB := t.columnIndex(numeric[i]), t.columnIndex(numeric[j])
+					if idxA < 0 || idxB < 0 || idxA == idxB {
+						continue
+					}
 					var xs, ys []float64
 					for _, row := range t.Rows {
 						if idxA >= len(row) || idxB >= len(row) {
@@ -344,17 +458,23 @@ func registerData(reg *mcp.Registry, d Deps) {
 	))
 }
 
-func applyWhere(t *table, where string) ([][]string, error) {
+func applyWhere(t *table, where string) ([][]string, int, error) {
 	fields := strings.Fields(where)
 	if len(fields) < 3 {
-		return nil, fmt.Errorf("where must be \"column op value\", got %q", where)
+		return nil, 0, fmt.Errorf("where must be \"column op value\", got %q", where)
 	}
 	column, op := fields[0], fields[1]
 	value := strings.Join(fields[2:], " ")
 	idx := t.columnIndex(column)
 	if idx < 0 {
-		return nil, fmt.Errorf("unknown column in where: %s", column)
+		return nil, 0, fmt.Errorf("unknown column in where: %s", column)
 	}
+	switch op {
+	case "=", "==", "!=", ">", ">=", "<", "<=", "contains":
+	default:
+		return nil, 0, fmt.Errorf("unsupported operator %q", op)
+	}
+	skippedNonNumeric := 0
 	out := [][]string{}
 	for _, row := range t.Rows {
 		cell := ""
@@ -383,6 +503,7 @@ func applyWhere(t *table, where string) ([][]string, error) {
 			cv, okC := parseNumber(cell)
 			vv, okV := parseNumber(value)
 			if !okC || !okV {
+				skippedNonNumeric++
 				continue
 			}
 			switch op {
@@ -398,13 +519,13 @@ func applyWhere(t *table, where string) ([][]string, error) {
 		case "contains":
 			match = strings.Contains(strings.ToLower(cell), strings.ToLower(value))
 		default:
-			return nil, fmt.Errorf("unsupported operator %q", op)
+			return nil, 0, fmt.Errorf("unsupported operator %q", op)
 		}
 		if match {
 			out = append(out, row)
 		}
 	}
-	return out, nil
+	return out, skippedNonNumeric, nil
 }
 
 func round2(v float64) float64 {

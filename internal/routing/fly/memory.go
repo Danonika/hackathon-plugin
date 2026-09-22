@@ -5,6 +5,7 @@ import (
 	"crypto/sha1"
 	"encoding/hex"
 	"encoding/json"
+	"log"
 	"os"
 	"path/filepath"
 	"sort"
@@ -114,10 +115,20 @@ func (r *Router) loadMemory() memoryFile {
 	}
 	data, err := os.ReadFile(r.memoryPath)
 	if err != nil {
+		if !os.IsNotExist(err) {
+			// A transient/permission error must be visible: returning an empty
+			// memory here would let the next save overwrite good data.
+			log.Printf("fly: cannot read %s: %v (treating as empty)", r.memoryPath, err)
+		}
 		return memoryFile{}
 	}
 	var mem memoryFile
 	if json.Unmarshal(data, &mem) != nil {
+		// Quarantine the corrupt file so the next save does not silently
+		// overwrite recoverable data with an empty memory.
+		if rerr := os.Rename(r.memoryPath, r.memoryPath+".corrupt"); rerr != nil {
+			log.Printf("fly: cannot quarantine corrupt %s: %v", r.memoryPath, rerr)
+		}
 		return memoryFile{}
 	}
 	return mem
@@ -134,7 +145,30 @@ func (r *Router) saveMemory(mem memoryFile) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(r.memoryPath, data, 0o644)
+	tmp, err := os.CreateTemp(filepath.Dir(r.memoryPath), "fly-memory-*.tmp")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		os.Remove(tmpName)
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		os.Remove(tmpName)
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		os.Remove(tmpName)
+		return err
+	}
+	if err := os.Rename(tmpName, r.memoryPath); err != nil {
+		os.Remove(tmpName)
+		return err
+	}
+	return nil
 }
 
 func (r *Router) MemorySize() int {
@@ -143,7 +177,7 @@ func (r *Router) MemorySize() int {
 	return len(r.loadMemory().Examples)
 }
 
-func (r *Router) AddFeedback(ctx context.Context, ev FeedbackEvent) (int, error) {
+func (r *Router) AddFeedback(ctx context.Context, ev FeedbackEvent) (int, bool, error) {
 	example := FeedbackExample{
 		Hash:         hashTask(ev.Task),
 		Task:         ev.Task,
@@ -152,6 +186,7 @@ func (r *Router) AddFeedback(ctx context.Context, ev FeedbackEvent) (int, error)
 		Source:       ev.Source,
 		CreatedAt:    time.Now().UTC().Format(time.RFC3339),
 	}
+	// Embed before taking the lock: this can be a network call.
 	if r.embedder != nil {
 		if vectors, err := r.embedder.Embed(ctx, []string{ev.Task}); err == nil && len(vectors) == 1 {
 			example.Vector = normalizeVector(vectors[0])
@@ -159,8 +194,19 @@ func (r *Router) AddFeedback(ctx context.Context, ev FeedbackEvent) (int, error)
 	}
 
 	memoryMu.Lock()
-	defer memoryMu.Unlock()
 	mem := r.loadMemory()
+	if mem.Model != "" && mem.Model != r.modelTag {
+		// Examples embedded under a different model are not comparable with
+		// the current task vectors; drop the stale vectors (keyword-only
+		// examples remain usable).
+		pruned := make([]FeedbackExample, 0, len(mem.Examples))
+		for _, existing := range mem.Examples {
+			if len(existing.Vector) == 0 {
+				pruned = append(pruned, existing)
+			}
+		}
+		mem.Examples = pruned
+	}
 	mem.Model = r.modelTag
 	kept := make([]FeedbackExample, 0, len(mem.Examples)+1)
 	for _, existing := range mem.Examples {
@@ -174,11 +220,13 @@ func (r *Router) AddFeedback(ctx context.Context, ev FeedbackEvent) (int, error)
 		kept = kept[len(kept)-maxExamples:]
 	}
 	mem.Examples = kept
-	if err := r.saveMemory(mem); err != nil {
-		return len(kept), err
+	err := r.saveMemory(mem)
+	memoryMu.Unlock()
+	if err != nil {
+		return len(kept), false, err
 	}
-	r.applyDopamine(ctx, ev)
-	return len(kept), nil
+	learned := r.applyDopamine(ctx, ev)
+	return len(kept), learned, nil
 }
 
 func (r *Router) memoryCategoryScores(taskVector []float64, k int) (map[string]float64, bool) {
@@ -195,6 +243,10 @@ func (r *Router) memoryCategoryScores(taskVector []float64, k int) (map[string]f
 	list := []scored{}
 	for _, example := range mem.Examples {
 		if len(example.Vector) == 0 || len(example.Categories) == 0 {
+			continue
+		}
+		if mem.Model != "" && r.modelTag != "" && mem.Model != r.modelTag {
+			// Vectors from another embedding model are not comparable.
 			continue
 		}
 		list = append(list, scored{cosine(taskVector, normalizeVector(example.Vector)), example.Categories})

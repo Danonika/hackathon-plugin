@@ -64,7 +64,9 @@ func (s *Store) report(err error) {
 func (s *Store) ensureWithin(full string) error {
 	rootReal, err := filepath.EvalSymlinks(s.root)
 	if err != nil {
-		return nil
+		// Root resolution failed (not created yet, permission error, symlink
+		// loop): fail closed rather than trusting a lexical comparison.
+		return fmt.Errorf("cannot resolve storage root for containment check: %w", err)
 	}
 	p := full
 	for {
@@ -116,8 +118,15 @@ func (s *Store) InputPath(name string) (string, error) {
 	if err := s.ensureWithin(full); err != nil {
 		return "", err
 	}
-	if st, err := os.Stat(full); err != nil || st.IsDir() {
-		return "", fmt.Errorf("input file not found: %s", name)
+	st, err := os.Stat(full)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", fmt.Errorf("input file not found: %s", name)
+		}
+		return "", fmt.Errorf("cannot stat input %s: %w", name, err)
+	}
+	if st.IsDir() {
+		return "", fmt.Errorf("input path is a directory: %s", name)
 	}
 	return full, nil
 }
@@ -139,6 +148,18 @@ func (s *Store) ArtifactPath(name string, createParent bool) (string, error) {
 	return full, nil
 }
 
+// safeWriteFile refuses to follow a symlink at the final path component and
+// re-verifies containment immediately before the write.
+func (s *Store) safeWriteFile(full string, data []byte, perm os.FileMode) error {
+	if info, err := os.Lstat(full); err == nil && info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("refusing to write through a symlink: %s", full)
+	}
+	if err := s.ensureWithin(full); err != nil {
+		return err
+	}
+	return os.WriteFile(full, data, perm)
+}
+
 func (s *Store) WriteArtifact(rel string, data []byte) (string, error) {
 	clean, err := sanitize(rel)
 	if err != nil {
@@ -151,7 +172,7 @@ func (s *Store) WriteArtifact(rel string, data []byte) (string, error) {
 	if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
 		return "", err
 	}
-	if err := os.WriteFile(full, data, 0o644); err != nil {
+	if err := s.safeWriteFile(full, data, 0o644); err != nil {
 		return "", err
 	}
 	id := filepath.ToSlash(clean)
@@ -208,6 +229,9 @@ func (s *Store) WriteIndex(rel string, data []byte) (string, error) {
 		return "", err
 	}
 	full := filepath.Join(s.root, s.indexDir, clean)
+	if err := s.ensureWithin(full); err != nil {
+		return "", err
+	}
 	if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
 		return "", err
 	}
@@ -222,7 +246,11 @@ func (s *Store) ReadIndex(rel string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	return os.ReadFile(filepath.Join(s.root, s.indexDir, clean))
+	full := filepath.Join(s.root, s.indexDir, clean)
+	if err := s.ensureWithin(full); err != nil {
+		return nil, err
+	}
+	return os.ReadFile(full)
 }
 
 func (s *Store) ListIndexes() ([]string, error) {

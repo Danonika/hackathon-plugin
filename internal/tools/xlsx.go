@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"path"
 	"sort"
 	"strconv"
 	"strings"
@@ -30,7 +31,8 @@ func readXLSXTable(path string, sheetName string) (*table, []string, error) {
 	defer zr.Close()
 
 	warnings := []string{}
-	refs := workbookSheets(zr)
+	refs, wbWarnings := workbookSheets(zr)
+	warnings = append(warnings, wbWarnings...)
 	if len(refs) == 0 {
 		files := sheetFiles(zr)
 		for i, f := range files {
@@ -93,7 +95,8 @@ func readXLSXSheets(path string) ([]xlsxSheet, []string, error) {
 		}
 	}
 
-	refs := workbookSheets(zr)
+	refs, wbWarnings := workbookSheets(zr)
+	warnings = append(warnings, wbWarnings...)
 	styles := readXLSXStyles(zr)
 	if len(refs) == 0 {
 		files := sheetFiles(zr)
@@ -153,11 +156,12 @@ func sheetNumber(name string) int {
 	return n
 }
 
-func workbookSheets(zr *zip.ReadCloser) []xlsxSheetRef {
+func workbookSheets(zr *zip.ReadCloser) ([]xlsxSheetRef, []string) {
+	warnings := []string{}
 	rels := map[string]string{}
 	if f := zipFind(zr, "xl/_rels/workbook.xml.rels"); f != nil {
 		if rc, err := f.Open(); err == nil {
-			dec := xml.NewDecoder(rc)
+			dec := xml.NewDecoder(&maxBytesReader{r: rc, remaining: maxXLSXPartBytes})
 			for {
 				tok, err := dec.Token()
 				if err == io.EOF || err != nil {
@@ -177,7 +181,9 @@ func workbookSheets(zr *zip.ReadCloser) []xlsxSheetRef {
 					}
 				}
 				if id != "" && target != "" {
-					rels[id] = normalizeTarget(target)
+					if normalized := normalizeTarget(target); normalized != "" {
+						rels[id] = normalized
+					}
 				}
 			}
 			rc.Close()
@@ -187,7 +193,7 @@ func workbookSheets(zr *zip.ReadCloser) []xlsxSheetRef {
 	refs := []xlsxSheetRef{}
 	if f := zipFind(zr, "xl/workbook.xml"); f != nil {
 		if rc, err := f.Open(); err == nil {
-			dec := xml.NewDecoder(rc)
+			dec := xml.NewDecoder(&maxBytesReader{r: rc, remaining: maxXLSXPartBytes})
 			for {
 				tok, err := dec.Token()
 				if err == io.EOF || err != nil {
@@ -210,7 +216,8 @@ func workbookSheets(zr *zip.ReadCloser) []xlsxSheetRef {
 					continue
 				}
 				path, ok := rels[rid]
-				if !ok {
+				if !ok || path == "" {
+					warnings = append(warnings, "worksheet relationship "+rid+" could not be resolved and was skipped")
 					continue
 				}
 				if name == "" {
@@ -221,7 +228,7 @@ func workbookSheets(zr *zip.ReadCloser) []xlsxSheetRef {
 			rc.Close()
 		}
 	}
-	return refs
+	return refs, warnings
 }
 
 func normalizeTarget(target string) string {
@@ -229,7 +236,11 @@ func normalizeTarget(target string) string {
 	if !strings.HasPrefix(target, "xl/") {
 		target = "xl/" + target
 	}
-	return target
+	cleaned := path.Clean(target)
+	if cleaned == "." || strings.HasPrefix(cleaned, "..") {
+		return ""
+	}
+	return cleaned
 }
 
 func readSharedStrings(f *zip.File) ([]string, error) {
@@ -238,7 +249,7 @@ func readSharedStrings(f *zip.File) ([]string, error) {
 		return nil, err
 	}
 	defer rc.Close()
-	dec := xml.NewDecoder(rc)
+	dec := xml.NewDecoder(&maxBytesReader{r: rc, remaining: maxXLSXSharedBytes})
 	var out []string
 	var cur strings.Builder
 	inSI, inT := false, false
@@ -249,6 +260,9 @@ func readSharedStrings(f *zip.File) ([]string, error) {
 		}
 		if err != nil {
 			return nil, err
+		}
+		if len(out) > maxXLSXSharedStrings {
+			return nil, fmt.Errorf("sharedStrings.xml exceeds %d entries", maxXLSXSharedStrings)
 		}
 		switch t := tok.(type) {
 		case xml.StartElement:
@@ -269,6 +283,8 @@ func readSharedStrings(f *zip.File) ([]string, error) {
 			switch t.Name.Local {
 			case "t":
 				inT = false
+			case "is":
+				inT = false
 			case "si":
 				out = append(out, cur.String())
 				inSI = false
@@ -284,8 +300,9 @@ func readSheetRows(f *zip.File, shared []string, styles xlsxStyles) ([][]string,
 		return nil, err
 	}
 	defer rc.Close()
-	dec := xml.NewDecoder(rc)
+	dec := xml.NewDecoder(&maxBytesReader{r: rc, remaining: maxXLSXSheetBytes})
 	var rows [][]string
+	totalCells := 0
 	var curRow []string
 	var curVal strings.Builder
 	var curType, curRef string
@@ -308,6 +325,7 @@ func readSheetRows(f *zip.File, shared []string, styles xlsxStyles) ([][]string,
 			case "c":
 				curRef, curType = "", ""
 				curStyle = -1
+				inV, inT = false, false
 				for _, a := range t.Attr {
 					switch a.Name.Local {
 					case "r":
@@ -366,11 +384,22 @@ func readSheetRows(f *zip.File, shared []string, styles xlsxStyles) ([][]string,
 				if col >= maxXLSXCols {
 					continue
 				}
+				newCells := col + 1 - len(curRow)
+				if newCells < 1 {
+					newCells = 1
+				}
+				totalCells += newCells
+				if totalCells > maxXLSXCells {
+					return nil, fmt.Errorf("worksheet exceeds %d cells", maxXLSXCells)
+				}
 				for len(curRow) <= col {
 					curRow = append(curRow, "")
 				}
 				curRow[col] = value
 			case "row":
+				if len(rows) >= maxXLSXRows {
+					return nil, fmt.Errorf("worksheet exceeds %d rows", maxXLSXRows)
+				}
 				rows = append(rows, curRow)
 				inRow = false
 			}
@@ -394,7 +423,34 @@ func colFromRef(ref string) int {
 	return col - 1
 }
 
-const maxXLSXCols = 16384
+// maxBytesReader fails the decode instead of turning a size overrun into a
+// silent io.EOF.
+type maxBytesReader struct {
+	r         io.Reader
+	remaining int64
+}
+
+func (m *maxBytesReader) Read(p []byte) (int, error) {
+	if m.remaining <= 0 {
+		return 0, fmt.Errorf("zip entry exceeds the configured size limit")
+	}
+	if int64(len(p)) > m.remaining {
+		p = p[:m.remaining]
+	}
+	n, err := m.r.Read(p)
+	m.remaining -= int64(n)
+	return n, err
+}
+
+const (
+	maxXLSXCols          = 16384
+	maxXLSXRows          = 200000
+	maxXLSXSharedBytes   = 64 << 20
+	maxXLSXSharedStrings = 1000000
+	maxXLSXSheetBytes    = 256 << 20
+	maxXLSXCells         = 5000000
+	maxXLSXPartBytes     = 64 << 20
+)
 
 type xlsxStyles struct {
 	dateStyles    map[int]bool
@@ -417,7 +473,7 @@ func readXLSXStyles(zr *zip.ReadCloser) xlsxStyles {
 	}
 	if f := zipFind(zr, "xl/workbook.xml"); f != nil {
 		if rc, err := f.Open(); err == nil {
-			dec := xml.NewDecoder(rc)
+			dec := xml.NewDecoder(&maxBytesReader{r: rc, remaining: maxXLSXPartBytes})
 			for {
 				tok, err := dec.Token()
 				if err == io.EOF || err != nil {
@@ -445,7 +501,7 @@ func readXLSXStyles(zr *zip.ReadCloser) xlsxStyles {
 		return out
 	}
 	defer rc.Close()
-	dec := xml.NewDecoder(rc)
+	dec := xml.NewDecoder(&maxBytesReader{r: rc, remaining: maxXLSXPartBytes})
 	customFmt := map[int]fmtKind{}
 	styleFormats := []int{}
 	inCellXfs := false
@@ -510,7 +566,10 @@ func builtinFormatKind(id int) fmtKind {
 		return fmtKind{date: true}
 	case id >= 18 && id <= 21:
 		return fmtKind{time: true}
-	case id >= 45 && id <= 47:
+	case id == 45 || id == 47:
+		// mm:ss and mmss.0 are clock times; only 46 ([h]:mm:ss) is elapsed.
+		return fmtKind{time: true}
+	case id == 46:
 		return fmtKind{elapsed: true}
 	}
 	return fmtKind{}

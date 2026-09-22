@@ -1,0 +1,4 @@
+interface:
+  display_name: "DevOps Expert"
+  short_description: "Configure and verify the Docker/compose stack with command evidence."
+  default_prompt: "Use $devops-expert to review the Docker stack and prove it works."

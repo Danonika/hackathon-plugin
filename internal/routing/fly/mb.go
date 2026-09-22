@@ -1,4 +1,4 @@
-﻿package fly
+package fly
 
 import (
 	"context"
@@ -58,7 +58,38 @@ func (r *Router) WithBrain(path string) *Router {
 
 func (r *Router) loadBrain() *MBrain {
 	brainMu.Lock()
-	defer brainMu.Unlock()
+	if r.brain != nil {
+		cached := r.brain
+		brainMu.Unlock()
+		return cached
+	}
+	path := r.brainPath
+	brainMu.Unlock()
+	if path == "" {
+		return nil
+	}
+	// Read and parse outside the lock: a slow disk must not serialize every
+	// Router in the process.
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	var brain MBrain
+	if json.Unmarshal(data, &brain) != nil || brain.KC == 0 || len(brain.Readout) == 0 {
+		return nil
+	}
+	brainMu.Lock()
+	if r.brain == nil {
+		r.brain = &brain
+	}
+	cached := r.brain
+	brainMu.Unlock()
+	return cached
+}
+
+// loadBrainLocked is the lock-free body of loadBrain for callers that already
+// hold brainMu.
+func (r *Router) loadBrainLocked() *MBrain {
 	if r.brain != nil {
 		return r.brain
 	}
@@ -77,6 +108,24 @@ func (r *Router) loadBrain() *MBrain {
 	return r.brain
 }
 
+// clone deep-copies the brain so an update can be saved before it is published.
+func (b *MBrain) clone() *MBrain {
+	if b == nil {
+		return nil
+	}
+	out := *b
+	out.Categories = append([]string(nil), b.Categories...)
+	out.Readout = make(map[string][]float64, len(b.Readout))
+	for k, v := range b.Readout {
+		out.Readout[k] = append([]float64(nil), v...)
+	}
+	out.Bias = make(map[string]float64, len(b.Bias))
+	for k, v := range b.Bias {
+		out.Bias[k] = v
+	}
+	return &out
+}
+
 func (r *Router) saveBrain(brain *MBrain) error {
 	if r.brainPath == "" {
 		return nil
@@ -89,11 +138,36 @@ func (r *Router) saveBrain(brain *MBrain) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(r.brainPath, data, 0o644)
+	tmp, err := os.CreateTemp(filepath.Dir(r.brainPath), "fly-brain-*.tmp")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		os.Remove(tmpName)
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		os.Remove(tmpName)
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		os.Remove(tmpName)
+		return err
+	}
+	if err := os.Rename(tmpName, r.brainPath); err != nil {
+		os.Remove(tmpName)
+		return err
+	}
+	return nil
 }
 
 func (r *Router) Dopamine() DopamineStats {
-	brain := r.loadBrain()
+	brainMu.Lock()
+	defer brainMu.Unlock()
+	brain := r.loadBrainLocked()
 	if brain == nil {
 		return DopamineStats{}
 	}
@@ -109,7 +183,7 @@ func splitMix64(state *uint64) float64 {
 	z := *state
 	z = (z ^ (z >> 30)) * 0xbf58476d1ce4e5b9
 	z = (z ^ (z >> 27)) * 0x94d049bb133111eb
-	z = z ^ (z >> 31)
+	z ^= z >> 31
 	return float64(z>>11)/float64(1<<53)*2 - 1
 }
 
@@ -171,8 +245,9 @@ func (b *MBrain) scores(input []float64) (map[string]float64, []float64, bool) {
 	best := math.Inf(-1)
 	for _, category := range b.Categories {
 		weights := b.Readout[category]
-		if len(weights) < len(code) {
-			continue
+		if len(weights) != len(code) {
+			// A short/long readout is a corrupt brain, not a category to skip.
+			return nil, nil, false
 		}
 		sum := b.Bias[category]
 		for i, v := range code {
@@ -211,21 +286,33 @@ func (r *Router) mbCategoryScores(ctx context.Context, task string) (map[string]
 	if !ok {
 		return nil, false
 	}
+	brainMu.Lock()
 	scores, _, ok := brain.scores(vec)
+	brainMu.Unlock()
 	return scores, ok
 }
 
 func (r *Router) applyDopamine(ctx context.Context, ev FeedbackEvent) bool {
-	brain := r.loadBrain()
-	if brain == nil || r.embedder == nil {
+	if r.embedder == nil {
 		return false
 	}
+	// Embed outside the lock: the embedder can be a network client.
 	vec, ok := r.embedTask(ctx, ev.Task)
 	if !ok {
 		return false
 	}
-	_, code, ok := brain.scores(vec)
+	// Mutate a copy under the lock, then persist outside it so a disk write
+	// never serializes every Router in the process.
+	brainMu.Lock()
+	base := r.loadBrainLocked()
+	if base == nil {
+		brainMu.Unlock()
+		return false
+	}
+	work := base.clone()
+	_, code, ok := work.scores(vec)
 	if !ok || code == nil {
+		brainMu.Unlock()
 		return false
 	}
 	reward := map[string]bool{}
@@ -243,24 +330,30 @@ func (r *Router) applyDopamine(ctx context.Context, ev FeedbackEvent) bool {
 	switch ev.Source {
 	case "accepted", "normal-teacher":
 		for category := range reward {
-			brain.adjust(category, code, eta)
+			work.adjust(category, code, eta)
 		}
-		brain.Dopamine.PAM++
+		work.Dopamine.PAM++
 	case "codex-correction", "fallback":
 		for category := range punish {
-			brain.adjust(category, code, -eta)
+			work.adjust(category, code, -eta)
 		}
 		for category := range reward {
-			brain.adjust(category, code, eta/2)
+			work.adjust(category, code, eta/2)
 		}
-		brain.Dopamine.PPL1++
+		work.Dopamine.PPL1++
 	default:
+		brainMu.Unlock()
+		return false
+	}
+	brainMu.Unlock()
+
+	if err := r.saveBrain(work); err != nil {
+		// In-memory state is unchanged: the caller sees a real failure.
 		return false
 	}
 	brainMu.Lock()
-	r.brain = brain
+	r.brain = work
 	brainMu.Unlock()
-	_ = r.saveBrain(brain)
 	return true
 }
 
@@ -286,6 +379,12 @@ func (b *MBrain) adjust(category string, code []float64, eta float64) {
 }
 
 func (b *MBrain) Train(input []float64, category string, eta float64) {
+	if b.Readout == nil {
+		b.Readout = map[string][]float64{}
+	}
+	if b.Bias == nil {
+		b.Bias = map[string]float64{}
+	}
 	if len(b.Categories) == 0 || category == "" {
 		return
 	}

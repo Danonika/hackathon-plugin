@@ -2,12 +2,25 @@ package tools
 
 import (
 	"context"
+	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
 
 	"hackathonkit.local/agentkit/internal/mcp"
 )
+
+const maxTextInspectBytes = 8 << 20
+
+func readCapped(path string, limit int64) ([]byte, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	return io.ReadAll(io.LimitReader(f, limit))
+}
 
 func registerFiles(reg *mcp.Registry, d Deps) {
 	reg.Register(tool(
@@ -39,6 +52,10 @@ func registerFiles(reg *mcp.Registry, d Deps) {
 			warnings := []string{}
 			switch ext {
 			case "csv", "tsv":
+				if st.Size() > maxTextInspectBytes {
+					warnings = append(warnings, fmt.Sprintf("table is %d bytes; skipping full parse (limit %d)", st.Size(), maxTextInspectBytes))
+					break
+				}
 				t, warns, terr := readAnyTable(full, "")
 				warnings = append(warnings, warns...)
 				if terr != nil {
@@ -56,6 +73,10 @@ func registerFiles(reg *mcp.Registry, d Deps) {
 					data["has_timestamp"] = hasTS
 				}
 			case "xlsx":
+				if st.Size() > maxTextInspectBytes {
+					warnings = append(warnings, fmt.Sprintf("workbook is %d bytes; skipping full parse (limit %d)", st.Size(), maxTextInspectBytes))
+					break
+				}
 				sheets, warns, terr := readXLSXSheets(full)
 				warnings = append(warnings, warns...)
 				if terr != nil {
@@ -85,9 +106,19 @@ func registerFiles(reg *mcp.Registry, d Deps) {
 				warnings = append(warnings, "legacy .xls (BIFF) workbooks are not supported; convert the file to .xlsx or .csv first")
 			default:
 				if isTextExt(ext) {
-					if b, rerr := os.ReadFile(full); rerr == nil {
-						data["lines"] = strings.Count(string(b), "\n") + 1
-						data["chars"] = len(b)
+					b, rerr := readCapped(full, maxTextInspectBytes+1)
+					if rerr != nil {
+						warnings = append(warnings, "could not read text content: "+rerr.Error())
+					} else {
+						if len(b) == 0 {
+							data["lines"] = 0
+						} else {
+							data["lines"] = strings.Count(strings.TrimSuffix(string(b), "\n"), "\n") + 1
+						}
+						data["chars"] = len([]rune(string(b)))
+						if int64(len(b)) > maxTextInspectBytes {
+							warnings = append(warnings, "text content truncated for inspection")
+						}
 					}
 				} else {
 					warnings = append(warnings, "binary or unsupported file type: only metadata is reported")

@@ -1,7 +1,24 @@
+#:schema https://developers.openai.com/codex/config-schema.json
+
 [mcp_servers.hackathonkit]
-# POSIX fallback launcher (Linux/macOS).
-# On Windows, use: command = "./plugins/hackathonkit/scripts/hackathonkit-mcp-launcher.cmd"
+# POSIX launcher (Linux/macOS). Codex cannot execute a .sh on Windows: replace
+# `command` below with "./plugins/hackathonkit/scripts/hackathonkit-mcp-launcher.cmd",
+# or run scripts/setup.ps1, which generates plugins/hackathonkit/.mcp.json with the
+# .cmd launcher for Windows.
 command = "./plugins/hackathonkit/scripts/hackathonkit-mcp-launcher.sh"
 args = []
-startup_timeout_sec = 60
-tool_timeout_sec = 120
+# 180s covers the docker-compose fallback on a cold machine (image pull/build +
+# dependency startup). Raise further or pre-build images if your network is slow.
+startup_timeout_sec = 180
+# Slowest tools: ingestion, quality.gate and research passes. Raise per
+# environment if these time out; there is no config-level retry.
+tool_timeout_sec = 180
+
+# Web search is opt-in: set to "live" when $theme-research must verify external
+# facts and the environment may reach the network. While it is "disabled",
+# $theme-research must use the provided corpus only and list unverifiable
+# external facts as gaps instead of asserting them.
+web_search = "disabled"
+
+# Appended to every prompt (additive, unlike model_instructions_file).
+persistent_instructions = "Follow AGENTS.md. If the Hackathon Agent Kit MCP server is available, call system.context before planning and use its tools for evidence; when the server is unavailable, say so and fall back to repository evidence. Never claim a result without a tool result or file behind it."

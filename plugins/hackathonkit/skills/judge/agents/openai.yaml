@@ -1,7 +1,7 @@
 interface:
   display_name: "Hackathon Agent Kit Judge"
-  short_description: "Evaluate a frozen project snapshot with the Demo Day rubric."
-  default_prompt: "Use $judge to evaluate the current frozen project snapshot."
+  short_description: "Score a frozen snapshot with 3 isolated runs and the Demo Day rubric."
+  default_prompt: "Use $judge to score the current frozen snapshot."
 
 policy:
   allow_implicit_invocation: false

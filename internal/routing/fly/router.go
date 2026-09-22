@@ -1,4 +1,4 @@
-﻿package fly
+package fly
 
 import (
 	"context"
@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"hackathonkit.local/agentkit/internal/config"
 )
@@ -39,6 +40,14 @@ type Router struct {
 	brain     *MBrain
 	llm       LLMClassifier
 	building  chan struct{}
+
+	embedCacheMu   sync.Mutex
+	embedCacheTask string
+	embedCacheVec  []float64
+	embedCacheOK   bool
+	embedCacheSet  bool
+
+	centroidFailAt time.Time
 }
 
 func NewRouter(settings config.RoutingSettings) *Router {
@@ -62,34 +71,34 @@ func (r *Router) WithEmbeddings(embedder Embedder, cachePath string, modelTag st
 
 var categoryKeywords = map[string][]string{
 	"documents": {
-		"pdf", "docx", "РґРѕРєСѓРјРµРЅС‚", "РґРѕРіРѕРІРѕСЂ", "Р°РєС‚", "СЃРєР°РЅ", "scan", "РёР·РІР»РµС‡", "С‚РµРєСЃС‚", "СЃРјРµС‚", "РёРЅСЃС‚СЂСѓРєС†",
+		"pdf", "docx", "документ", "договор", "акт", "скан", "scan", "извлеч", "текст", "смет", "инструкц",
 	},
 	"knowledge": {
-		"РЅР°Р№РґРё", "РЅР°Р№С‚Рё", "РїРѕРёСЃРє", "search", "СЂРµРіР»Р°РјРµРЅС‚", "РїСЂР°РІРёР»", "policy", "СЃРїСЂР°РІРє", "РёСЃС‚РѕС‡РЅРёРє", "РѕС‚РІРµС‚СЊ", "РІРѕРїСЂРѕСЃ",
+		"найди", "найти", "поиск", "search", "регламент", "правил", "policy", "справк", "источник", "ответь", "вопрос",
 	},
 	"speech": {
-		"Р°СѓРґРёРѕ", "audio", "Р·Р°РїРёСЃ", "РёРЅС‚РµСЂРІСЊСЋ", "interview", "С‚СЂР°РЅСЃРєСЂРёР±", "СЃСѓР±С‚РёС‚СЂ", "subtitle", "РіРѕР»РѕСЃ", "voice", "СЂРµС‡СЊ",
+		"аудио", "audio", "запис", "интервью", "interview", "транскриб", "субтитр", "subtitle", "голос", "voice", "речь",
 	},
 	"vision": {
-		"РёР·РѕР±СЂР°Р¶РµРЅ", "С„РѕС‚Рѕ", "РєР°СЂС‚РёРЅРє", "СЃРєСЂРёРЅС€РѕС‚", "screenshot", "image", "vision", "СЃС…РµРј", "С‡РµСЂС‚РµР¶",
+		"изображен", "фото", "картинк", "скриншот", "screenshot", "image", "vision", "схем", "чертеж",
 	},
 	"media": {
-		"РІРёРґРµРѕ", "video", "РјРѕРЅС‚Р°Р¶", "РЅР°СЂРµР·Рє", "ffmpeg", "РєР»РёРї", "С„СЂР°РіРјРµРЅС‚ РІРёРґРµРѕ",
+		"видео", "video", "монтаж", "нарезк", "ffmpeg", "клип", "фрагмент видео",
 	},
 	"data": {
-		"csv", "xlsx", "excel", "С‚Р°Р±Р»РёС†", "РґР°С‚Р°СЃРµС‚", "dataset", "СЃС‚СЂРѕРє", "РєРѕР»РѕРЅ", "СЃС‚Р°С‚РёСЃС‚РёРє", "РґР°РЅРЅ", "РїРѕРєР°Р·Р°С‚РµР»", "РјРµС‚СЂРёРє",
+		"csv", "xlsx", "excel", "таблиц", "датасет", "dataset", "строк", "колон", "статистик", "данн", "показател", "метрик",
 	},
 	"timeseries": {
-		"С‚РµР»РµРјРµС‚СЂРё", "telemetry", "РґР°С‚С‡РёРє", "sensor", "Р°РЅРѕРјР°Р»", "anomal", "РІСЂРµРј", "time series", "С‚СЂРµРЅРґ", "РґРёРЅР°РјРёРє", "РїРµСЂРёРѕРґ",
+		"телеметри", "telemetry", "датчик", "sensor", "аномал", "anomal", "врем", "time series", "тренд", "динамик", "период",
 	},
 	"classification": {
-		"РєР»Р°СЃСЃРёС„РёС†", "classify", "РєР°С‚РµРіРѕСЂ", "spam", "СЃРїР°Рј", "С„СЂРѕРґ", "fraud", "Р»РѕРіРё", "logs", "С‚РёРїРёР·Р°С†", "СЂРёСЃРє",
+		"классифиц", "classify", "категор", "spam", "спам", "фрод", "fraud", "логи", "logs", "типизац", "риск",
 	},
 	"geo": {
-		"РєР°СЂС‚", "РіРµРѕ", "geo", "РєРѕРѕСЂРґРёРЅР°С‚", "РјРµСЃС‚РЅРѕСЃС‚", "РїРѕР»СЏ", "СѓС‡Р°СЃС‚Рє",
+		"карт", "гео", "geo", "координат", "местност", "поля", "участк",
 	},
 	"reports": {
-		"РѕС‚С‡С‘С‚", "РѕС‚С‡РµС‚", "report", "РїСЂРµР·РµРЅС‚Р°С†", "СЂРµР·СЋРјРµ", "РёС‚РѕРі", "РІС‹РІРѕРґ",
+		"отчёт", "отчет", "report", "презентац", "резюме", "итог", "вывод",
 	},
 }
 
@@ -124,8 +133,17 @@ func (r *Router) Recommend(ctx context.Context, task string, meta map[string]any
 			scores[category] = s
 		}
 	}
-	keywordSignal := len(scores) > 0
-	encoderParts := []string{"keyword"}
+	keywordSignal := false
+	for _, value := range scores {
+		if value > 0 {
+			keywordSignal = true
+			break
+		}
+	}
+	encoderParts := []string{}
+	if keywordSignal {
+		encoderParts = append(encoderParts, "keyword")
+	}
 	if embeddingScores, ok := r.embeddingCategoryScores(ctx, task); ok {
 		encoderParts = append(encoderParts, "embedding")
 		for category, emb := range embeddingScores {
@@ -144,7 +162,7 @@ func (r *Router) Recommend(ctx context.Context, task string, meta map[string]any
 					scores[category] *= 0.6
 				}
 				for category, vote := range knn {
-					scores[category] = scores[category] + 0.4*vote
+					scores[category] += 0.4 * vote
 					if scores[category] > 1.0 {
 						scores[category] = 1.0
 					}
@@ -161,7 +179,7 @@ func (r *Router) Recommend(ctx context.Context, task string, meta map[string]any
 			scores[category] *= 0.4
 		}
 		for category, mb := range mbScores {
-			scores[category] = scores[category] + 0.6*mb
+			scores[category] += 0.6 * mb
 			if scores[category] > 1.0 {
 				scores[category] = 1.0
 			}
@@ -173,7 +191,7 @@ func (r *Router) Recommend(ctx context.Context, task string, meta map[string]any
 			scores[category] *= 0.4
 		}
 		for category, v := range llmScores {
-			scores[category] = scores[category] + 0.6*v
+			scores[category] += 0.6 * v
 			if scores[category] > 1.0 {
 				scores[category] = 1.0
 			}
@@ -181,7 +199,7 @@ func (r *Router) Recommend(ctx context.Context, task string, meta map[string]any
 	}
 	encoder := strings.Join(encoderParts, "+")
 	applyMetadata(scores, meta)
-	if keywordSignal || len(scores) > 0 {
+	if keywordSignal {
 		boost(scores, "reports", 0.15)
 	}
 
@@ -199,7 +217,7 @@ func (r *Router) Recommend(ctx context.Context, task string, meta map[string]any
 	sort.Strings(categories)
 	for _, category := range categories {
 		s := scores[category]
-		if s > routeScore {
+		if s > routeScore && categoryAvailable(category, avail) {
 			route = category
 			routeScore = s
 		}
@@ -289,10 +307,32 @@ func boost(scores map[string]float64, category string, delta float64) {
 	}
 }
 
+func categoryAvailable(category string, avail map[string]bool) bool {
+	caps, known := categoryCapabilities[category]
+	if !known {
+		// A dynamic encoder/MBrain category with no capability mapping is not
+		// filtered by capability availability.
+		return true
+	}
+	if len(avail) == 0 {
+		return true
+	}
+	for _, cap := range caps {
+		if avail[cap] {
+			return true
+		}
+	}
+	return false
+}
+
 func stringSlice(v any) []string {
 	switch t := v.(type) {
 	case []string:
-		return t
+		out := make([]string, 0, len(t))
+		for _, item := range t {
+			out = append(out, strings.ToLower(item))
+		}
+		return out
 	case []any:
 		out := make([]string, 0, len(t))
 		for _, item := range t {
