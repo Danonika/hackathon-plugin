@@ -5,6 +5,7 @@ package plans
 import (
 	"encoding/json"
 	"fmt"
+	"hash/fnv"
 	"os"
 	"path/filepath"
 	"strings"
@@ -83,9 +84,18 @@ func Slug(value string) string {
 		out = "plan"
 	}
 	if runes := []rune(out); len(runes) > 60 {
-		out = strings.Trim(string(runes[:60]), "-")
+		trimmed := strings.Trim(string(runes[:60]), "-")
+		// Keep the stem unique: truncation alone could collide with a different
+		// plan whose name shares the first 60 runes.
+		out = trimmed + "-" + shortHash(out)
 	}
 	return strings.Trim(out, "-")
+}
+
+func shortHash(value string) string {
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(value))
+	return fmt.Sprintf("%08x", h.Sum32())
 }
 
 func Load(root, slug string) (Plan, error) {

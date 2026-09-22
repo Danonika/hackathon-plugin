@@ -126,8 +126,15 @@ func (s *Store) InputPath(name string) (string, error) {
 	if err := s.ensureWithin(full); err != nil {
 		return "", err
 	}
-	if st, err := os.Stat(full); err != nil || st.IsDir() {
-		return "", fmt.Errorf("input file not found: %s", name)
+	st, err := os.Stat(full)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", fmt.Errorf("input file not found: %s", name)
+		}
+		return "", fmt.Errorf("cannot stat input %s: %w", name, err)
+	}
+	if st.IsDir() {
+		return "", fmt.Errorf("input path is a directory: %s", name)
 	}
 	return full, nil
 }

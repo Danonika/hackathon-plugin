@@ -33,10 +33,10 @@ func TestValidateJudgeReportEdgeCases(t *testing.T) {
 		}, "out of range"},
 		{"negative deduction", func(r *JudgeReport) {
 			r.Deductions = []Deduction{{Criterion: "value", Points: -2, Reason: "unjustified"}}
-		}, "negative points"},
+		}, "non-finite or negative point value"},
 		{"nan deduction", func(r *JudgeReport) {
 			r.Deductions = []Deduction{{Criterion: "value", Points: math.NaN(), Reason: "unjustified"}}
-		}, "negative points"},
+		}, "non-finite or negative point value"},
 		{"unknown deduction criterion", func(r *JudgeReport) {
 			r.Deductions = []Deduction{{Criterion: "vibes", Points: 1, Reason: "unjustified"}}
 		}, "unknown criterion"},

@@ -296,6 +296,9 @@ func (c *Client) GetUpdates(ctx context.Context, offset int64, limit, timeoutSec
 	if limit <= 0 || limit > 100 {
 		limit = 10
 	}
+	if timeoutSec > 300 {
+		timeoutSec = 300
+	}
 	if timeoutSec > 0 {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, time.Duration(timeoutSec)*time.Second+c.requestTimeout())

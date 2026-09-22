@@ -234,7 +234,11 @@ func NewManager(root string) *Manager {
 
 func mergeNumeric(dst *File, src filePatch) {
 	if src.Tools.DefaultTimeoutSec != nil {
-		dst.Tools.DefaultTimeoutSec = *src.Tools.DefaultTimeoutSec
+		if v := *src.Tools.DefaultTimeoutSec; v > 0 {
+			dst.Tools.DefaultTimeoutSec = v
+		} else {
+			log.Printf("config: ignoring non-positive default_timeout_sec %d (keeping %d)", v, dst.Tools.DefaultTimeoutSec)
+		}
 	}
 	if src.Tools.MaxTextChars != nil {
 		if v := *src.Tools.MaxTextChars; v > 0 {
@@ -346,10 +350,6 @@ func (m *Manager) Routing() RoutingState {
 			m.routingCache = doc.Routing
 			m.routingInit = true
 			return m.routingCache
-		}
-	} else if readErr != nil {
-		if !os.IsNotExist(readErr) {
-			log.Printf("config: cannot read %s: %v (keeping the last known routing state)", path, readErr)
 		}
 	}
 	if m.routingInit {

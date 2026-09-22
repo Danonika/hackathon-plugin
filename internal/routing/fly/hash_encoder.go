@@ -7,6 +7,7 @@ import (
 	"math"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 )
 
 type HashEncoder struct {
@@ -57,7 +58,7 @@ func tokenizeFly(text string) []string {
 	var out []string
 	var current strings.Builder
 	flush := func() {
-		if current.Len() >= 2 {
+		if utf8.RuneCountInString(current.String()) >= 2 {
 			out = append(out, strings.ToLower(current.String()))
 		}
 		current.Reset()

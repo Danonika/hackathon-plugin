@@ -181,6 +181,7 @@ func (s *Store) Record(ctx context.Context, in RecordInput) (RecordResult, error
 		}
 		l.Evidence = mergeEvidence(l.Evidence, in.Evidence)
 		l.Confidence = confidence(l.Successes, l.Failures)
+		l.Scope = scope
 		l.UpdatedAt = now
 		result.Created = false
 		result.Learning = *l

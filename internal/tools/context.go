@@ -279,10 +279,16 @@ func frontmatterDescription(text string) string {
 		if strings.TrimSpace(line) == "---" {
 			break
 		}
-		if !strings.HasPrefix(line, "description:") {
+		trimmed := strings.TrimSpace(line)
+		if !strings.HasPrefix(trimmed, "description:") {
 			continue
 		}
-		value := strings.TrimSpace(strings.TrimPrefix(line, "description:"))
+		value := strings.TrimSpace(strings.TrimPrefix(trimmed, "description:"))
+		if len(value) > 0 && value[0] != '"' && value[0] != '\'' {
+			if idx := strings.Index(value, " #"); idx >= 0 {
+				value = strings.TrimSpace(value[:idx])
+			}
+		}
 		if value == "|" || value == ">" || value == "|-" || value == ">-" {
 			// Block scalar: collect the indented lines that follow.
 			var b strings.Builder

@@ -182,8 +182,8 @@ func ValidateJudgeReport(r JudgeReport, snapshotSHA string) []string {
 		if strings.TrimSpace(d.Reason) == "" {
 			problems = append(problems, "deduction without a reason")
 		}
-		if d.Points < 0 || math.IsNaN(d.Points) {
-			problems = append(problems, "deduction with negative points")
+		if d.Points < 0 || math.IsNaN(d.Points) || math.IsInf(d.Points, 0) {
+			problems = append(problems, "deduction with a non-finite or negative point value")
 		}
 	}
 	return problems

@@ -166,6 +166,9 @@ func registerTelegram(reg *mcp.Registry, d Deps) {
 
 func parseBotCommands(args map[string]any) ([]telegram.BotCommand, error) {
 	raw, ok := args["commands"].([]any)
+	if _, present := args["commands"]; present && !ok {
+		return nil, fmt.Errorf("commands must be an array of {command, description} objects")
+	}
 	if !ok || len(raw) == 0 {
 		return nil, fmt.Errorf("commands is required for set_commands")
 	}

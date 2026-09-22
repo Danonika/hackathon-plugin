@@ -245,8 +245,9 @@ func (b *MBrain) scores(input []float64) (map[string]float64, []float64, bool) {
 	best := math.Inf(-1)
 	for _, category := range b.Categories {
 		weights := b.Readout[category]
-		if len(weights) < len(code) {
-			continue
+		if len(weights) != len(code) {
+			// A short/long readout is a corrupt brain, not a category to skip.
+			return nil, nil, false
 		}
 		sum := b.Bias[category]
 		for i, v := range code {

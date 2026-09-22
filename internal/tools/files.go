@@ -106,13 +106,17 @@ func registerFiles(reg *mcp.Registry, d Deps) {
 				warnings = append(warnings, "legacy .xls (BIFF) workbooks are not supported; convert the file to .xlsx or .csv first")
 			default:
 				if isTextExt(ext) {
-					b, rerr := readCapped(full, maxTextInspectBytes)
+					b, rerr := readCapped(full, maxTextInspectBytes+1)
 					if rerr != nil {
 						warnings = append(warnings, "could not read text content: "+rerr.Error())
 					} else {
-						data["lines"] = strings.Count(strings.TrimSuffix(string(b), "\n"), "\n") + 1
+						if len(b) == 0 {
+							data["lines"] = 0
+						} else {
+							data["lines"] = strings.Count(strings.TrimSuffix(string(b), "\n"), "\n") + 1
+						}
 						data["chars"] = len([]rune(string(b)))
-						if int64(len(b)) >= maxTextInspectBytes {
+						if int64(len(b)) > maxTextInspectBytes {
 							warnings = append(warnings, "text content truncated for inspection")
 						}
 					}

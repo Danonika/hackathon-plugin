@@ -129,14 +129,18 @@ func TestLoadParseErrorAndSlugFallback(t *testing.T) {
 
 func TestSlugEdges(t *testing.T) {
 	long := strings.Repeat("a", 70)
-	if got := Slug(long); len(got) != 60 {
+	if got := Slug(long); len(got) <= 60 || len(got) > 70 {
 		t.Fatalf("long slug len = %d (%q)", len(got), got)
+	}
+	// Distinct names sharing the first 60 runes must not collide.
+	if Slug(strings.Repeat("a", 61)) == Slug(strings.Repeat("a", 62)) {
+		t.Fatal("truncated slugs must be disambiguated")
 	}
 	if got := Slug("Привет Мир"); got != "привет-мир" {
 		t.Fatalf("cyrillic slug = %q", got)
 	}
 	dashAtCut := strings.Repeat("a", 59) + " b"
-	if got := Slug(dashAtCut); got != strings.Repeat("a", 59) {
+	if got := Slug(dashAtCut); !strings.HasPrefix(got, strings.Repeat("a", 59)) {
 		t.Fatalf("slug trailing dash = %q", got)
 	}
 	if got := Slug("--"); got != "plan" {

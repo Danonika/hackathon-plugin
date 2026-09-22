@@ -355,7 +355,8 @@ func normalizeVector(v []float64) []float64 {
 	}
 	norm = math.Sqrt(norm)
 	if norm == 0 {
-		return v
+		// Return a copy: callers may store this slice and must not alias input.
+		return append([]float64(nil), v...)
 	}
 	out := make([]float64, len(v))
 	for i, x := range v {

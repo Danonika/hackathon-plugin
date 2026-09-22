@@ -19,6 +19,12 @@ func IntPtr(v int) *int {
 	return &v
 }
 
+const (
+	StatusOK      = "ok"
+	StatusPartial = "partial"
+	StatusError   = "error"
+)
+
 type Envelope struct {
 	Status   string         `json:"status"`
 	Data     any            `json:"data,omitempty"`
@@ -29,15 +35,15 @@ type Envelope struct {
 }
 
 func OK(trace string, data any) Envelope {
-	return Envelope{Status: "ok", Data: data, TraceID: trace}
+	return Envelope{Status: StatusOK, Data: data, TraceID: trace}
 }
 
 func Partial(trace string, data any, warnings ...string) Envelope {
-	return Envelope{Status: "partial", Data: data, Warnings: warnings, TraceID: trace}
+	return Envelope{Status: StatusPartial, Data: data, Warnings: warnings, TraceID: trace}
 }
 
 func Fail(trace string, msg string) Envelope {
-	return Envelope{Status: "error", Data: map[string]any{"error": msg}, TraceID: trace}
+	return Envelope{Status: StatusError, Data: map[string]any{"error": msg}, TraceID: trace}
 }
 
 func (e Envelope) WithSources(sources ...Source) Envelope {

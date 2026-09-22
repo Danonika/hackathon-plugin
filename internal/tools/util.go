@@ -20,8 +20,16 @@ func parseNumber(s string) (float64, bool) {
 		}
 		return v, true
 	}
-	if strings.Contains(s, ",") && !strings.Contains(s, ".") {
-		if commaIsThousands(s) {
+	if strings.Contains(s, ",") {
+		if strings.Contains(s, ".") {
+			// Both separators: the last one is the decimal separator.
+			if strings.LastIndex(s, ",") > strings.LastIndex(s, ".") {
+				s = strings.ReplaceAll(s, ".", "")
+				s = strings.ReplaceAll(s, ",", ".")
+			} else {
+				s = strings.ReplaceAll(s, ",", "")
+			}
+		} else if commaIsThousands(s) {
 			s = strings.ReplaceAll(s, ",", "")
 		} else {
 			s = strings.ReplaceAll(s, ",", ".")

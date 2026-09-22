@@ -15,6 +15,7 @@ func LoadDotEnv(root string) {
 		}
 		return
 	}
+	fileSet := map[string]bool{}
 	for _, line := range strings.Split(string(data), "\n") {
 		line = strings.TrimSpace(strings.TrimSuffix(line, "\r"))
 		line = strings.TrimSpace(strings.TrimPrefix(line, "export "))
@@ -35,9 +36,13 @@ func LoadDotEnv(root string) {
 			log.Printf("dotenv: ignoring invalid key %q", key)
 			continue
 		}
-		if _, set := os.LookupEnv(key); !set {
+		// A key already present in the process environment wins, but a later
+		// duplicate line in this file overrides an earlier one.
+		if _, set := os.LookupEnv(key); !set || fileSet[key] {
 			if err := os.Setenv(key, value); err != nil {
 				log.Printf("dotenv: cannot set %s: %v", key, err)
+			} else {
+				fileSet[key] = true
 			}
 		}
 	}

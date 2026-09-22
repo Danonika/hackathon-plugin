@@ -27,7 +27,12 @@ func Write(path string, data []byte, mode os.FileMode) error {
 		mode = ModeContent
 	}
 	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	dirMode := os.FileMode(0o755)
+	if mode&0o077 == 0 {
+		// Least-privilege state files get a private containing directory.
+		dirMode = 0o700
+	}
+	if err := os.MkdirAll(dir, dirMode); err != nil {
 		return err
 	}
 	// Best-effort: reclaim temp files left by a previous crash. Iterate the

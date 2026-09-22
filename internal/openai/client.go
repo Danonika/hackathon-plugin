@@ -171,6 +171,9 @@ func (c *Client) Embed(ctx context.Context, texts []string) ([][]float64, error)
 		}
 		result := make([][]float64, len(texts))
 		for i, d := range out.Data {
+			if d.Embedding == nil {
+				return nil, fmt.Errorf("embeddings response missing a vector for input %d", i)
+			}
 			result[i] = d.Embedding
 		}
 		return result, nil
@@ -203,7 +206,11 @@ func (c *Client) Transcribe(ctx context.Context, path string, language string) (
 	}
 	defer f.Close()
 
-	if st, serr := f.Stat(); serr == nil && st.Size() > maxAudioBytes {
+	st, serr := f.Stat()
+	if serr != nil {
+		return "", serr
+	}
+	if st.Size() > maxAudioBytes {
 		return "", fmt.Errorf("audio file exceeds %d bytes", maxAudioBytes)
 	}
 	var buf bytes.Buffer

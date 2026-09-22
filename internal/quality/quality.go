@@ -14,6 +14,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"hackathonkit.local/agentkit/internal/atomicfile"
 )
@@ -167,7 +168,12 @@ func tail(text string, limit int) string {
 	if len(text) <= limit {
 		return text
 	}
-	return "..." + text[len(text)-limit:]
+	cut := len(text) - limit
+	// Do not split a multi-byte rune at the cut point.
+	for cut < len(text) && !utf8.RuneStart(text[cut]) {
+		cut++
+	}
+	return "..." + text[cut:]
 }
 
 func Dir(root string) string {
