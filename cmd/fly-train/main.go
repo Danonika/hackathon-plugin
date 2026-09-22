@@ -178,6 +178,9 @@ func rebuildFromFeedback(root string, cfg config.File, client *openai.Client, st
 }
 
 func runEval(client *openai.Client, brain *fly.MBrain, rows []datasetRow, stdout, stderr io.Writer) error {
+	if len(rows) == 0 {
+		return fmt.Errorf("eval set is empty; nothing to evaluate")
+	}
 	texts := make([]string, 0, len(rows))
 	for _, row := range rows {
 		texts = append(texts, row.Task)
@@ -258,7 +261,10 @@ func readDatasetWithWarnings(path string, onSkip func(line int, reason string)) 
 		}
 		rows = append(rows, row)
 	}
-	return rows, scanner.Err()
+	if err := scanner.Err(); err != nil {
+		return nil, err
+	}
+	return rows, nil
 }
 
 // embedBatched embeds in bounded batches with a per-batch deadline so large

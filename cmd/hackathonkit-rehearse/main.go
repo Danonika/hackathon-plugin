@@ -339,7 +339,16 @@ func (c *mcpClient) request(method string, params map[string]any) (json.RawMessa
 				ID json.RawMessage `json:"id"`
 			}
 			_ = json.Unmarshal(result.line, &probe)
-			if len(probe.ID) > 0 && string(probe.ID) != "null" && string(probe.ID) != strconv.Itoa(c.nextID) {
+			if len(probe.ID) == 0 {
+				// Notification (no id): keep reading for our reply.
+				ch = make(chan readResult, 1)
+				go func() {
+					read, err := c.stdout.ReadBytes('\n')
+					ch <- readResult{line: read, err: err}
+				}()
+				continue
+			}
+			if string(probe.ID) != "null" && string(probe.ID) != strconv.Itoa(c.nextID) {
 				// Notification or a stale reply: keep reading for our id.
 				ch = make(chan readResult, 1)
 				go func() {

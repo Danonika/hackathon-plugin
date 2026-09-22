@@ -185,8 +185,9 @@ function renderFly(events, feedback) {
   recs.innerHTML = (ev.recommendations || []).map(r =>
     '<div class="rec" data-cap="' + esc(r.capability) + '">' + esc(r.capability) + ' — ' + Math.round(r.score * 100) + '%</div>').join('');
 
+  const byTrace = (feedback || []).filter(f => ev.trace_id && f.trace_id === ev.trace_id);
   const matches = (feedback || []).filter(f => f.task === ev.task);
-  const fb = matches.length ? matches[matches.length - 1] : null;
+  const fb = byTrace.length ? byTrace[byTrace.length - 1] : (matches.length ? matches[matches.length - 1] : null);
   if (fb) {
     const chosen = fb.chosen || [];
     const recNames = (ev.recommendations || []).map(r => r.capability);

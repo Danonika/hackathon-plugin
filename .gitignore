@@ -1,4 +1,4 @@
-bin/
+/bin/
 /hackathonkit-mcp
 /hackathonkit-demo-api
 /hackathonkit-ctl
@@ -7,7 +7,7 @@ bin/
 .env
 .env.*
 !.env.example
-logs/
+/logs/
 plugins/hackathonkit/.mcp.json
 data/fly-viz/
 data/artifacts/

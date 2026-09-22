@@ -31,7 +31,7 @@ import (
 	"hackathonkit.local/agentkit/internal/tools"
 )
 
-const version = "0.16.14"
+const version = "0.16.15"
 
 // redactBackendError strips credentials from driver/connection errors before
 // they are logged (DSNs can appear in Postgres and MinIO errors).
@@ -43,7 +43,7 @@ func redactBackendError(err error) string {
 	for _, marker := range []string{"password=", "passwd=", "secret=", "token="} {
 		searchFrom := 0
 		for {
-			idx := strings.Index(strings.ToLower(text[searchFrom:]), marker)
+			idx := indexFold(text[searchFrom:], marker)
 			if idx < 0 {
 				break
 			}
@@ -58,6 +58,35 @@ func redactBackendError(err error) string {
 		}
 	}
 	return text
+}
+
+// indexFold is a byte-length-preserving case-insensitive substring search, so
+// offsets computed on the haystack remain valid for the original string.
+func indexFold(haystack, needle string) int {
+	if needle == "" {
+		return 0
+	}
+	limit := len(haystack) - len(needle)
+	for i := 0; i <= limit; i++ {
+		match := true
+		for j := 0; j < len(needle); j++ {
+			if lowerASCII(haystack[i+j]) != lowerASCII(needle[j]) {
+				match = false
+				break
+			}
+		}
+		if match {
+			return i
+		}
+	}
+	return -1
+}
+
+func lowerASCII(b byte) byte {
+	if b >= 'A' && b <= 'Z' {
+		return b + ('a' - 'A')
+	}
+	return b
 }
 
 func main() {
@@ -196,7 +225,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	if !*listTools && !*selftest {
 		if settings := objectstore.SettingsFromEnv(); settings.Endpoint != "" {
 			if cli, err := objectstore.Open(context.Background(), settings); err != nil {
-				observability.Log(logger, "warn", "objectstore_disabled", map[string]any{"error": err.Error()})
+				observability.Log(logger, "warn", "objectstore_disabled", map[string]any{"error": redactBackendError(err)})
 			} else {
 				objects = cli
 				observability.Log(logger, "info", "objectstore_minio_enabled", map[string]any{"bucket": settings.Bucket})
@@ -204,7 +233,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		}
 	}
 	store.Attach(meta, objects, func(err error) {
-		observability.Log(logger, "warn", "storage_backend_error", map[string]any{"error": err.Error()})
+		observability.Log(logger, "warn", "storage_backend_error", map[string]any{"error": redactBackendError(err)})
 	})
 	defer meta.Close()
 
@@ -364,7 +393,10 @@ func printResources(root string, out io.Writer) error {
 func countFiles(dir string) int {
 	count := 0
 	if err := filepath.WalkDir(dir, func(path string, entry os.DirEntry, err error) error {
-		if err != nil || entry.IsDir() {
+		if err != nil {
+			return err
+		}
+		if entry.IsDir() {
 			return nil
 		}
 		if strings.HasSuffix(entry.Name(), ".json") {

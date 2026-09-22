@@ -119,6 +119,11 @@ async function decide(decision) {
       banner.textContent = (data.error || res.statusText) + (res.status === 401 ? " - enter the demo token above" : "");
       return;
     }
+    if (!data.approval || typeof data.approval.decision !== "string") {
+      banner.style.background = "#2a1b1b";
+      banner.textContent = "unexpected response from /plan/decision";
+      return;
+    }
     banner.style.background = "#1b2a20";
     banner.textContent = "recorded: " + data.approval.decision + " (r" + data.approval.revision + ")";
     load();

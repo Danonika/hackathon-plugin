@@ -71,8 +71,10 @@ async function loadSessions() {
   if (sessionsLoading) return;
   sessionsLoading = true;
   const banner = document.getElementById("banner");
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 8000);
   try {
-    const res = await fetch("/control/api/sessions?limit=50");
+    const res = await fetch("/control/api/sessions?limit=50", { signal: controller.signal });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || res.statusText);
     banner.style.display = "none";
@@ -102,6 +104,10 @@ async function loadSessions() {
       if (!seen.has(id)) {
         tr.remove();
         sessionRows.delete(id);
+        if (selected === id) {
+          selected = null;
+          document.getElementById("detail").textContent = "session no longer present";
+        }
       }
     }
     document.getElementById("counts").textContent = (data.sessions || []).length + " sessions";
@@ -112,28 +118,45 @@ async function loadSessions() {
     banner.style.display = "block";
     document.getElementById("status").textContent = "control database unavailable";
   } finally {
+    clearTimeout(timer);
     sessionsLoading = false;
   }
 }
 
+let detailLoading = false;
 async function loadDetail(id) {
-  const res = await fetch("/control/api/session?id=" + encodeURIComponent(id));
-  const data = await res.json();
-  if (!res.ok) { document.getElementById("detail").textContent = data.error || res.statusText; return; }
-  document.getElementById("detail-title").textContent = id + " (" + data.session.status + ")";
-  const lines = [];
-  if (data.session.task) lines.push("task: " + data.session.task);
-  if ((data.session.risk_reasons || []).length) lines.push("risk: " + data.session.risk_reasons.join("; "));
-  if (data.session.worktree) lines.push("worktree: " + data.session.worktree);
-  lines.push("");
-  for (const ev of data.events || []) {
-    const tool = ev.tool ? " " + ev.tool : "";
-    const status = ev.status ? " [" + ev.status + "]" : "";
-    lines.push((ev.ts || "").slice(11, 19) + " " + ev.type + tool + status);
+  if (detailLoading) return;
+  detailLoading = true;
+  try {
+    const res = await fetch("/control/api/session?id=" + encodeURIComponent(id));
+    let data = {};
+    try {
+      data = await res.json();
+    } catch (_) {
+      data = { error: res.statusText };
+    }
+    if (!res.ok || !data.session) {
+      document.getElementById("detail").textContent = data.error || res.statusText;
+      return;
+    }
+    document.getElementById("detail-title").textContent = id + " (" + data.session.status + ")";
+    const lines = [];
+    if (data.session.task) lines.push("task: " + data.session.task);
+    if ((data.session.risk_reasons || []).length) lines.push("risk: " + data.session.risk_reasons.join("; "));
+    if (data.session.worktree) lines.push("worktree: " + data.session.worktree);
+    lines.push("");
+    for (const ev of data.events || []) {
+      const tool = ev.tool ? " " + ev.tool : "";
+      const status = ev.status ? " [" + ev.status + "]" : "";
+      lines.push((ev.ts || "").slice(11, 19) + " " + ev.type + tool + status);
+    }
+    document.getElementById("detail").textContent = lines.join("\n") || "no events";
+  } catch (err) {
+    document.getElementById("detail").textContent = "detail load failed: " + err.message;
+  } finally {
+    detailLoading = false;
   }
-  document.getElementById("detail").textContent = lines.join("\n") || "no events";
 }
-
 loadSessions();
 setInterval(loadSessions, 3000);
 </script>

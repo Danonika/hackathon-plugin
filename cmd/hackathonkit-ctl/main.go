@@ -237,12 +237,25 @@ func addWorktree(root, name string) (string, error) {
 		return "", fmt.Errorf("worktree already exists: %s", dir)
 	}
 	branch := "hackathonkit/" + name
-	if err := runGit(root, "worktree", "add", "-b", branch, dir); err != nil {
-		if err := runGit(root, "worktree", "add", dir, branch); err != nil {
-			return "", err
-		}
+	firstErr := runGit(root, "worktree", "add", "-b", branch, dir)
+	if firstErr == nil {
+		return dir, nil
+	}
+	// Retry without -b only when the branch already exists; otherwise report
+	// the original failure.
+	if !branchExists(root, branch) {
+		return "", firstErr
+	}
+	if err := runGit(root, "worktree", "add", dir, branch); err != nil {
+		return "", fmt.Errorf("%v (retry without -b: %w)", firstErr, err)
 	}
 	return dir, nil
+}
+
+func branchExists(root, branch string) bool {
+	cmd := newCommand("git", "show-ref", "--verify", "--quiet", "refs/heads/"+branch)
+	cmd.Dir = root
+	return cmd.Run() == nil
 }
 
 func newCommand(name string, args ...string) *exec.Cmd {
@@ -351,19 +364,27 @@ func cmdRun(args []string) error {
 	if runErr != nil {
 		status = "error"
 	}
+	var bookkeepingErr error
 	if err := store.AppendEvent(ctx, control.Event{SessionID: sessionID, Type: "agent_output", Status: status, Payload: map[string]any{"error": fmt.Sprint(runErr)}}); err != nil {
-		fmt.Fprintln(os.Stderr, "warning: agent_output event not stored:", err)
+		fmt.Fprintln(os.Stderr, "agent_output event not stored:", err)
 		status = "error"
+		bookkeepingErr = err
 	}
 	if err := store.EndSession(ctx, sessionID, time.Now().UTC()); err != nil {
-		fmt.Fprintln(os.Stderr, "warning: session end not stored:", err)
+		fmt.Fprintln(os.Stderr, "session end not stored:", err)
 		status = "error"
+		if bookkeepingErr == nil {
+			bookkeepingErr = err
+		}
 	}
 	if _, err := store.RecomputeRisk(ctx); err != nil {
 		return err
 	}
 	fmt.Printf("\nsession %s finished (%s)\nresume: hackathonkit-ctl sessions resume %s\n", sessionID, status, sessionID)
-	return runErr
+	if runErr != nil {
+		return runErr
+	}
+	return bookkeepingErr
 }
 
 func truncate(value string, limit int) string {

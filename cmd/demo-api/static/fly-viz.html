@@ -135,8 +135,10 @@ async function loadRealFly() {
   }
   const wanted = ['Thorax', 'Head', 'LEye', 'REye', 'LWing', 'RWing'];
   try {
-    const list = await fetch('/fly-model-list').then(r => r.json());
-    const files = list.files || [];
+    const listRes = await fetch('/fly-model-list');
+    if (!listRes.ok) throw new Error('model list -> ' + listRes.status);
+    const list = await listRes.json();
+    const files = Array.isArray(list.files) ? list.files : [];
     const picks = wanted
       .map(w => files.find(f => f.toLowerCase().endsWith('/' + w.toLowerCase() + '.stl')))
       .filter(Boolean);
@@ -145,7 +147,7 @@ async function loadRealFly() {
     const group = new THREE.Group();
     const material = new THREE.MeshStandardMaterial({ color: 0x3a4a66, roughness: .45, metalness: .3 });
     await Promise.all(picks.map(p => new Promise(resolve => {
-      loader.load('/fly-model/' + encodeURI(p),
+      loader.load('/fly-model/' + p.split('/').map(encodeURIComponent).join('/'),
         geo => { group.add(new THREE.Mesh(geo, material)); resolve(); },
         undefined,
         () => resolve());
@@ -217,10 +219,17 @@ async function poll() {
   if (polling) return;
   polling = true;
   try {
+    const load = async (url) => {
+      const res = await fetch(url);
+      if (!res.ok) throw new Error(url + ' -> ' + res.status);
+      const body = await res.json();
+      if (!body || typeof body !== 'object') throw new Error(url + ' returned a non-object');
+      return body;
+    };
     const [events, feedback, neurons] = await Promise.all([
-      fetch('/fly-events?limit=5').then(r => r.json()),
-      fetch('/fly-feedback?limit=10').then(r => r.json()),
-      fetch('/fly-neuron-events?limit=20').then(r => r.json())
+      load('/fly-events?limit=5'),
+      load('/fly-feedback?limit=10'),
+      load('/fly-neuron-events?limit=20')
     ]);
     const lastNeuron = (neurons.events || [])[(neurons.events || []).length - 1];
     if (lastNeuron && lastNeuron.trace_id !== state.lastTrace) {
@@ -229,7 +238,8 @@ async function poll() {
     }
     if ((feedback.events || []).length) {
       const fb = feedback.events[feedback.events.length - 1];
-      const fbKey = fb.ts || (fb.task + '|' + fb.source);
+      // Include the trace so repeated task/source pairs stay distinct.
+      const fbKey = fb.ts || ((fb.trace_id || '') + '|' + fb.task + '|' + fb.source);
       const neuronFb = (neurons.events || []).filter(e => e.type === 'feedback').pop();
       // Only synthesize when the newest neuron record was not itself the
       // feedback event (otherwise applyNeuronEvent already ran for it).

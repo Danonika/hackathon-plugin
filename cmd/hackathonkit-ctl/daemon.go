@@ -3,7 +3,9 @@ package main
 import (
 	"context"
 	"crypto/subtle"
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -261,7 +263,11 @@ func controlHandler(store *control.Store, token string) http.Handler {
 		}
 		sess, err := store.Session(r.Context(), id)
 		if err != nil {
-			writeControlJSON(w, http.StatusNotFound, map[string]any{"error": "session not found"})
+			if errors.Is(err, sql.ErrNoRows) {
+				writeControlJSON(w, http.StatusNotFound, map[string]any{"error": "session not found"})
+			} else {
+				writeControlJSON(w, http.StatusInternalServerError, map[string]any{"error": "session lookup failed"})
+			}
 			return
 		}
 		events, eventsErr := store.Events(r.Context(), id, queryInt(r, "events", 50))

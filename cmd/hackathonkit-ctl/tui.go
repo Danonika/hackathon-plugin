@@ -78,11 +78,12 @@ func loadCmd(store *control.Store, selected int) tea.Cmd {
 }
 
 func (m *tuiModel) applyLoaded(msg loadedMsg) {
-	if msg.err != nil {
+	if msg.sessions == nil {
+		// The sessions query itself failed: keep the previous view.
 		m.err = msg.err
 		return
 	}
-	m.err = nil
+	m.err = msg.err // may be an events-only failure
 	m.sessions = msg.sessions
 	m.selected = msg.selected
 	m.events = msg.events
