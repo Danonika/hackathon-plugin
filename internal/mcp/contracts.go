@@ -50,7 +50,10 @@ func (e Envelope) WithSources(sources ...Source) Envelope {
 }
 
 func (e Envelope) WithWarnings(warnings ...string) Envelope {
-	e.Warnings = append(e.Warnings, warnings...)
+	merged := make([]string, 0, len(e.Warnings)+len(warnings))
+	merged = append(merged, e.Warnings...)
+	merged = append(merged, warnings...)
+	e.Warnings = merged
 	return e
 }
 

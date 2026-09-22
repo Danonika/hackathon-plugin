@@ -76,9 +76,12 @@ func (c *Client) doJSON(ctx context.Context, path string, payload any, out any) 
 		return err
 	}
 	defer resp.Body.Close()
-	data, rerr := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
+	data, rerr := io.ReadAll(io.LimitReader(resp.Body, 8<<20+1))
 	if rerr != nil {
 		return fmt.Errorf("openai %s: reading response: %w", path, rerr)
+	}
+	if len(data) > 8<<20 {
+		return fmt.Errorf("openai %s: response exceeds 8MB", path)
 	}
 	if resp.StatusCode >= 300 {
 		return fmt.Errorf("openai %s: status %d: %s", path, resp.StatusCode, truncate(string(data), 400))

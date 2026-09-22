@@ -129,7 +129,13 @@ func (r *Router) Recommend(ctx context.Context, task string, meta map[string]any
 			scores[category] = s
 		}
 	}
-	keywordSignal := len(scores) > 0
+	keywordSignal := false
+	for _, value := range scores {
+		if value > 0 {
+			keywordSignal = true
+			break
+		}
+	}
 	encoderParts := []string{}
 	if keywordSignal {
 		encoderParts = append(encoderParts, "keyword")
@@ -189,7 +195,7 @@ func (r *Router) Recommend(ctx context.Context, task string, meta map[string]any
 	}
 	encoder := strings.Join(encoderParts, "+")
 	applyMetadata(scores, meta)
-	if keywordSignal || len(scores) > 0 {
+	if keywordSignal {
 		boost(scores, "reports", 0.15)
 	}
 

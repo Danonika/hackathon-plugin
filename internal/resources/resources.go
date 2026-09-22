@@ -80,7 +80,10 @@ type Status struct {
 // Defs returns the provider definitions.
 func Defs() []Def {
 	out := make([]Def, len(defs))
-	copy(out, defs)
+	for i, def := range defs {
+		def.EnvKeys = append([]string(nil), def.EnvKeys...)
+		out[i] = def
+	}
 	return out
 }
 
@@ -101,6 +104,9 @@ func LookupTrack(ref string) (Track, bool) {
 	number := ref
 	if i := strings.IndexAny(number, "- "); i > 0 {
 		number = number[:i]
+	}
+	if len(number) == 1 && number >= "0" && number <= "9" {
+		number = "0" + number
 	}
 	for _, t := range tracks {
 		slug := strings.TrimPrefix(t.ID, t.ID[:2]+"-")

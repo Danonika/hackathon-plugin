@@ -6,6 +6,7 @@ package atomicfile
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -29,11 +30,19 @@ func Write(path string, data []byte, mode os.FileMode) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
-	// Best-effort: reclaim temp files left by a previous crash.
-	if stale, err := filepath.Glob(filepath.Join(dir, filepath.Base(path)+".*.tmp")); err == nil {
-		for _, candidate := range stale {
-			if info, statErr := os.Stat(candidate); statErr == nil && time.Since(info.ModTime()) > time.Hour {
-				_ = os.Remove(candidate)
+	// Best-effort: reclaim temp files left by a previous crash. Iterate the
+	// directory instead of globbing so metacharacters in the base name cannot
+	// widen the match set.
+	prefix := filepath.Base(path) + "."
+	if entries, err := os.ReadDir(dir); err == nil {
+		for _, entry := range entries {
+			name := entry.Name()
+			if !strings.HasPrefix(name, prefix) || !strings.HasSuffix(name, ".tmp") {
+				continue
+			}
+			info, statErr := entry.Info()
+			if statErr == nil && time.Since(info.ModTime()) > time.Hour {
+				_ = os.Remove(filepath.Join(dir, name))
 			}
 		}
 	}

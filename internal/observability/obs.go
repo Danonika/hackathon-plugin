@@ -124,8 +124,10 @@ func AppendJSONL(path string, entry any) error {
 // are not complete JSON (a concurrent writer may be mid-append), and copies
 // every returned line so the backing buffer can be garbage collected.
 func TailJSONL(path string, limit int) ([]json.RawMessage, error) {
-	if limit <= 0 || limit > 1000 {
+	if limit <= 0 {
 		limit = 50
+	} else if limit > 1000 {
+		limit = 1000
 	}
 	f, err := os.Open(path)
 	if err != nil {

@@ -79,7 +79,8 @@ func payloadHasPanic(payload map[string]any) bool {
 	}
 	text := strings.ToLower(string(data))
 	// "no panic observed" and similar prose must not count as a panic event.
-	text = strings.ReplaceAll(text, "no panic", "")
+	// Strip common negated prose before matching.
+	text = regexp.MustCompile(`(?i)no\s+(errors?\s+or\s+)?panic`).ReplaceAllString(text, "")
 	return panicWord.MatchString(text)
 }
 
@@ -91,6 +92,10 @@ func (s *Store) RecomputeRisk(ctx context.Context) (int, error) {
 		return 0, err
 	}
 	now := time.Now().UTC()
+	latest, err := s.latestGlobalTS(ctx)
+	if err != nil {
+		return 0, err
+	}
 	updated := 0
 	for _, sess := range sessions {
 		events, err := s.Events(ctx, sess.ID, 10000)
@@ -100,10 +105,6 @@ func (s *Store) RecomputeRisk(ctx context.Context) (int, error) {
 		end := now
 		if sess.EndedAt != nil && sess.EndedAt.Before(end) {
 			end = *sess.EndedAt
-		}
-		latest, err := s.latestGlobalTS(ctx)
-		if err != nil {
-			return updated, err
 		}
 		if latest.After(end) {
 			end = latest

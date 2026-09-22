@@ -62,6 +62,14 @@ func cloneMap(in map[string]any) map[string]any {
 			out[k] = cloneMap(value)
 		case []any:
 			out[k] = cloneSlice(value)
+		case []string:
+			out[k] = append([]string(nil), value...)
+		case map[string]string:
+			copied := make(map[string]string, len(value))
+			for mk, mv := range value {
+				copied[mk] = mv
+			}
+			out[k] = copied
 		default:
 			out[k] = v
 		}

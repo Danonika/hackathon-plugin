@@ -20,6 +20,15 @@ type Settings struct {
 	UseSSL    bool
 }
 
+// useSSLEnv accepts the common boolean spellings instead of only "true".
+func useSSLEnv() bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("MINIO_USE_SSL"))) {
+	case "1", "true", "t", "yes", "y", "on":
+		return true
+	}
+	return false
+}
+
 func SettingsFromEnv() Settings {
 	bucket := os.Getenv("MINIO_BUCKET")
 	if bucket == "" {
@@ -30,7 +39,7 @@ func SettingsFromEnv() Settings {
 		AccessKey: os.Getenv("MINIO_ACCESS_KEY"),
 		SecretKey: os.Getenv("MINIO_SECRET_KEY"),
 		Bucket:    bucket,
-		UseSSL:    os.Getenv("MINIO_USE_SSL") == "true",
+		UseSSL:    useSSLEnv(),
 	}
 }
 
@@ -70,6 +79,9 @@ func Open(ctx context.Context, s Settings) (*Client, error) {
 }
 
 func (c *Client) Put(ctx context.Context, name string, data []byte) error {
+	if int64(len(data)) > maxObjectBytes {
+		return fmt.Errorf("objectstore: payload %s exceeds %d bytes", name, maxObjectBytes)
+	}
 	_, err := c.client.PutObject(ctx, c.bucket, name, bytes.NewReader(data), int64(len(data)),
 		minio.PutObjectOptions{ContentType: "application/octet-stream"})
 	return err

@@ -48,8 +48,15 @@ func TestSettingsFromEnvOverrides(t *testing.T) {
 	}
 }
 
-func TestSettingsFromEnvUseSSLOnlyTrue(t *testing.T) {
-	for _, value := range []string{"1", "TRUE", "yes", "false"} {
+func TestSettingsFromEnvUseSSLBoolSpellings(t *testing.T) {
+	for _, value := range []string{"1", "TRUE", "true", "yes", "on"} {
+		clearMinioEnv(t)
+		t.Setenv("MINIO_USE_SSL", value)
+		if !SettingsFromEnv().UseSSL {
+			t.Fatalf("MINIO_USE_SSL=%q should enable TLS", value)
+		}
+	}
+	for _, value := range []string{"0", "false", "no", ""} {
 		clearMinioEnv(t)
 		t.Setenv("MINIO_USE_SSL", value)
 		if SettingsFromEnv().UseSSL {

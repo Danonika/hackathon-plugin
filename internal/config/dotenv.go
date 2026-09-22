@@ -72,6 +72,8 @@ func unquoteEnvValue(value string) string {
 					case 'r':
 						b.WriteByte('\r')
 					default:
+						// Preserve the backslash for unrecognized escapes.
+						b.WriteByte('\\')
 						b.WriteRune(r)
 					}
 					escaped = false

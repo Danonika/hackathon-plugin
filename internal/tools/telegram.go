@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"hackathonkit.local/agentkit/internal/mcp"
 	"hackathonkit.local/agentkit/internal/telegram"
@@ -24,9 +25,13 @@ func registerTelegram(reg *mcp.Registry, d Deps) {
 			if d.Telegram == nil {
 				return mcp.Fail(trace(ctx), "telegram client unavailable"), nil
 			}
+			parseMode := argString(args, "parse_mode")
+			if parseMode != "" && !strings.EqualFold(parseMode, "HTML") && !strings.EqualFold(parseMode, "MarkdownV2") {
+				return mcp.Fail(trace(ctx), "parse_mode must be HTML or MarkdownV2"), nil
+			}
 			result, err := d.Telegram.SendMessage(ctx, argString(args, "text"), telegram.SendOptions{
 				ChatID:    argString(args, "chat_id"),
-				ParseMode: argString(args, "parse_mode"),
+				ParseMode: parseMode,
 				Silent:    argBool(args, "silent", false),
 				ReplyTo:   argInt(args, "reply_to", 0),
 			})

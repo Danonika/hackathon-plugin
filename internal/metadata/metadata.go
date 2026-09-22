@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgconn"
@@ -124,6 +125,7 @@ ALTER TABLE fly_predictions ADD COLUMN IF NOT EXISTS recommendations JSONB;
 `
 
 type Postgres struct {
+	mu   sync.Mutex
 	pool pgExecutor
 }
 
@@ -165,7 +167,12 @@ func openPostgres(ctx context.Context, dsn string, newPool func(context.Context,
 }
 
 func (p *Postgres) Enabled() bool {
-	return p != nil && p.pool != nil
+	if p == nil {
+		return false
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.pool != nil
 }
 
 func (p *Postgres) RecordArtifact(ctx context.Context, rec ArtifactRecord) error {
@@ -223,8 +230,14 @@ func (p *Postgres) RecordEvalRun(ctx context.Context, run EvalRun) error {
 }
 
 func (p *Postgres) Close() {
-	if p != nil && p.pool != nil {
-		p.pool.Close()
-		p.pool = nil
+	if p == nil {
+		return
+	}
+	p.mu.Lock()
+	pool := p.pool
+	p.pool = nil
+	p.mu.Unlock()
+	if pool != nil {
+		pool.Close()
 	}
 }

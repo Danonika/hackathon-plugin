@@ -120,7 +120,30 @@ func (r *Router) saveBrain(brain *MBrain) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(r.brainPath, data, 0o644)
+	tmp, err := os.CreateTemp(filepath.Dir(r.brainPath), "fly-brain-*.tmp")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		os.Remove(tmpName)
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		os.Remove(tmpName)
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		os.Remove(tmpName)
+		return err
+	}
+	if err := os.Rename(tmpName, r.brainPath); err != nil {
+		os.Remove(tmpName)
+		return err
+	}
+	return nil
 }
 
 func (r *Router) Dopamine() DopamineStats {
@@ -324,8 +347,10 @@ func (b *MBrain) adjust(category string, code []float64, eta float64) {
 }
 
 func (b *MBrain) Train(input []float64, category string, eta float64) {
-	if b.Readout == nil || b.Bias == nil {
+	if b.Readout == nil {
 		b.Readout = map[string][]float64{}
+	}
+	if b.Bias == nil {
 		b.Bias = map[string]float64{}
 	}
 	if len(b.Categories) == 0 || category == "" {

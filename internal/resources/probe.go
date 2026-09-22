@@ -54,7 +54,11 @@ func ProbeOpenAICompatible(ctx context.Context, providerID, baseURL, apiKey stri
 	}
 	defer resp.Body.Close()
 	result.StatusCode = resp.StatusCode
-	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	body, readErr := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if readErr != nil {
+		result.Error = "reading response: " + redact(readErr.Error(), apiKey)
+		return result
+	}
 	if resp.StatusCode != http.StatusOK {
 		result.Error = fmt.Sprintf("http %d", resp.StatusCode)
 		return result

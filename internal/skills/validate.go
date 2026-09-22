@@ -184,7 +184,7 @@ func validateSkill(base, name string) SkillReport {
 	doc, err := validateOpenAIYAML(dir)
 	if err != nil {
 		item.Problems = append(item.Problems, err.Error())
-	} else if strings.Contains(fm.Description, "Explicit-only:") {
+	} else if strings.Contains(strings.ToLower(fm.Description), "explicit-only:") {
 		if doc.Policy.AllowImplicitInvocation == nil || *doc.Policy.AllowImplicitInvocation {
 			item.Problems = append(item.Problems, "explicit-only skill must set policy.allow_implicit_invocation: false in agents/openai.yaml")
 		}

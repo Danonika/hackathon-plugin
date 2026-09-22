@@ -1,4 +1,4 @@
-//go:build !windows
+//go:build !windows && !plan9 && !js && !wasip1
 
 package quality
 

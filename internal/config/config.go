@@ -347,8 +347,10 @@ func (m *Manager) Routing() RoutingState {
 			m.routingInit = true
 			return m.routingCache
 		}
-	} else if readErr != nil && !os.IsNotExist(readErr) {
-		log.Printf("config: cannot read %s: %v (keeping the last known routing state)", path, readErr)
+	} else if readErr != nil {
+		if !os.IsNotExist(readErr) {
+			log.Printf("config: cannot read %s: %v (keeping the last known routing state)", path, readErr)
+		}
 	}
 	if m.routingInit {
 		return m.routingCache
