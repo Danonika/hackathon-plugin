@@ -6,8 +6,17 @@
 *.exe
 .env
 .env.*
-!.env.example
+!/.env.example
 /logs/
+node_modules/
+__pycache__/
+*.pyc
+.coverage
+coverage/
+htmlcov/
+.venv/
+/tmp/
+*.log
 plugins/hackathonkit/.mcp.json
 data/fly-viz/
 data/artifacts/
@@ -15,8 +24,13 @@ data/index/
 data/control/
 data/worktrees/
 data/judge-bundles/
+# New generated data subdirectories should be added here (or switch to a
+# catch-all `data/*/` with an explicit `!data/input/` negation).
 .agents/skills/
 .claude/skills/
+# Generated at install time by scripts/write-install-state.sh / setup-resources.sh;
+# never committed. Regenerate with `sh scripts/write-install-state.sh . full binary`
+# and `sh scripts/setup-resources.sh`.
 configs/install-state.json
 configs/resources.json
 evals/calibration/
@@ -31,4 +45,5 @@ evals/judges/
 evals/roast/
 evals/snapshots/
 evals/rehearsal/
+# Legacy alias for data/judge-bundles/ (kept for older checkouts).
 judge-bundle/

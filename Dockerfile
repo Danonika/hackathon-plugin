@@ -7,6 +7,9 @@ RUN CGO_ENABLED=0 go build -buildvcs=false -trimpath -o /out/hackathonkit-mcp ./
 RUN CGO_ENABLED=0 go build -buildvcs=false -trimpath -o /out/hackathonkit-demo-api ./cmd/demo-api
 
 FROM alpine:3.24.2 AS runtime-base
+# 1000:1000 matches the first regular host user on most Linux installs. Override
+# with --build-arg HACKATHONKIT_UID=$(id -u) HACKATHONKIT_GID=$(id -g) (compose does this
+# via scripts/docker-check.sh) when your host user differs.
 ARG HACKATHONKIT_UID=1000
 ARG HACKATHONKIT_GID=1000
 RUN apk add --no-cache ca-certificates && addgroup -g "${HACKATHONKIT_GID}" hackathonkit && adduser -D -u "${HACKATHONKIT_UID}" -G hackathonkit hackathonkit

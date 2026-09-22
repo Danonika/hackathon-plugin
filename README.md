@@ -2,7 +2,7 @@
 
 Local Codex plugin backed by a typed MCP capability layer. Codex is the main reasoning engine, Skills define domain workflows, the local MCP server exposes deterministic and AI-powered capabilities, and the experimental Fly router recommends capability routes while Codex keeps the final decision.
 
-Status: v0.16.17. MCP runtime (41 tools), 29 standard-compliant skills (validator-enforced), 88% Go test coverage with an 80% gate, session hooks, durable learnings, Codex subagents, four harness adapters, a full control plane (SQLite store, daemon, TUI, worktrees, agent runs, risk scoring, session handoff), staged build plans, PDF/XLSX processing, Fly v2 (keyword + embeddings + kNN memory + mushroom-body learning + LLM classifier), Postgres/MinIO backends, demo dashboard, install profiles/repair, a quality gate with a Go-enabled Docker target, a Fly A/B benchmark, plan review, security review, a clean-checkout rehearsal command, a resource-aware planner (API resource questionnaire, provider probes, per-track variants), a Telegram integration capability for built projects and the evaluation subsystem (deterministic aggregation, calibration, loop decisions and bundle freezing) are in place.
+Status: v0.16.18. MCP runtime (41 tools), 29 standard-compliant skills (validator-enforced), 88% Go test coverage with an 80% gate, session hooks, durable learnings, Codex subagents, four harness adapters, a full control plane (SQLite store, daemon, TUI, worktrees, agent runs, risk scoring, session handoff), staged build plans, PDF/XLSX processing, Fly v2 (keyword + embeddings + kNN memory + mushroom-body learning + LLM classifier), Postgres/MinIO backends, demo dashboard, install profiles/repair, a quality gate with a Go-enabled Docker target, a Fly A/B benchmark, plan review, security review, a clean-checkout rehearsal command, a resource-aware planner (API resource questionnaire, provider probes, per-track variants), a Telegram integration capability for built projects and the evaluation subsystem (deterministic aggregation, calibration, loop decisions and bundle freezing) are in place.
 
 ## Contents
 
@@ -411,7 +411,7 @@ Artifacts land under `evals/<kind>/<sha>/` and, when Postgres is configured, are
 Artifacts always land in `data/artifacts` (offline-safe). With the environment configured they are also mirrored:
 
 - `POSTGRES_DSN` - artifact registry, routing runs, fly predictions and eval runs (`artifacts`, `routing_runs`, `fly_predictions`, `eval_runs`; schema is created on connect).
-- `MINIO_ENDPOINT`, `MINIO_ACCESS_KEY`, `MINIO_SECRET_KEY`, `MINIO_BUCKET`, `MINIO_USE_SSL` - artifact blob mirror; reads fall back to MinIO when a local file is missing and rehydrate the local cache.
+- `MINIO_ENDPOINT`, `MINIO_ACCESS_KEY`, `MINIO_SECRET_KEY`, `MINIO_BUCKET`, `MINIO_USE_SSL` - artifact blob mirror; reads fall back to MinIO when a local file is missing and rehydrate the local cache. Compose drives both sides from `MINIO_ROOT_USER`/`MINIO_ROOT_PASSWORD` (mapped to the client's `MINIO_ACCESS_KEY`/`MINIO_SECRET_KEY`), so set those two in `.env`.
 
 `docker compose` passes both to the MCP and demo-api services. Without them everything degrades to the filesystem with a warning in the logs. MinIO is pulled from `quay.io/minio/minio` because the `minio/minio` Docker Hub namespace may be unavailable in some regions.
 

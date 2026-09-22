@@ -14,6 +14,7 @@ tools:
   max_text_chars: 60000
 
 routing:
+  # Confidence floor for fly-mode recommendations (name matches the Go yaml tag).
   fly_threshold: 0.55
   top_k: 5
 

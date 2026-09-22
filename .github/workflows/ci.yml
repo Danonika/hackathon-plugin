@@ -9,10 +9,16 @@ on:
 permissions:
   contents: read
 
+# Cancel superseded PR runs; never cancel a push to main.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
 jobs:
   quality:
     name: quality gate (linux)
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -31,11 +37,16 @@ jobs:
       - name: quality gate
         run: ./scripts/quality-gate.sh
       - name: clean-checkout rehearsal
-        run: go run ./cmd/hackathonkit-rehearse --json > /dev/null
+        run: |
+          if ! go run ./cmd/hackathonkit-rehearse --json > rehearsal.json; then
+            cat rehearsal.json
+            exit 1
+          fi
 
   docker:
     name: docker stack (linux)
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
       # One staged check: compose config, builds, infra readiness, MCP selftest,
@@ -56,6 +67,7 @@ jobs:
   windows:
     name: windows (hooks + tests)
     runs-on: windows-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
