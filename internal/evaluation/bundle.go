@@ -149,20 +149,28 @@ func FreezeBundle(opts BundleOptions) (Bundle, error) {
 		if info, lerr := os.Lstat(outAbs); lerr == nil && info.Mode()&os.ModeSymlink != 0 {
 			return Bundle{}, fmt.Errorf("refusing to delete %s: it is a symlink", outDir)
 		}
-		// Re-stat immediately before removal to narrow the check/use window.
-		if _, serr := os.Stat(markerPath); serr != nil {
-			return Bundle{}, fmt.Errorf("refusing to delete %s: ownership marker disappeared", outDir)
-		}
 	case readErr != nil && !os.IsNotExist(readErr):
 		return Bundle{}, readErr
 	}
-	if err := os.RemoveAll(outAbs); err != nil {
+	// Build the new bundle in a sibling temp directory and swap it into place
+	// only once complete, so a failed run never destroys the previous bundle.
+	if err := os.MkdirAll(filepath.Dir(outAbs), 0o755); err != nil {
 		return Bundle{}, err
 	}
-	if err := os.MkdirAll(outAbs, 0o755); err != nil {
+	tmpAbs, err := os.MkdirTemp(filepath.Dir(outAbs), filepath.Base(outAbs)+".tmp-")
+	if err != nil {
 		return Bundle{}, err
 	}
-	if err := os.WriteFile(filepath.Join(outAbs, ".hackathonkit-bundle"), []byte(outAbs+"\n"), 0o644); err != nil {
+	// After a successful rename tmpAbs no longer exists, so this is a no-op.
+	defer os.RemoveAll(tmpAbs)
+	// Resolve symlinks before computing the walk-relative path: the walk is
+	// rooted at rootResolved, so an unresolved sibling path could otherwise
+	// fail to match and the temp dir would be copied into itself.
+	tmpRel := outRel
+	if rel, rerr := filepath.Rel(rootResolved, resolveExistingPath(tmpAbs)); rerr == nil {
+		tmpRel = filepath.ToSlash(rel)
+	}
+	if err := os.WriteFile(filepath.Join(tmpAbs, ".hackathonkit-bundle"), []byte(outAbs+"\n"), 0o644); err != nil {
 		return Bundle{}, err
 	}
 
@@ -192,7 +200,8 @@ func FreezeBundle(opts BundleOptions) (Bundle, error) {
 			return nil
 		}
 		if d.IsDir() {
-			if relSlash == outRel || strings.HasPrefix(relSlash, outRel+"/") {
+			if relSlash == outRel || strings.HasPrefix(relSlash, outRel+"/") ||
+				relSlash == tmpRel || strings.HasPrefix(relSlash, tmpRel+"/") {
 				return filepath.SkipDir
 			}
 			return nil
@@ -203,7 +212,7 @@ func FreezeBundle(opts BundleOptions) (Bundle, error) {
 		if profile == "demo" && !demoIncluded(relSlash) {
 			return nil
 		}
-		dst := filepath.Join(outAbs, filepath.FromSlash(relSlash))
+		dst := filepath.Join(tmpAbs, filepath.FromSlash(relSlash))
 		if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
 			return err
 		}
@@ -216,14 +225,14 @@ func FreezeBundle(opts BundleOptions) (Bundle, error) {
 		return Bundle{}, err
 	}
 
-	if err := writeBundleMeta(outAbs, "git-sha.txt", gitSHA); err != nil {
+	if err := writeBundleMeta(tmpAbs, "git-sha.txt", gitSHA); err != nil {
 		return Bundle{}, err
 	}
-	if err := writeBundleMeta(outAbs, "rubric-version.txt", rubricVersion); err != nil {
+	if err := writeBundleMeta(tmpAbs, "rubric-version.txt", rubricVersion); err != nil {
 		return Bundle{}, err
 	}
 
-	entries, bundleHash, err := hashBundle(outAbs)
+	entries, bundleHash, err := hashBundle(tmpAbs)
 	if err != nil {
 		return Bundle{}, err
 	}
@@ -249,10 +258,18 @@ func FreezeBundle(opts BundleOptions) (Bundle, error) {
 	if opts.ReadOnly {
 		manifestMode = 0o444
 	}
-	if err := os.WriteFile(filepath.Join(outAbs, "bundle.json"), append(manifestData, '\n'), manifestMode); err != nil {
+	if err := os.WriteFile(filepath.Join(tmpAbs, "bundle.json"), append(manifestData, '\n'), manifestMode); err != nil {
 		return Bundle{}, err
 	}
-	if err := os.WriteFile(filepath.Join(outAbs, "bundle-hash.txt"), []byte(bundleHash+"\n"), manifestMode); err != nil {
+	if err := os.WriteFile(filepath.Join(tmpAbs, "bundle-hash.txt"), []byte(bundleHash+"\n"), manifestMode); err != nil {
+		return Bundle{}, err
+	}
+	// Swap the completed bundle into place. The previous bundle is removed only
+	// now, after the new one has been built and hashed successfully.
+	if err := removeOwnedBundle(outAbs, outDir); err != nil {
+		return Bundle{}, err
+	}
+	if err := os.Rename(tmpAbs, outAbs); err != nil {
 		return Bundle{}, err
 	}
 	return Bundle{
@@ -266,6 +283,35 @@ func FreezeBundle(opts BundleOptions) (Bundle, error) {
 		Bytes:         hashedBytes,
 		Excluded:      excludes,
 	}, nil
+}
+
+// removeOwnedBundle deletes a previous bundle directory, but only after
+// re-verifying that this tool created it (ownership marker) and that it is not
+// a symlink. A missing directory is not an error.
+func removeOwnedBundle(outAbs, outDir string) error {
+	info, err := os.Lstat(outAbs)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("refusing to delete %s: it is a symlink", outDir)
+	}
+	if info.IsDir() {
+		entries, rerr := os.ReadDir(outAbs)
+		if rerr != nil {
+			return rerr
+		}
+		if len(entries) > 0 {
+			marker, merr := os.ReadFile(filepath.Join(outAbs, ".hackathonkit-bundle"))
+			if merr != nil || strings.TrimSpace(string(marker)) != outAbs {
+				return fmt.Errorf("refusing to delete %s: not a bundle created by this tool (missing ownership marker)", outDir)
+			}
+		}
+	}
+	return os.RemoveAll(outAbs)
 }
 
 type excludeRule struct {

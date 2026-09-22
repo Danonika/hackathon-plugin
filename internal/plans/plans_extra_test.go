@@ -129,8 +129,14 @@ func TestLoadParseErrorAndSlugFallback(t *testing.T) {
 
 func TestSlugEdges(t *testing.T) {
 	long := strings.Repeat("a", 70)
-	if got := Slug(long); len(got) <= 60 || len(got) > 70 {
+	got := Slug(long)
+	if len(got) > 60 {
 		t.Fatalf("long slug len = %d (%q)", len(got), got)
+	}
+	// Slug must be idempotent: Save normalizes and Path re-normalizes, so a
+	// second pass must not re-hash an already-truncated stem.
+	if again := Slug(got); again != got {
+		t.Fatalf("Slug is not idempotent: %q -> %q", got, again)
 	}
 	// Distinct names sharing the first 60 runes must not collide.
 	if Slug(strings.Repeat("a", 61)) == Slug(strings.Repeat("a", 62)) {
@@ -140,8 +146,12 @@ func TestSlugEdges(t *testing.T) {
 		t.Fatalf("cyrillic slug = %q", got)
 	}
 	dashAtCut := strings.Repeat("a", 59) + " b"
-	if got := Slug(dashAtCut); !strings.HasPrefix(got, strings.Repeat("a", 59)) {
-		t.Fatalf("slug trailing dash = %q", got)
+	cut := Slug(dashAtCut)
+	if strings.Contains(cut, "--") || strings.HasPrefix(cut, "-") || strings.HasSuffix(cut, "-") {
+		t.Fatalf("slug must not contain a leading/trailing/double dash: %q", cut)
+	}
+	if again := Slug(cut); again != cut {
+		t.Fatalf("long slug is not idempotent: %q -> %q", cut, again)
 	}
 	if got := Slug("--"); got != "plan" {
 		t.Fatalf("dashes-only slug = %q", got)

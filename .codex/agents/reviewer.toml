@@ -4,12 +4,13 @@ name = "reviewer"
 description = "Read-only review of changes for quality and risk; never runs builds, tests, or network fetches."
 # model is left to the harness default by design; pin it here to freeze behavior.
 model_reasoning_effort = "high"
-# read-only forbids writes; the no-tests/no-builds guarantee is an instruction
-# to this agent, not a sandbox enforcement, so it is stated explicitly below.
+# Read-only blocks filesystem writes. The reviewer ingests attacker-controllable
+# evidence, so command execution and network are denied by configuration instead
+# of resting on prompt compliance: `never` removes command execution as an
+# approval option and network access is disabled explicitly.
 sandbox_mode = "read-only"
-# Residual risk: read-only does not by itself block process execution or network
-# access; the no-tests/no-builds and no-network guarantees below are
-# instructions to this agent, not sandbox enforcement.
+approval_policy = "never"
+network_access = false
 
 developer_instructions = """
 You are the Hackathon Agent Kit reviewer. Review like an owner, from a fresh context.

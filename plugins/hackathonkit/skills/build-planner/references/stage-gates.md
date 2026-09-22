@@ -13,7 +13,7 @@ every update.
 | S1 Discovery | inputs inventory, research brief, capability check | S0 done | `files.describe` output, `theme-research-<slug>` `artifact_id` | 30 min |
 | S2 Skeleton | build + MCP handshake works end to end with one tool | S1 done | smoke output (`initialize`, `tools/list`, one call) | 45 min |
 | S3 Vertical slice | mandatory scenario passes on real input | S2 done | run log + produced artifacts | 90 min |
-| S4 Hardening | error paths, fallbacks, tests, docs | S3 done | test output, README sections | 60 min |
+| S4 Hardening | error paths, fallbacks, tests, docs; code stages run `$cp-expert-refactoring` then `$system-design-expert` | S3 done | test output, README sections, review findings | 60 min |
 | S5 Evaluation | project-cost gate + judge round | S4 done | `evals/...` artifacts + `eval.compare` decision | 60 min |
 | S6 Freeze | clean-room gate + final bundle | S5 accepted or target reached | clean-room report + bundle hash | 30 min |
 

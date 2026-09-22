@@ -87,8 +87,10 @@ func payloadHasPanic(payload map[string]any) bool {
 
 // RecomputeRisk refreshes risk for every session, attributing global MCP call
 // events to sessions by their time window.
-// riskScanLimit caps how many rows a single risk pass loads.
-const riskScanLimit = 200000
+// riskScanLimit caps how many rows a single risk pass loads. It must stay
+// within the Store query helpers' supported range (<=10000); a larger value is
+// silently clamped to a small default, which would score only the newest rows.
+const riskScanLimit = 10000
 
 func (s *Store) RecomputeRisk(ctx context.Context) (int, error) {
 	sessions, err := s.Sessions(ctx, riskScanLimit)

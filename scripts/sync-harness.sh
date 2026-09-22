@@ -25,10 +25,21 @@ fi
 CLAUDE_DST="$ROOT/.claude/skills"
 CLAUDE_LOCK="$CLAUDE_DST.lock"
 CLAUDE_LOCKED=0
-if [ -d "$CLAUDE_LOCK" ]; then
-  HOLDER=$(cat "$CLAUDE_LOCK/pid" 2>/dev/null || true)
-  if [ -n "$HOLDER" ] && ! kill -0 "$HOLDER" 2>/dev/null; then
-    rm -rf "$CLAUDE_LOCK"
+claude_lock_stale() {
+  [ -d "$CLAUDE_LOCK" ] || return 1
+  holder=$(cat "$CLAUDE_LOCK/pid" 2>/dev/null || true)
+  if [ -n "$holder" ]; then
+    kill -0 "$holder" 2>/dev/null && return 1
+    return 0
+  fi
+  now=$(date +%s 2>/dev/null || echo 0)
+  mtime=$(stat -c %Y "$CLAUDE_LOCK" 2>/dev/null || stat -f %m "$CLAUDE_LOCK" 2>/dev/null || echo "$now")
+  [ $((now - mtime)) -ge 30 ]
+}
+if claude_lock_stale; then
+  # Claim the stale lock atomically so a live re-acquire is never deleted.
+  if mv "$CLAUDE_LOCK" "$CLAUDE_LOCK.stale.$$" 2>/dev/null; then
+    rm -rf "$CLAUDE_LOCK.stale.$$"
   fi
 fi
 for _ in 1 2 3 4 5 6 7 8 9 10; do
@@ -48,11 +59,17 @@ CLAUDE_OLD=""
 finish_harness() {
   rm -rf "$CLAUDE_TMP"
   if [ -n "$CLAUDE_OLD" ] && [ -d "$CLAUDE_OLD" ] && [ ! -d "$CLAUDE_DST" ]; then
-    if ! mv "$CLAUDE_OLD" "$CLAUDE_DST" 2>/dev/null; then
-      echo "[sync-harness] WARNING: could not restore $CLAUDE_DST from $CLAUDE_OLD" >&2
+    if mv "$CLAUDE_OLD" "$CLAUDE_DST" 2>/dev/null; then
+      CLAUDE_OLD=""
+    else
+      echo "[sync-harness] WARNING: could not restore $CLAUDE_DST from $CLAUDE_OLD; leaving the backup in place" >&2
     fi
   fi
-  rm -rf "$CLAUDE_OLD"
+  # Only delete the backup once the live mirror is known to exist, so a failed
+  # restore never destroys the only good copy.
+  if [ -n "$CLAUDE_OLD" ] && [ -d "$CLAUDE_DST" ]; then
+    rm -rf "$CLAUDE_OLD"
+  fi
   if [ "$CLAUDE_LOCKED" = "1" ]; then
     rm -rf "$CLAUDE_LOCK"
   fi
@@ -110,8 +127,11 @@ ADAPTERS="AGENTS.md
 .opencode/opencode.json
 .cursor/rules/hackathonkit.mdc
 plugins/hackathonkit/hooks/codex-hooks.json
-plugins/hackathonkit/commands/verify.md
-.codex/prompts/verify.md"
+plugins/hackathonkit/commands/plan.md
+plugins/hackathonkit/commands/research.md
+plugins/hackathonkit/commands/build.md
+plugins/hackathonkit/commands/evaluate.md
+plugins/hackathonkit/commands/verify.md"
 JSON_MANIFESTS=".claude-plugin/plugin.json
 .claude-plugin/marketplace.json
 .opencode/opencode.json

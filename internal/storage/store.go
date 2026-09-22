@@ -216,7 +216,9 @@ func (s *Store) ReadArtifact(rel string) ([]byte, error) {
 			return nil, fmt.Errorf("artifact %s: local read failed (%v); remote fetch failed: %w", clean, err, oerr)
 		}
 		if mkErr := os.MkdirAll(filepath.Dir(full), 0o755); mkErr == nil {
-			_ = os.WriteFile(full, remote, 0o644)
+			if werr := s.safeWriteFile(full, remote, 0o644); werr != nil {
+				s.report(fmt.Errorf("cache remote artifact %s locally: %w", clean, werr))
+			}
 		}
 		return remote, nil
 	}
@@ -235,7 +237,7 @@ func (s *Store) WriteIndex(rel string, data []byte) (string, error) {
 	if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
 		return "", err
 	}
-	if err := os.WriteFile(full, data, 0o644); err != nil {
+	if err := s.safeWriteFile(full, data, 0o644); err != nil {
 		return "", err
 	}
 	return filepath.ToSlash(clean), nil

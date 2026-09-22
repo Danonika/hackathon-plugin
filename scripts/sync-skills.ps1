@@ -32,17 +32,42 @@ if (-not (Test-Path -LiteralPath $src)) {
 # Serialize concurrent runs (e.g. sync-harness.ps1 plus a manual invocation):
 # both mutate the shared $dst during the swap.
 $lock = "$dst.lock"
+# The lock lives under $dst's parent (".agents"), which may not exist on a fresh
+# checkout; create it once up front so the acquire loop is not defeated by a
+# missing parent.
+$lockParent = Split-Path -Parent $lock
+if (-not (Test-Path -LiteralPath $lockParent)) {
+  New-Item -ItemType Directory -Force -Path $lockParent | Out-Null
+}
 $locked = $false
 for ($i = 0; $i -lt 100; $i++) {
   try {
     New-Item -ItemType Directory -Path $lock -ErrorAction Stop | Out-Null
+    Set-Content -LiteralPath (Join-Path $lock "pid") -Value $PID -ErrorAction SilentlyContinue
     $locked = $true
     break
   } catch {
     if (Test-Path -LiteralPath $lock) {
-      $age = (Get-Date) - (Get-Item -LiteralPath $lock -Force).LastWriteTime
-      if ($age.TotalSeconds -gt 60) {
-        Remove-Item -LiteralPath $lock -Recurse -Force -ErrorAction SilentlyContinue
+      $holder = $null
+      $pidFile = Join-Path $lock "pid"
+      if (Test-Path -LiteralPath $pidFile) {
+        $holder = Get-Content -LiteralPath $pidFile -ErrorAction SilentlyContinue | Select-Object -First 1
+      }
+      $stale = $false
+      if ($holder) {
+        # Only evict when the owning process is gone; a slow-but-live copy must
+        # not have its lock stolen.
+        if (-not (Get-Process -Id ([int]$holder) -ErrorAction SilentlyContinue)) { $stale = $true }
+      } else {
+        $age = (Get-Date) - (Get-Item -LiteralPath $lock -Force).LastWriteTime
+        if ($age.TotalSeconds -gt 60) { $stale = $true }
+      }
+      if ($stale) {
+        $stalePath = "$lock.stale.$PID"
+        try {
+          Move-Item -LiteralPath $lock -Destination $stalePath -Force -ErrorAction Stop
+          Remove-Item -LiteralPath $stalePath -Recurse -Force -ErrorAction SilentlyContinue
+        } catch {}
         continue
       }
     }
@@ -50,6 +75,22 @@ for ($i = 0; $i -lt 100; $i++) {
   }
 }
 if (-not $locked) { Fail "[sync-skills] could not acquire the mirror lock at $lock" }
+
+# Recover from a previously interrupted swap before touching $dst: if the live
+# mirror is missing but an old copy survives, restore it.
+if (-not (Test-Path -LiteralPath $dst)) {
+  $recover = Get-ChildItem -LiteralPath (Split-Path -Parent $dst) -Directory -Force -ErrorAction SilentlyContinue |
+    Where-Object { $_.Name -like "$(Split-Path -Leaf $dst).old.*" } |
+    Sort-Object LastWriteTime -Descending | Select-Object -First 1
+  if ($recover) {
+    Write-Host "[sync-skills] restoring $dst from interrupted swap $($recover.FullName)"
+    Move-Item -LiteralPath $recover.FullName -Destination $dst -Force
+  }
+}
+# Sweep orphaned temp/stale-swap directories from crashed runs.
+Get-ChildItem -LiteralPath (Split-Path -Parent $dst) -Directory -Force -ErrorAction SilentlyContinue |
+  Where-Object { $_.Name -like "$(Split-Path -Leaf $dst).tmp.*" -or $_.Name -like "$(Split-Path -Leaf $dst).old.*" -or $_.Name -like "$(Split-Path -Leaf $dst).lock.stale.*" } |
+  ForEach-Object { Remove-Item -LiteralPath $_.FullName -Recurse -Force -ErrorAction SilentlyContinue }
 
 # Build the mirror in a temporary directory and swap it in, so consumers never
 # observe a missing or half-populated mirror when the copy fails.
@@ -77,7 +118,10 @@ try {
     if (Test-Path -LiteralPath $old) { Move-Item -LiteralPath $old -Destination $dst -Force }
     throw
   }
-  if (Test-Path -LiteralPath $old) { Remove-Item -LiteralPath $old -Recurse -Force }
+  # Only delete the backup once the live mirror is known to exist.
+  if ((Test-Path -LiteralPath $dst) -and (Test-Path -LiteralPath $old)) {
+    Remove-Item -LiteralPath $old -Recurse -Force -ErrorAction SilentlyContinue
+  }
 } finally {
   if (Test-Path -LiteralPath $tmp) { Remove-Item -LiteralPath $tmp -Recurse -Force -ErrorAction SilentlyContinue }
   if (Test-Path -LiteralPath $lock) { Remove-Item -LiteralPath $lock -Recurse -Force -ErrorAction SilentlyContinue }

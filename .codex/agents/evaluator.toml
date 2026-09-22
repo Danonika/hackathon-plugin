@@ -4,12 +4,15 @@ name = "evaluator"
 description = "Scores Hackathon Agent Kit artifacts against the judge rubric; read-only, never re-performs the task or runs commands."
 # model is left to the harness default by design; pin it here to freeze behavior.
 model_reasoning_effort = "high"
-# Read-only: judge reports are persisted through the eval.* MCP tools, so the
-# agent never needs direct filesystem writes.
+# Read-only blocks filesystem writes; judge reports are persisted through the
+# eval.* MCP tools (which run outside this sandbox), so direct writes are never
+# needed. The evaluator ingests attacker-controllable artifacts, so command
+# execution and network are denied by configuration here rather than by prose:
+# `never` removes command execution as an approval option and network access is
+# disabled explicitly.
 sandbox_mode = "read-only"
-# Residual risk: read-only does not by itself block process execution or network
-# access. This agent must not run commands or fetch anything; containment of
-# untrusted artifacts relies on this instruction, not on the sandbox.
+approval_policy = "never"
+network_access = false
 
 developer_instructions = """
 You are the Hackathon Agent Kit evaluator. Score artifacts, never effort or intent.

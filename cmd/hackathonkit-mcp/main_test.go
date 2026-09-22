@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -289,5 +290,60 @@ func TestRunResourcesFlags(t *testing.T) {
 	}
 	if code, _, _ := runMCP(t, "--repo-root", root, "--resources-set", "="); code != 1 {
 		t.Fatalf("empty key: code = %d", code)
+	}
+}
+
+func TestRedactBackendError(t *testing.T) {
+	cases := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{
+			name:  "key value with space delimiter",
+			input: "connect failed: password=hunter2 host=db",
+			want:  "connect failed: password=[redacted] host=db",
+		},
+		{
+			name:  "quoted value containing spaces",
+			input: `auth error: password="a b c" user=admin`,
+			want:  `auth error: password="[redacted]" user=admin`,
+		},
+		{
+			name:  "url userinfo credentials",
+			input: "pgx: cannot parse `postgres://user:s3cr3t@db:5432/app`: bad dsn",
+			want:  "pgx: cannot parse `postgres://[redacted]@db:5432/app`: bad dsn",
+		},
+		{
+			name:  "minio endpoint with credentials",
+			input: "minio: endpoint http://key:secret@minio:9000 rejected",
+			want:  "minio: endpoint http://[redacted]@minio:9000 rejected",
+		},
+		{
+			name:  "url password containing sub-delims",
+			input: "postgres://user:p;ss,word@db:5432/app",
+			want:  "postgres://[redacted]@db:5432/app",
+		},
+		{
+			name:  "uppercase marker and access key",
+			input: "API_KEY=abc123; access_key=akey",
+			want:  "API_KEY=[redacted] access_key=[redacted]",
+		},
+		{
+			name:  "no credentials unchanged",
+			input: "connection refused to db:5432",
+			want:  "connection refused to db:5432",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := redactBackendError(fmt.Errorf("%s", tc.input))
+			if got != tc.want {
+				t.Fatalf("redactBackendError(%q) = %q, want %q", tc.input, got, tc.want)
+			}
+			if strings.Contains(got, "s3cr3t") || strings.Contains(got, "hunter2") || strings.Contains(got, "abc123") || strings.Contains(got, "akey") || strings.Contains(got, "secret") || strings.Contains(got, "p;ss") || strings.Contains(got, "a,b") {
+				t.Fatalf("secret leaked in %q", got)
+			}
+		})
 	}
 }

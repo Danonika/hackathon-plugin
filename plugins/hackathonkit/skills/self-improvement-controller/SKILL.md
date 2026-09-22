@@ -61,8 +61,8 @@ Never mix axes in one round: a score drop must be attributable to one change cla
 2. **Budget the context.** Call `system.context_budget`; drop non-essential skills and references from the round before launching sub-agents, and note flagged items in the round record.
 3. **Run the fast block** (one axis per round, targeted tests after each change):
    - `$roast-project` against the frozen snapshot -> fix `critical` and `high` findings.
-   - `$cp-expert-refactoring` -> apply accepted changes only.
-   - `$system-design-expert` -> apply accepted proposals only.
+   - `$cp-expert-refactoring` -> apply accepted changes only (hot paths first).
+   - `$system-design-expert` -> apply accepted proposals only (structure after performance).
    - Quick smoke: MCP starts, `initialize`, `tools/list`, mandatory happy path.
 4. **Freeze the candidate.** Call `eval.freeze_bundle` with `out` (default `data/judge-bundles`), `read_only=true` and the candidate `model`; keep `bundle_path`, `bundle_hash` and `git_sha`. A full clean-room rebuild is not part of an iteration.
 5. **Technical decision.** Re-score the candidate with `$project-cost`, then call `eval.compare` with `mode=technical`, `candidate=<new technical score>`, `best=<accepted score>`, `mandatory_scenario_failed=<bool>`, `snapshot_sha=<git_sha>`, `persist=true` and follow the decision matrix.

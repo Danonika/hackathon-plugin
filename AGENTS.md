@@ -8,6 +8,18 @@ Hackathon Agent Kit is a local MCP capability layer plus skills for hackathon bu
 deterministic tools compute, Codex reasons, skills define workflows, and the
 evaluation subsystem owns the arithmetic.
 
+## How To Work (agent responsibilities)
+
+You (the agent) run the workflow; the user only states the task or runs a command. Do
+not ask the user to name skills or tools. When a skill triggers, execute the MCP tools
+listed in its `tools:` frontmatter yourself.
+
+- Commands the user can run: `/plan [task]`, `/research [question]`, `/build [stage]`,
+  `/evaluate`, `/verify` (and `/verify --target N`). Each maps to the skills/tools below.
+- Without a command, infer it: multi-step work -> `$build-planner`; unfamiliar theme ->
+  `$theme-research`; any tool task -> `$task-router`; then the matching domain skill.
+- Always finish a stage with `plan.update` evidence and `/verify` before claiming done.
+
 ## Core Principles
 
 1. **Evidence first** - no number, quote or timestamp without a tool result, artifact id or test output behind it.

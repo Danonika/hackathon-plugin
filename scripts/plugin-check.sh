@@ -60,24 +60,28 @@ if entry is None:
 source = ""
 if isinstance(entry.get("source"), dict):
     source = entry["source"].get("path") or ""
-source = os.path.realpath(os.path.expanduser(str(source))) if source else ""
-if not source:
+source_raw = os.path.expanduser(str(source)) if source else ""
+if not source_raw:
     print("[plugin-check] installed plugin has no source.path; re-run scripts/setup.sh", file=sys.stderr)
     sys.exit(1)
 
 # The manifest is about to be executed: refuse a symlinked or group/world-
-# writable plugin tree (another user could replace what we run).
+# writable plugin tree (another user could replace what we run). Inspect the
+# unresolved path first: realpath() resolves the final component, which would
+# make an S_ISLNK check dead code.
 try:
-    st = os.lstat(source)
+    st = os.lstat(source_raw)
     if stat.S_ISLNK(st.st_mode):
-        print("[plugin-check] refusing to execute a symlinked plugin directory: %s" % source, file=sys.stderr)
+        print("[plugin-check] refusing to execute a symlinked plugin directory: %s" % source_raw, file=sys.stderr)
         sys.exit(1)
     if st.st_mode & (stat.S_IWGRP | stat.S_IWOTH):
-        print("[plugin-check] refusing to execute a group/world-writable plugin directory: %s" % source, file=sys.stderr)
+        print("[plugin-check] refusing to execute a group/world-writable plugin directory: %s" % source_raw, file=sys.stderr)
         sys.exit(1)
 except OSError as exc:
     print("[plugin-check] cannot inspect the plugin directory: %s" % exc, file=sys.stderr)
     sys.exit(1)
+
+source = os.path.realpath(source_raw)
 
 mcp_path = os.path.join(source, ".mcp.json")
 if not os.path.isfile(mcp_path):
@@ -113,7 +117,15 @@ requests = "\n".join([
 ]) + "\n"
 
 command = server["command"]
-if not os.path.isabs(command):
+# The manifest is executed: a tampered absolute `command` must not launch an
+# arbitrary binary outside the installed plugin tree.
+if os.path.isabs(command):
+    real_command = os.path.realpath(command)
+    if not (real_command == source or real_command.startswith(source + os.sep)):
+        print("[plugin-check] refusing to execute a command outside the plugin tree: %s" % command, file=sys.stderr)
+        sys.exit(1)
+    command = real_command
+else:
     # A relative command must resolve against the plugin, not the temp cwd.
     command = os.path.join(source, command)
 cmd = [command] + [str(arg) for arg in args]

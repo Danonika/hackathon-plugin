@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -385,13 +386,13 @@ func cmdRun(args []string, stdout, stderr io.Writer) error {
 		}
 	}
 	if _, err := store.RecomputeRisk(ctx); err != nil {
-		return err
+		// Risk is a derived, best-effort metric: report it without changing the
+		// command's status or exit code, which reflect the codex run and
+		// bookkeeping only.
+		fmt.Fprintln(os.Stderr, "risk recompute failed:", err)
 	}
 	fmt.Printf("\nsession %s finished (%s)\nresume: hackathonkit-ctl sessions resume %s\n", sessionID, status, sessionID)
-	if runErr != nil {
-		return runErr
-	}
-	return bookkeepingErr
+	return errors.Join(runErr, bookkeepingErr)
 }
 
 func truncate(value string, limit int) string {

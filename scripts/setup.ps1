@@ -37,13 +37,40 @@ if (-not (Test-Path -LiteralPath ".env")) {
   Write-Host "[setup] created .env from .env.example (set OPENAI_API_KEY for speech/vision)"
 }
 
+# A generated demo token protects the demo API without manual steps. The demo
+# API fails closed on an empty token, so generate one when the shell bootstrap
+# would (parity with scripts/setup.sh).
+$envPath = Join-Path $root ".env"
+$hasToken = $false
+if (Test-Path -LiteralPath $envPath) {
+  $hasToken = [bool](Select-String -LiteralPath $envPath -Pattern '^HACKATHONKIT_DEMO_TOKEN=.' -Quiet -ErrorAction SilentlyContinue)
+}
+if (-not $hasToken) {
+  $bytes = New-Object byte[] 16
+  [System.Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($bytes)
+  $token = -join ($bytes | ForEach-Object { $_.ToString("x2") })
+  try {
+    $lines = @()
+    if (Test-Path -LiteralPath $envPath) { $lines = @(Get-Content -LiteralPath $envPath) }
+    $replaced = $false
+    for ($i = 0; $i -lt $lines.Count; $i++) {
+      if ($lines[$i] -match '^HACKATHONKIT_DEMO_TOKEN=') { $lines[$i] = "HACKATHONKIT_DEMO_TOKEN=$token"; $replaced = $true }
+    }
+    if (-not $replaced) { $lines += "HACKATHONKIT_DEMO_TOKEN=$token" }
+    Set-Content -LiteralPath $envPath -Value $lines
+    Write-Host "[setup] generated HACKATHONKIT_DEMO_TOKEN for the demo API"
+  } catch {
+    Write-Warning "[setup] could not generate a demo token; set HACKATHONKIT_DEMO_TOKEN manually"
+  }
+}
+
 $global:LASTEXITCODE = 0
 & (Join-Path $root "scripts\sync-harness.ps1")
 if ($LASTEXITCODE -ne 0) { Fail "[setup] sync-harness failed" }
 
 # Codex plugins cannot bundle slash commands; install /verify as a custom prompt.
-& (Join-Path $root "scripts\verify-prompt.ps1") install
-if ($LASTEXITCODE -ne 0) { Write-Warning "[setup] could not install the Codex /verify prompt" }
+& (Join-Path $root "scripts\install-prompts.ps1") install
+if ($LASTEXITCODE -ne 0) { Write-Warning "[setup] could not install the Codex command prompts" }
 
 if ($Profile -eq "core") {
   foreach ($dir in @((Join-Path $root ".agents\skills"), (Join-Path $root ".claude\skills"))) {

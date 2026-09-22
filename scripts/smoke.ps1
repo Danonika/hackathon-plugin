@@ -33,8 +33,12 @@ if (Test-Path -LiteralPath $binary) {
       exit 1
     }
     if (-not $proc.WaitForExit(60000)) {
-      $proc.Kill()
-      $proc.WaitForExit()
+      try {
+        if (-not $proc.HasExited) { $proc.Kill() }
+        $proc.WaitForExit()
+      } catch {
+        # The process exited between the timeout check and Kill; ignore.
+      }
       if (-not $Quiet) { Write-Host "[smoke] MCP server timed out after 60s" }
       exit 1
     }
@@ -69,8 +73,12 @@ if (Test-Path -LiteralPath $binary) {
       exit 1
     }
     if (-not $proc.WaitForExit(120000)) {
-      $proc.Kill()
-      $proc.WaitForExit()
+      try {
+        if (-not $proc.HasExited) { $proc.Kill() }
+        $proc.WaitForExit()
+      } catch {
+        # The process exited between the timeout check and Kill; ignore.
+      }
       # --rm only removes the container after it exits; kill the hung server too.
       & docker compose -f (Join-Path $root "docker-compose.yml") kill hackathonkit-mcp *> $null
       if (-not $Quiet) { Write-Host "[smoke] docker compose timed out after 120s" }

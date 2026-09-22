@@ -8,16 +8,23 @@ function Fail([string]$Message) {
   exit 1
 }
 
-# Compare two trees by relative file path and size so a user-authored skill that
-# merely shares a folder name with a shipped skill is not deleted.
+# Compare two trees by relative file path and content hash so a user-authored
+# skill that merely shares a folder name with a shipped skill is not deleted,
+# and a same-size edit is not mistaken for an unmodified copy.
 function Test-SameTree([string]$A, [string]$B) {
   if (-not (Test-Path -LiteralPath $A) -or -not (Test-Path -LiteralPath $B)) { return $false }
   $aFiles = @(Get-ChildItem -LiteralPath $A -Recurse -File -Force |
     Where-Object { -not ($_.Attributes -band [System.IO.FileAttributes]::ReparsePoint) } |
-    ForEach-Object { "$($_.FullName.Substring($A.Length).TrimStart('\'))|$($_.Length)" } | Sort-Object)
+    ForEach-Object {
+      $rel = $_.FullName.Substring($A.Length).TrimStart('\')
+      "$rel|$((Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash)"
+    } | Sort-Object)
   $bFiles = @(Get-ChildItem -LiteralPath $B -Recurse -File -Force |
     Where-Object { -not ($_.Attributes -band [System.IO.FileAttributes]::ReparsePoint) } |
-    ForEach-Object { "$($_.FullName.Substring($B.Length).TrimStart('\'))|$($_.Length)" } | Sort-Object)
+    ForEach-Object {
+      $rel = $_.FullName.Substring($B.Length).TrimStart('\')
+      "$rel|$((Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash)"
+    } | Sort-Object)
   return @(Compare-Object -ReferenceObject $aFiles -DifferenceObject $bFiles).Count -eq 0
 }
 
@@ -59,9 +66,9 @@ $targets = @(
 )
 # Remove the /verify custom prompt this installer placed for Codex.
 if ($Yes) {
-  & (Join-Path $root "scripts\verify-prompt.ps1") remove | Out-Null
+  & (Join-Path $root "scripts\install-prompts.ps1") remove | Out-Null
 } else {
-  Write-Host "would remove: $HOME\.codex\prompts\verify.md (if unmodified)"
+  Write-Host "would remove: $HOME\.codex\prompts\*.md (unmodified prompts only)"
 }
 
 $Failures = 0

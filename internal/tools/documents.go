@@ -186,6 +186,11 @@ func docxText(path string) (string, error) {
 			break
 		}
 		if err != nil {
+			// Hitting the size cap mid-document surfaces as a parse error, not
+			// EOF, so report truncation with the text gathered so far.
+			if counter.n > maxDocxXMLBytes {
+				return strings.TrimSpace(b.String()), errDocxTruncated
+			}
 			return "", err
 		}
 		switch t := tok.(type) {

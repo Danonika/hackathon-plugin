@@ -18,6 +18,7 @@ Review the system, not a single function; propose structural changes only with m
 ## When To Use
 
 - Before the final freeze, when the demo works but the structure is fragile.
+- After `$cp-expert-refactoring`: review hot paths first, then module boundaries and contracts.
 - When one backend failure or a missing key degrades unrelated tools.
 - When tool schemas, skills or manifests dominate the context budget.
 - Do not use for algorithmic hot paths; use `$cp-expert-refactoring`.

@@ -72,7 +72,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "fly-train: --epochs must be > 0, got %d\n", *epochs)
 		return 2
 	}
-	if *dataset == "" && *model == "knn" {
+	if *model == "knn" {
+		// --model knn ignores --dataset: rebuild feedback memory regardless.
 		if err := rebuildFromFeedback(root, cfg, client, stdout); err != nil {
 			fmt.Fprintln(stderr, "fly-train:", err)
 			return 1
@@ -187,6 +188,9 @@ func rebuildFromFeedback(root string, cfg config.File, client *openai.Client, st
 			return err
 		}
 		count++
+	}
+	if err := scanner.Err(); err != nil {
+		return fmt.Errorf("reading %s: %w", feedbackPath, err)
 	}
 	fmt.Fprintf(stdout, "fly-train: processed %d feedback tasks, memory=%d, dopamine=%+v\n",
 		count, router.MemorySize(), router.Dopamine())

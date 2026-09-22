@@ -20,6 +20,7 @@ Find algorithmic and performance problems in hot paths; fix them without changin
 - Data or document processing is slow on realistic inputs (10^5 rows, 10^3 chunks, 10^2 MB).
 - A hot loop, parser or matcher was written for the demo and never reviewed.
 - Before the final freeze, as part of a `$self-improvement-controller` fast block.
+- Before `$system-design-expert`: fix hot-path performance first, then review structure.
 - Do not use for correctness-only review or bug hunting; use `$roast-project`.
 - Do not use for module boundaries and contracts; use `$system-design-expert`.
 - Do not use for scoring; `$project-cost` owns the technical score and `$judge` owns the demo score.

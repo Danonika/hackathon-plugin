@@ -82,9 +82,19 @@ check "spaced value is quoted" "$(grep -q '^SPACED="two words"$' "$TMP/quote.env
 (umask 022 && printf 'line1\nline2\n' | sh "$HELPER" "$TMP/multi.env" MULTI)
 check "embedded newline is escaped" "$(grep -q '^MULTI="line1\\nline2"$' "$TMP/multi.env" && echo 1 || echo 0)" "got: $(cat "$TMP/multi.env")"
 
-# Backslashes and other escape sequences survive unchanged.
-sh "$HELPER" "$TMP/escape.env" B 'p\q\\r'
-check "backslash value is literal" "$(grep -q '^B=p\\q\\\\r$' "$TMP/escape.env" && echo 1 || echo 0)" "got: $(cat "$TMP/escape.env")"
+# Backslashes trigger quoting and are escaped so a sourced .env yields the
+# original value ("p\q\r").
+sh "$HELPER" "$TMP/escape.env" B 'p\q\r'
+check "backslash value is escaped" "$(grep -q '^B="p\\\\q\\\\r"$' "$TMP/escape.env" && echo 1 || echo 0)" "got: $(cat "$TMP/escape.env")"
+
+# Command-substitution and backtick payloads must be emitted inert: sourcing the
+# file must not execute them.
+sh "$HELPER" "$TMP/inject.env" EVIL '$(touch /tmp/hackathonkit-env-inject-marker)'
+rm -f /tmp/hackathonkit-env-inject-marker
+( set -a; . "$TMP/inject.env"; set +a; printf '%s\n' "$EVIL" > "$TMP/evil-value" )
+check "dollar substitution is not executed" "$([ -f /tmp/hackathonkit-env-inject-marker ] && echo 0 || echo 1)" "got: $(cat "$TMP/inject.env")"
+check "dollar value round-trips" "$([ "$(cat "$TMP/evil-value")" = '$(touch /tmp/hackathonkit-env-inject-marker)' ] && echo 1 || echo 0)" "got: $(cat "$TMP/evil-value")"
+rm -f /tmp/hackathonkit-env-inject-marker
 
 # Keys are matched literally, not as regexes.
 printf 'A_B=old\nA_XB=keep\n' > "$TMP/literal.env"

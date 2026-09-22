@@ -151,7 +151,7 @@ func isDuplicateDDL(err error) bool {
 }
 
 type Postgres struct {
-	mu   sync.Mutex
+	mu   sync.RWMutex
 	pool pgExecutor
 }
 
@@ -192,37 +192,46 @@ func openPostgres(ctx context.Context, dsn string, newPool func(context.Context,
 	return &Postgres{pool: pool}, nil
 }
 
-func (p *Postgres) Enabled() bool {
+// poolRef returns the current pool under the lock so callers use a stable
+// reference: Close may nil the field concurrently.
+func (p *Postgres) poolRef() pgExecutor {
 	if p == nil {
-		return false
+		return nil
 	}
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	return p.pool != nil
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.pool
+}
+
+func (p *Postgres) Enabled() bool {
+	return p.poolRef() != nil
 }
 
 func (p *Postgres) RecordArtifact(ctx context.Context, rec ArtifactRecord) error {
-	if !p.Enabled() {
+	pool := p.poolRef()
+	if pool == nil {
 		return nil
 	}
-	_, err := p.pool.Exec(ctx,
+	_, err := pool.Exec(ctx,
 		`INSERT INTO artifacts (artifact_id, kind, source, bytes, sha256) VALUES ($1,$2,$3,$4,$5)`,
 		rec.ArtifactID, rec.Kind, rec.Source, rec.Bytes, rec.SHA256)
 	return err
 }
 
 func (p *Postgres) RecordRoutingRun(ctx context.Context, run RoutingRun) error {
-	if !p.Enabled() {
+	pool := p.poolRef()
+	if pool == nil {
 		return nil
 	}
-	_, err := p.pool.Exec(ctx,
+	_, err := pool.Exec(ctx,
 		`INSERT INTO routing_runs (mode, version) VALUES ($1,$2)`,
 		run.Mode, run.Version)
 	return err
 }
 
 func (p *Postgres) RecordFlyPrediction(ctx context.Context, pred FlyPrediction) error {
-	if !p.Enabled() {
+	pool := p.poolRef()
+	if pool == nil {
 		return nil
 	}
 	scores, err := json.Marshal(pred.CategoryScores)
@@ -233,7 +242,7 @@ func (p *Postgres) RecordFlyPrediction(ctx context.Context, pred FlyPrediction) 
 	if err != nil {
 		return fmt.Errorf("metadata: marshal recommendations: %w", err)
 	}
-	_, err = p.pool.Exec(ctx,
+	_, err = pool.Exec(ctx,
 		`INSERT INTO fly_predictions (trace_id, route, encoder, max_score, threshold, category_scores, recommendations)
 		 VALUES ($1,$2,$3,$4,$5,$6,$7)`,
 		pred.TraceID, pred.Route, pred.Encoder, pred.MaxScore, pred.Threshold, scores, recs)
@@ -241,14 +250,15 @@ func (p *Postgres) RecordFlyPrediction(ctx context.Context, pred FlyPrediction) 
 }
 
 func (p *Postgres) RecordEvalRun(ctx context.Context, run EvalRun) error {
-	if !p.Enabled() {
+	pool := p.poolRef()
+	if pool == nil {
 		return nil
 	}
 	payload, err := json.Marshal(run.Payload)
 	if err != nil {
 		return fmt.Errorf("metadata: marshal eval payload: %w", err)
 	}
-	_, err = p.pool.Exec(ctx,
+	_, err = pool.Exec(ctx,
 		`INSERT INTO eval_runs (kind, snapshot_sha, score, target, noise_floor, decision, payload)
 		 VALUES ($1,$2,$3,$4,$5,$6,$7)`,
 		run.Kind, run.SnapshotSHA, run.Score, run.Target, run.NoiseFloor, run.Decision, payload)

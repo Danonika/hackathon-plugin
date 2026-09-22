@@ -102,7 +102,7 @@ func daemonStop(root string) error {
 	if err != nil {
 		return err
 	}
-	if err := process.Signal(syscall.SIGTERM); err != nil {
+	if err := terminateProcess(process); err != nil {
 		return err
 	}
 	deadline := time.Now().Add(5 * time.Second)
@@ -213,11 +213,7 @@ func readPID(root string) (int, bool) {
 	if err != nil || pid <= 0 {
 		return 0, false
 	}
-	process, err := os.FindProcess(pid)
-	if err != nil {
-		return pid, false
-	}
-	if err := process.Signal(syscall.Signal(0)); err != nil {
+	if !processAlive(pid) {
 		return pid, false
 	}
 	if !processLooksLikeDaemon(pid) {

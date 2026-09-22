@@ -1,18 +1,9 @@
 #:schema https://developers.openai.com/codex/config-schema.json
 
-[mcp_servers.hackathonkit]
-# POSIX launcher (Linux/macOS). Codex cannot execute a .sh on Windows: replace
-# `command` below with "./plugins/hackathonkit/scripts/hackathonkit-mcp-launcher.cmd",
-# or run scripts/setup.ps1, which generates plugins/hackathonkit/.mcp.json with the
-# .cmd launcher for Windows.
-command = "./plugins/hackathonkit/scripts/hackathonkit-mcp-launcher.sh"
-args = []
-# 180s covers the docker-compose fallback on a cold machine (image pull/build +
-# dependency startup). Raise further or pre-build images if your network is slow.
-startup_timeout_sec = 180
-# Slowest tools: ingestion, quality.gate and research passes. Raise per
-# environment if these time out; there is no config-level retry.
-tool_timeout_sec = 180
+# Root-level Codex settings MUST appear before the first [table] header. TOML
+# tables persist until the next header, so any key placed after
+# [mcp_servers.hackathonkit] would be parsed as part of that server entry and
+# silently ignored by the schema.
 
 # Web search is opt-in: set to "live" when $theme-research must verify external
 # facts and the environment may reach the network. While it is "disabled",
@@ -22,3 +13,21 @@ web_search = "disabled"
 
 # Appended to every prompt (additive, unlike model_instructions_file).
 persistent_instructions = "Follow AGENTS.md. If the Hackathon Agent Kit MCP server is available, call system.context before planning and use its tools for evidence; when the server is unavailable, say so and fall back to repository evidence. Never claim a result without a tool result or file behind it."
+
+# Fallback MCP registration (no plugin required). Codex loads this project
+# config from any subdirectory, but a relative `command` resolves against the
+# process cwd, so the repository root is resolved at launch instead: `sh` runs
+# the launcher via an absolute path from `git rev-parse --show-toplevel` (also
+# avoiding the checkout executable-bit requirement).
+# Windows: `sh` is unavailable. Run scripts/setup.ps1, which generates
+# plugins/hackathonkit/.mcp.json with the .cmd launcher for Windows, or replace
+# `command`/`args` below manually.
+[mcp_servers.hackathonkit]
+command = "sh"
+args = ["-c", "exec sh \"$(git rev-parse --show-toplevel 2>/dev/null || echo .)/plugins/hackathonkit/scripts/hackathonkit-mcp-launcher.sh\""]
+# 180s covers the docker-compose fallback on a cold machine (image pull/build +
+# dependency startup). Raise further or pre-build images if your network is slow.
+startup_timeout_sec = 180
+# Slowest tools: ingestion, quality.gate and research passes. Raise per
+# environment if these time out; there is no config-level retry.
+tool_timeout_sec = 180

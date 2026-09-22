@@ -17,9 +17,18 @@ const path = require("path");
 const { execFileSync } = require("child_process");
 
 const HOOKS = path.join(__dirname, "hooks.js");
+// A fixture is only a hackathonkit repo when it carries the plugin marker
+// (hooks.js), matching isHackathonKitRepo in hooks.js.
+function markHackathonKitRepo(dir) {
+  const scripts = path.join(dir, "plugins", "hackathonkit", "scripts");
+  fs.mkdirSync(scripts, { recursive: true });
+  fs.writeFileSync(path.join(scripts, "hooks.js"), "// hackathonkit marker fixture\n");
+}
+
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "hackathonkit-hooks-"));
 fs.mkdirSync(path.join(root, "configs"), { recursive: true });
 fs.writeFileSync(path.join(root, "configs", "routing.yaml"), "routing:\n  mode: fly\n  version: 7\n");
+markHackathonKitRepo(root);
 
 let failures = 0;
 function check(name, condition, detail) {
@@ -145,6 +154,7 @@ check("sanitized id is removed by stop", active().length === 0, JSON.stringify(a
 const project = fs.mkdtempSync(path.join(os.tmpdir(), "hackathonkit-project-"));
 fs.mkdirSync(path.join(project, "configs"), { recursive: true });
 fs.writeFileSync(path.join(project, "configs", "routing.yaml"), "routing:\n  mode: normal\n  version: 3\n");
+markHackathonKitRepo(project);
 const cache = fs.mkdtempSync(path.join(os.tmpdir(), "hackathonkit-cache-"));
 const cachePlugin = path.join(cache, "plugins", "cache", "hackathonkit-local", "hackathonkit", "0.11.1");
 fs.mkdirSync(cachePlugin, { recursive: true });
@@ -164,6 +174,7 @@ fs.rmSync(project, { recursive: true, force: true });
 const exeProject = fs.mkdtempSync(path.join(os.tmpdir(), "hackathonkit-exe-"));
 fs.mkdirSync(path.join(exeProject, "configs"), { recursive: true });
 fs.writeFileSync(path.join(exeProject, "configs", "routing.yaml"), "routing:\n  mode: normal\n  version: 1\n");
+markHackathonKitRepo(exeProject);
 fs.mkdirSync(path.join(exeProject, "bin"), { recursive: true });
 const exePath = path.join(exeProject, "bin", "hackathonkit-mcp.exe");
 if (process.platform === "win32") {

@@ -61,6 +61,9 @@ Plan the build in stages before writing anything. The plan under `evals/plans/<s
 5. Call `reports.create` with `title: "Build plan - <task>"`, `format: md` and one section per stage (goal, entry, exit evidence, timebox, rollback point). Keep the `build-plan-<slug>` `artifact_id`; the judge evidence bundle uses it.
 6. Per stage: `plan.update` with `status: doing` when work starts; when the gate passes, `plan.update` with `status: done` and `evidence` entries (artifact ids, test output, trace ids). Valid statuses: `todo`, `doing`, `done`, `failed`, `cut`.
 7. Gate check before marking done (full checklist in `references/stage-gates.md`):
+   - at S4, when the stage changed code, run `$cp-expert-refactoring` first (hot paths,
+     before/after evidence) and then `$system-design-expert` (boundaries, contracts, failure
+     isolation); record their findings as stage evidence;
    - exit evidence exists as a tool result, test output or `artifact_id`;
    - the mandatory scenario still passes, or the stage did not touch it;
    - no secret, token or absolute machine path leaked into an artifact;

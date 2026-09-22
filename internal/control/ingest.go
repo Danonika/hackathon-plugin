@@ -119,6 +119,14 @@ func (s *Store) ingestJSONL(ctx context.Context, name, path string, handle func(
 			rotated = true
 		}
 	}
+	if rotated {
+		// Reset the persisted offset so a truncated or recreated file is
+		// re-read from the beginning instead of seeking to a stale offset and
+		// silently skipping the head of the new file.
+		if err := s.SetCursor(ctx, name, 0); err != nil {
+			return 0, 0, rotated, err
+		}
+	}
 	if _, err := f.Seek(offset, io.SeekStart); err != nil {
 		return 0, 0, false, err
 	}
@@ -127,8 +135,10 @@ func (s *Store) ingestJSONL(ctx context.Context, name, path string, handle func(
 		return 0, 0, false, err
 	}
 	if len(data) == 0 {
-		if rotated && hasFP {
-			_ = s.SetCursor(ctx, name+":head", fingerprint)
+		if hasFP {
+			if err := s.SetCursor(ctx, name+":head", fingerprint); err != nil {
+				return 0, 0, rotated, err
+			}
 		}
 		return 0, 0, rotated, nil
 	}

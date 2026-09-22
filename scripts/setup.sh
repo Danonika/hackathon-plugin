@@ -85,7 +85,7 @@ sh "$ROOT/scripts/sync-harness.sh"
 
 # Codex plugins cannot bundle slash commands; install /verify as a custom prompt
 # in $CODEX_HOME/prompts (best-effort, never blocks setup).
-sh "$ROOT/scripts/verify-prompt.sh" install || echo "[setup] warning: could not install the Codex /verify prompt" >&2
+sh "$ROOT/scripts/install-prompts.sh" install || echo "[setup] warning: could not install the Codex command prompts" >&2
 
 EXPLICIT_ONLY_SKILLS="judge project-cost roast-project cp-expert-refactoring system-design-expert self-improvement-controller output-self-check skill-authoring qa-expert"
 if [ "$PROFILE" = "core" ]; then

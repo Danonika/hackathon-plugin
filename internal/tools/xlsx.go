@@ -71,7 +71,8 @@ func readXLSXTable(path string, sheetName string) (*table, []string, error) {
 			warnings = append(warnings, "xlsx: failed to read sharedStrings.xml: "+err.Error())
 		}
 	}
-	styles := readXLSXStyles(zr)
+	styles, styleWarnings := readXLSXStyles(zr)
+	warnings = append(warnings, styleWarnings...)
 	rows, err := readSheetRows(f, shared, styles)
 	if err != nil {
 		return nil, warnings, err
@@ -97,7 +98,8 @@ func readXLSXSheets(path string) ([]xlsxSheet, []string, error) {
 
 	refs, wbWarnings := workbookSheets(zr)
 	warnings = append(warnings, wbWarnings...)
-	styles := readXLSXStyles(zr)
+	styles, styleWarnings := readXLSXStyles(zr)
+	warnings = append(warnings, styleWarnings...)
 	if len(refs) == 0 {
 		files := sheetFiles(zr)
 		for i, f := range files {
@@ -164,7 +166,11 @@ func workbookSheets(zr *zip.ReadCloser) ([]xlsxSheetRef, []string) {
 			dec := xml.NewDecoder(&maxBytesReader{r: rc, remaining: maxXLSXPartBytes})
 			for {
 				tok, err := dec.Token()
-				if err == io.EOF || err != nil {
+				if err == io.EOF {
+					break
+				}
+				if err != nil {
+					warnings = append(warnings, "xlsx: workbook.xml.rels could not be fully read: "+err.Error())
 					break
 				}
 				se, ok := tok.(xml.StartElement)
@@ -196,7 +202,11 @@ func workbookSheets(zr *zip.ReadCloser) ([]xlsxSheetRef, []string) {
 			dec := xml.NewDecoder(&maxBytesReader{r: rc, remaining: maxXLSXPartBytes})
 			for {
 				tok, err := dec.Token()
-				if err == io.EOF || err != nil {
+				if err == io.EOF {
+					break
+				}
+				if err != nil {
+					warnings = append(warnings, "xlsx: workbook.xml could not be fully read: "+err.Error())
 					break
 				}
 				se, ok := tok.(xml.StartElement)
@@ -465,18 +475,23 @@ type fmtKind struct {
 	elapsed bool
 }
 
-func readXLSXStyles(zr *zip.ReadCloser) xlsxStyles {
+func readXLSXStyles(zr *zip.ReadCloser) (xlsxStyles, []string) {
 	out := xlsxStyles{
 		dateStyles:    map[int]bool{},
 		timeStyles:    map[int]bool{},
 		elapsedStyles: map[int]bool{},
 	}
+	warnings := []string{}
 	if f := zipFind(zr, "xl/workbook.xml"); f != nil {
 		if rc, err := f.Open(); err == nil {
 			dec := xml.NewDecoder(&maxBytesReader{r: rc, remaining: maxXLSXPartBytes})
 			for {
 				tok, err := dec.Token()
-				if err == io.EOF || err != nil {
+				if err == io.EOF {
+					break
+				}
+				if err != nil {
+					warnings = append(warnings, "xlsx: workbook.xml could not be fully read: "+err.Error())
 					break
 				}
 				se, ok := tok.(xml.StartElement)
@@ -494,11 +509,11 @@ func readXLSXStyles(zr *zip.ReadCloser) xlsxStyles {
 	}
 	f := zipFind(zr, "xl/styles.xml")
 	if f == nil {
-		return out
+		return out, warnings
 	}
 	rc, err := f.Open()
 	if err != nil {
-		return out
+		return out, warnings
 	}
 	defer rc.Close()
 	dec := xml.NewDecoder(&maxBytesReader{r: rc, remaining: maxXLSXPartBytes})
@@ -507,7 +522,11 @@ func readXLSXStyles(zr *zip.ReadCloser) xlsxStyles {
 	inCellXfs := false
 	for {
 		tok, err := dec.Token()
-		if err == io.EOF || err != nil {
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			warnings = append(warnings, "xlsx: styles.xml could not be fully read: "+err.Error())
 			break
 		}
 		switch t := tok.(type) {
@@ -557,7 +576,7 @@ func readXLSXStyles(zr *zip.ReadCloser) xlsxStyles {
 			out.timeStyles[idx] = true
 		}
 	}
-	return out
+	return out, warnings
 }
 
 func builtinFormatKind(id int) fmtKind {

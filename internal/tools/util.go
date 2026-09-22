@@ -36,6 +36,9 @@ func parseNumber(s string) (float64, bool) {
 		}
 	}
 	if v, err := strconv.ParseFloat(s, 64); err == nil {
+		if math.IsNaN(v) || math.IsInf(v, 0) {
+			return 0, false
+		}
 		return v, true
 	}
 	return 0, false

@@ -74,16 +74,19 @@ $requests = @(
 ) -join "`n"
 
 $stderrPath = Join-Path $temp "stderr.txt"
+$codePath = Join-Path $temp "exitcode.txt"
 $out = @()
 $exitCode = 0
 $stderrText = ""
 try {
   # Run in a job so a hung server cannot block the check forever.
   $job = Start-Job -ScriptBlock {
-    param($exe, $exeArgs, $payload, $workDir, $errPath)
+    param($exe, $exeArgs, $payload, $workDir, $errPath, $codePath)
     Set-Location -LiteralPath $workDir
     $payload | & $exe @exeArgs 2>$errPath
-  } -ArgumentList $cmd, $argList, $requests, $temp, $stderrPath
+    # $LASTEXITCODE does not survive Receive-Job; persist it for the caller.
+    Set-Content -LiteralPath $codePath -Value $LASTEXITCODE -ErrorAction SilentlyContinue
+  } -ArgumentList $cmd, $argList, $requests, $temp, $stderrPath, $codePath
   if (-not (Wait-Job $job -Timeout 120)) {
     Stop-Job $job -ErrorAction SilentlyContinue
     Remove-Job $job -Force -ErrorAction SilentlyContinue
@@ -92,7 +95,12 @@ try {
     exit 1
   }
   $out = @(Receive-Job $job)
-  if ($job.State -ne "Completed") { $exitCode = 1 }
+  if ($job.State -ne "Completed") {
+    $exitCode = 1
+  } elseif (Test-Path -LiteralPath $codePath) {
+    $captured = Get-Content -LiteralPath $codePath -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($null -ne $captured -and "$captured".Trim() -ne "") { $exitCode = [int]$captured }
+  }
   Remove-Job $job -Force -ErrorAction SilentlyContinue
 } finally {
   if (Test-Path -LiteralPath $stderrPath) {

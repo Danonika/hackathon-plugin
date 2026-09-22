@@ -65,3 +65,22 @@ func TestLoadDotEnvQuotingAndExport(t *testing.T) {
 		}
 	}
 }
+
+func TestLoadDotEnvEscapes(t *testing.T) {
+	root := t.TempDir()
+	// env-set.sh now escapes $, backtick, backslash and quotes in double-quoted
+	// values so sourcing the file cannot execute substitutions.
+	content := "ESCAPED=\"a\\$b \\`c\\` d\\\\e \\\"f\\\"\"\n"
+	if err := os.WriteFile(filepath.Join(root, ".env"), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	os.Unsetenv("ESCAPED")
+	defer os.Unsetenv("ESCAPED")
+
+	LoadDotEnv(root)
+
+	want := "a$b `c` d\\e \"f\""
+	if got := os.Getenv("ESCAPED"); got != want {
+		t.Fatalf("ESCAPED = %q, want %q", got, want)
+	}
+}

@@ -134,8 +134,10 @@ func securitySource(d Deps, args map[string]any) (string, string, error) {
 			if rerr != nil {
 				return "", "", rerr
 			}
-			if len(raw) > securityScanLimit {
-				raw = raw[:securityScanLimit]
+			// Keep one extra byte as a truncation sentinel: the caller keys its
+			// len(text) > limit check on it and then cuts rune-safely.
+			if len(raw) > securityScanLimit+1 {
+				raw = raw[:securityScanLimit+1]
 			}
 			data = raw
 		}

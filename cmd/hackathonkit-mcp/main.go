@@ -31,7 +31,7 @@ import (
 	"hackathonkit.local/agentkit/internal/tools"
 )
 
-const version = "0.16.30"
+const version = "0.16.31"
 
 // redactBackendError strips credentials from driver/connection errors before
 // they are logged (DSNs can appear in Postgres and MinIO errors).
@@ -39,25 +39,99 @@ func redactBackendError(err error) string {
 	if err == nil {
 		return ""
 	}
-	text := err.Error()
-	for _, marker := range []string{"password=", "passwd=", "secret=", "token="} {
-		searchFrom := 0
-		for {
-			idx := indexFold(text[searchFrom:], marker)
-			if idx < 0 {
-				break
-			}
-			idx += searchFrom
-			end := idx + len(marker)
-			for end < len(text) && text[end] != ' ' && text[end] != '&' && text[end] != ';' && text[end] != '\n' {
-				end++
-			}
-			text = text[:idx+len(marker)] + "[redacted]" + text[end:]
-			// Continue past the replacement so the marker is not matched again.
-			searchFrom = idx + len(marker) + len("[redacted]")
-		}
+	text := redactURLUserinfo(err.Error())
+	for _, marker := range []string{
+		"password=", "passwd=", "secret=", "secret_key=", "access_key=",
+		"api_key=", "apikey=", "token=", "credential=",
+	} {
+		text = redactMarkerValues(text, marker)
 	}
 	return text
+}
+
+// redactURLUserinfo replaces the userinfo of any URL (scheme://user:pass@host)
+// with [redacted], leaving the rest of the authority intact. Errors that echo a
+// connection string verbatim (Postgres DSNs, MinIO endpoints) are the main way
+// embedded credentials leak into logs.
+func redactURLUserinfo(text string) string {
+	var b strings.Builder
+	i := 0
+	for {
+		idx := strings.Index(text[i:], "://")
+		if idx < 0 {
+			b.WriteString(text[i:])
+			break
+		}
+		idx += i
+		b.WriteString(text[i : idx+3])
+		rest := text[idx+3:]
+		end := len(rest)
+		for j := 0; j < len(rest); j++ {
+			switch rest[j] {
+			case '/', '?', '#', ' ', '\t', '\n', '\r', '"', '\'':
+				end = j
+			}
+			if end == j {
+				break
+			}
+		}
+		authority := rest[:end]
+		if at := strings.LastIndex(authority, "@"); at > 0 {
+			b.WriteString("[redacted]")
+			b.WriteString(authority[at:])
+		} else {
+			b.WriteString(authority)
+		}
+		i = idx + 3 + end
+	}
+	return b.String()
+}
+
+// redactMarkerValues replaces the value that follows every occurrence of
+// marker, handling quoted values (e.g. password="a b") so the whole secret is
+// removed rather than only up to the first space.
+func redactMarkerValues(text, marker string) string {
+	const replacement = "[redacted]"
+	searchFrom := 0
+	for {
+		idx := indexFold(text[searchFrom:], marker)
+		if idx < 0 {
+			break
+		}
+		idx += searchFrom
+		valueStart := idx + len(marker)
+		quote := byte(0)
+		if valueStart < len(text) && (text[valueStart] == '"' || text[valueStart] == '\'') {
+			quote = text[valueStart]
+			valueStart++
+		}
+		end := valueStart
+		if quote != 0 {
+			for end < len(text) && text[end] != quote {
+				end++
+			}
+		} else {
+			for end < len(text) && !isValueDelimiter(text[end]) {
+				end++
+			}
+		}
+		if end == valueStart {
+			// Empty value: nothing to redact; advance to avoid a loop.
+			searchFrom = idx + len(marker)
+			continue
+		}
+		text = text[:valueStart] + replacement + text[end:]
+		searchFrom = valueStart + len(replacement)
+	}
+	return text
+}
+
+func isValueDelimiter(c byte) bool {
+	switch c {
+	case ' ', '\t', '\n', '\r', '&', '"', '\'':
+		return true
+	}
+	return false
 }
 
 // indexFold is a byte-length-preserving case-insensitive substring search, so

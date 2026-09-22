@@ -7,7 +7,7 @@ echo "[repair] repository root: $ROOT"
 
 sh "$ROOT/scripts/sync-harness.sh"
 sh "$ROOT/scripts/gen-mcp-manifest.sh" "$ROOT"
-sh "$ROOT/scripts/verify-prompt.sh" install || echo "[repair] warning: could not install the Codex /verify prompt" >&2
+sh "$ROOT/scripts/install-prompts.sh" install || echo "[repair] warning: could not install the Codex command prompts" >&2
 mkdir -p "$ROOT/logs" "$ROOT/evals" "$ROOT/data/artifacts" "$ROOT/data/index" "$ROOT/data/control" "$ROOT/data/judge-bundles"
 
 PROFILE="full"

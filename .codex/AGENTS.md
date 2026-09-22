@@ -42,10 +42,11 @@ go run ./cmd/hackathonkit-ctl tui
 scripts/doctor.sh
 ```
 
-Before claiming work is done, run `/verify` or `scripts/quality-gate.sh`: it runs the
-seven gate checks including **test coverage** (default 80%) and reports each one.
-`scripts/setup.sh`/`repair.sh` install the prompt to `~/.codex/prompts/`; otherwise
-copy `.codex/prompts/verify.md` there once.
+Commands: `/plan`, `/research`, `/build`, `/evaluate`, `/verify` (the agent runs the
+skills and tools; the user only states the task or runs a command). `scripts/setup.sh`/
+`repair.sh` install the prompts into `~/.codex/prompts/` via `scripts/install-prompts.sh`;
+otherwise run that script once. Before claiming work is done, run `/verify` (or
+`scripts/quality-gate.sh`): seven gate checks including **test coverage** (default 80%).
 
 Windows: use the `.ps1` scripts and `hackathonkit-mcp-launcher.cmd`.
 

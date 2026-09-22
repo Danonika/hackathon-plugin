@@ -301,18 +301,18 @@ func (r *Router) applyDopamine(ctx context.Context, ev FeedbackEvent) bool {
 	if !ok {
 		return false
 	}
-	// Mutate a copy under the lock, then persist outside it so a disk write
-	// never serializes every Router in the process.
+	// Hold brainMu across the whole read-modify-persist-publish sequence so two
+	// concurrent feedback calls cannot lose an update or overwrite the file
+	// with a stale snapshot.
 	brainMu.Lock()
+	defer brainMu.Unlock()
 	base := r.loadBrainLocked()
 	if base == nil {
-		brainMu.Unlock()
 		return false
 	}
 	work := base.clone()
 	_, code, ok := work.scores(vec)
 	if !ok || code == nil {
-		brainMu.Unlock()
 		return false
 	}
 	reward := map[string]bool{}
@@ -342,18 +342,13 @@ func (r *Router) applyDopamine(ctx context.Context, ev FeedbackEvent) bool {
 		}
 		work.Dopamine.PPL1++
 	default:
-		brainMu.Unlock()
 		return false
 	}
-	brainMu.Unlock()
-
 	if err := r.saveBrain(work); err != nil {
 		// In-memory state is unchanged: the caller sees a real failure.
 		return false
 	}
-	brainMu.Lock()
 	r.brain = work
-	brainMu.Unlock()
 	return true
 }
 

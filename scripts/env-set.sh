@@ -84,10 +84,27 @@ fi
 # environment, so backslashes and other escape sequences survive unchanged.
 LOCK="$FILE.lock"
 LOCKED=0
-if [ -d "$LOCK" ]; then
-  HOLDER=$(cat "$LOCK/pid" 2>/dev/null || true)
-  if [ -n "$HOLDER" ] && ! kill -0 "$HOLDER" 2>/dev/null; then
-    rm -rf "$LOCK"
+lock_is_stale() {
+  [ -d "$LOCK" ] || return 1
+  holder=$(cat "$LOCK/pid" 2>/dev/null || true)
+  if [ -n "$holder" ]; then
+    # kill -0 fails for a dead pid (and, less often, for EPERM on a live one).
+    if kill -0 "$holder" 2>/dev/null; then
+      return 1
+    fi
+    return 0
+  fi
+  # No pid yet: only reclaim after a grace period, so a concurrent
+  # mkdir-then-write window is not stolen from a live writer.
+  now=$(date +%s 2>/dev/null || echo 0)
+  mtime=$(stat -c %Y "$LOCK" 2>/dev/null || stat -f %m "$LOCK" 2>/dev/null || echo "$now")
+  [ $((now - mtime)) -ge 30 ]
+}
+if lock_is_stale; then
+  # Claim the stale lock atomically: only one contender can rename it away, so
+  # a live re-acquire is never deleted from under its owner.
+  if mv "$LOCK" "$LOCK.stale.$$" 2>/dev/null; then
+    rm -rf "$LOCK.stale.$$"
   fi
 fi
 for _ in 1 2 3 4 5 6 7 8 9 10; do
@@ -114,10 +131,13 @@ trap on_signal_env_set INT TERM
 
 (umask 077 && KEY="$KEY" VALUE="$VALUE" awk '
   function enc(v) {
-    if (v ~ /[ \t#"'"'"'\n]/) {
+    if (v ~ /[ \t#"'"'"'$`\\\r\n]/) {
       gsub(/\\/, "\\\\", v)
       gsub(/"/, "\\\"", v)
       gsub(/\n/, "\\n", v)
+      gsub(/\r/, "\\r", v)
+      gsub(/\$/, "\\$", v)
+      gsub(/`/, "\\`", v)
       return "\"" v "\""
     }
     return v

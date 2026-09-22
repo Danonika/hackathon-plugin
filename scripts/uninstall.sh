@@ -33,6 +33,7 @@ done
 
 # Shared skill mirrors: remove only the skills this plugin ships so
 # user-authored skills survive.
+FAILURES=0
 for rel in .agents/skills .claude/skills; do
   mirror="$ROOT/$rel"
   [ -d "$mirror" ] || continue
@@ -40,7 +41,15 @@ for rel in .agents/skills .claude/skills; do
     [ -d "$skill" ] || continue
     name=$(basename "$skill")
     if [ "$APPLY" = "1" ]; then
-      rm -rf "$mirror/$name" 2>/dev/null || FAILURES=$((FAILURES + 1))
+      # Only remove a mirror entry that is still an unmodified copy of the
+      # shipped skill; a user-authored skill with the same name is preserved.
+      if [ -d "$mirror/$name" ]; then
+        if diff -r "$skill" "$mirror/$name" >/dev/null 2>&1; then
+          rm -rf "$mirror/$name" 2>/dev/null || FAILURES=$((FAILURES + 1))
+        else
+          echo "[uninstall] keeping modified $rel/$name (differs from the shipped skill)" >&2
+        fi
+      fi
     else
       echo "would remove: $rel/$name"
     fi
@@ -74,12 +83,12 @@ fi
 
 # Remove the /verify custom prompt this installer placed for Codex.
 if [ "$APPLY" = "1" ]; then
-  sh "$ROOT/scripts/verify-prompt.sh" remove >/dev/null 2>&1 || true
+  sh "$ROOT/scripts/install-prompts.sh" remove >/dev/null 2>&1 || true
 else
-  echo "would remove: $HOME/.codex/prompts/verify.md (if unmodified)"
+  echo "would remove: $HOME/.codex/prompts/*.md (unmodified prompts only)"
 fi
 
-FAILURES=0
+# Remove generated artifacts. FAILURES accumulates across every removal loop.
 for rel in \
   plugins/hackathonkit/.mcp.json \
   configs/install-state.json \

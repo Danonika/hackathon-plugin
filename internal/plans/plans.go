@@ -84,10 +84,15 @@ func Slug(value string) string {
 		out = "plan"
 	}
 	if runes := []rune(out); len(runes) > 60 {
-		trimmed := strings.Trim(string(runes[:60]), "-")
-		// Keep the stem unique: truncation alone could collide with a different
-		// plan whose name shares the first 60 runes.
-		out = trimmed + "-" + shortHash(out)
+		// Reserve room for "-"+hash so the result stays within 60 runes and
+		// re-slugging an already-normalized value is a no-op.
+		suffix := "-" + shortHash(out)
+		keep := 60 - len([]rune(suffix))
+		if keep < 1 {
+			keep = 1
+		}
+		trimmed := strings.Trim(string(runes[:keep]), "-")
+		out = trimmed + suffix
 	}
 	return strings.Trim(out, "-")
 }

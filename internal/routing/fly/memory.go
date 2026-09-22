@@ -5,6 +5,7 @@ import (
 	"crypto/sha1"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"log"
 	"os"
 	"path/filepath"
@@ -109,18 +110,19 @@ func (r *Router) WithMemory(path string) *Router {
 	return r
 }
 
-func (r *Router) loadMemory() memoryFile {
+func (r *Router) loadMemory() (memoryFile, error) {
 	if r.memoryPath == "" {
-		return memoryFile{}
+		return memoryFile{}, nil
 	}
 	data, err := os.ReadFile(r.memoryPath)
 	if err != nil {
-		if !os.IsNotExist(err) {
-			// A transient/permission error must be visible: returning an empty
-			// memory here would let the next save overwrite good data.
-			log.Printf("fly: cannot read %s: %v (treating as empty)", r.memoryPath, err)
+		if os.IsNotExist(err) {
+			return memoryFile{}, nil
 		}
-		return memoryFile{}
+		// A transient/permission error must be surfaced to the caller so a
+		// feedback write aborts instead of replacing good data with an empty
+		// memory.
+		return memoryFile{}, fmt.Errorf("read fly memory %s: %w", r.memoryPath, err)
 	}
 	var mem memoryFile
 	if json.Unmarshal(data, &mem) != nil {
@@ -129,9 +131,9 @@ func (r *Router) loadMemory() memoryFile {
 		if rerr := os.Rename(r.memoryPath, r.memoryPath+".corrupt"); rerr != nil {
 			log.Printf("fly: cannot quarantine corrupt %s: %v", r.memoryPath, rerr)
 		}
-		return memoryFile{}
+		return memoryFile{}, nil
 	}
-	return mem
+	return mem, nil
 }
 
 func (r *Router) saveMemory(mem memoryFile) error {
@@ -174,7 +176,11 @@ func (r *Router) saveMemory(mem memoryFile) error {
 func (r *Router) MemorySize() int {
 	memoryMu.Lock()
 	defer memoryMu.Unlock()
-	return len(r.loadMemory().Examples)
+	mem, err := r.loadMemory()
+	if err != nil {
+		return 0
+	}
+	return len(mem.Examples)
 }
 
 func (r *Router) AddFeedback(ctx context.Context, ev FeedbackEvent) (int, bool, error) {
@@ -193,37 +199,44 @@ func (r *Router) AddFeedback(ctx context.Context, ev FeedbackEvent) (int, bool, 
 		}
 	}
 
-	memoryMu.Lock()
-	mem := r.loadMemory()
-	if mem.Model != "" && mem.Model != r.modelTag {
-		// Examples embedded under a different model are not comparable with
-		// the current task vectors; drop the stale vectors (keyword-only
-		// examples remain usable).
-		pruned := make([]FeedbackExample, 0, len(mem.Examples))
+	var kept []FeedbackExample
+	saveErr := func() error {
+		memoryMu.Lock()
+		defer memoryMu.Unlock()
+
+		mem, err := r.loadMemory()
+		if err != nil {
+			return err
+		}
+		if mem.Model != "" && mem.Model != r.modelTag {
+			// Examples embedded under a different model are not comparable with
+			// the current task vectors; drop the stale vectors (keyword-only
+			// examples remain usable).
+			pruned := make([]FeedbackExample, 0, len(mem.Examples))
+			for _, existing := range mem.Examples {
+				if len(existing.Vector) == 0 {
+					pruned = append(pruned, existing)
+				}
+			}
+			mem.Examples = pruned
+		}
+		mem.Model = r.modelTag
+		kept = make([]FeedbackExample, 0, len(mem.Examples)+1)
 		for _, existing := range mem.Examples {
-			if len(existing.Vector) == 0 {
-				pruned = append(pruned, existing)
+			if existing.Hash != example.Hash {
+				kept = append(kept, existing)
 			}
 		}
-		mem.Examples = pruned
-	}
-	mem.Model = r.modelTag
-	kept := make([]FeedbackExample, 0, len(mem.Examples)+1)
-	for _, existing := range mem.Examples {
-		if existing.Hash != example.Hash {
-			kept = append(kept, existing)
+		kept = append(kept, example)
+		const maxExamples = 500
+		if len(kept) > maxExamples {
+			kept = kept[len(kept)-maxExamples:]
 		}
-	}
-	kept = append(kept, example)
-	const maxExamples = 500
-	if len(kept) > maxExamples {
-		kept = kept[len(kept)-maxExamples:]
-	}
-	mem.Examples = kept
-	err := r.saveMemory(mem)
-	memoryMu.Unlock()
-	if err != nil {
-		return len(kept), false, err
+		mem.Examples = kept
+		return r.saveMemory(mem)
+	}()
+	if saveErr != nil {
+		return len(kept), false, saveErr
 	}
 	learned := r.applyDopamine(ctx, ev)
 	return len(kept), learned, nil
@@ -231,9 +244,9 @@ func (r *Router) AddFeedback(ctx context.Context, ev FeedbackEvent) (int, bool, 
 
 func (r *Router) memoryCategoryScores(taskVector []float64, k int) (map[string]float64, bool) {
 	memoryMu.Lock()
-	mem := r.loadMemory()
+	mem, err := r.loadMemory()
 	memoryMu.Unlock()
-	if len(mem.Examples) == 0 {
+	if err != nil || len(mem.Examples) == 0 {
 		return nil, false
 	}
 	type scored struct {

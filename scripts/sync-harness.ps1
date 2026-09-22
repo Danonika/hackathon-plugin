@@ -66,10 +66,17 @@ try {
     if (Test-Path -LiteralPath $ClaudeOld) { Move-Item -LiteralPath $ClaudeOld -Destination $ClaudeSkills -Force }
     throw
   }
-  if (Test-Path -LiteralPath $ClaudeOld) { Remove-Item -LiteralPath $ClaudeOld -Recurse -Force }
+  # Only delete the backup once the live mirror is known to exist.
+  if ((Test-Path -LiteralPath $ClaudeSkills) -and (Test-Path -LiteralPath $ClaudeOld)) {
+    Remove-Item -LiteralPath $ClaudeOld -Recurse -Force -ErrorAction SilentlyContinue
+  }
 } finally {
   if (Test-Path -LiteralPath $ClaudeTmp) { Remove-Item -LiteralPath $ClaudeTmp -Recurse -Force -ErrorAction SilentlyContinue }
-  if ($ClaudeOld -and (Test-Path -LiteralPath $ClaudeOld)) { Remove-Item -LiteralPath $ClaudeOld -Recurse -Force -ErrorAction SilentlyContinue }
+  # Preserve the backup if the live mirror is missing (a failed restore): it is
+  # then the only copy and must survive for manual recovery.
+  if ($ClaudeOld -and (Test-Path -LiteralPath $ClaudeOld) -and (Test-Path -LiteralPath $ClaudeSkills)) {
+    Remove-Item -LiteralPath $ClaudeOld -Recurse -Force -ErrorAction SilentlyContinue
+  }
 }
 
 # Mirror the plugin commands into the harness project command directories.
@@ -96,8 +103,11 @@ $Required = @(
   ".opencode\opencode.json",
   ".cursor\rules\hackathonkit.mdc",
   "plugins\hackathonkit\hooks\codex-hooks.json",
-  "plugins\hackathonkit\commands\verify.md",
-  ".codex\prompts\verify.md"
+  "plugins\hackathonkit\commands\plan.md",
+  "plugins\hackathonkit\commands\research.md",
+  "plugins\hackathonkit\commands\build.md",
+  "plugins\hackathonkit\commands\evaluate.md",
+  "plugins\hackathonkit\commands\verify.md"
 )
 $Missing = 0
 foreach ($f in $Required) {

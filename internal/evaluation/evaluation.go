@@ -671,7 +671,6 @@ func ApplyCommission(ranking Ranking, commission Commission) (Ranking, error) {
 		votesCopy[k] = v
 	}
 	commission.Votes = votesCopy
-	total := 0
 	for sha, votes := range commission.Votes {
 		if !containsString(ranking.Unresolved, sha) {
 			return Ranking{}, fmt.Errorf("vote for %s which is not part of the unresolved tie", sha)
@@ -679,32 +678,22 @@ func ApplyCommission(ranking Ranking, commission Commission) (Ranking, error) {
 		if votes < 0 {
 			return Ranking{}, fmt.Errorf("negative votes for %s", sha)
 		}
-		total += votes
 	}
 	for _, sha := range ranking.Unresolved {
 		if _, ok := commission.Votes[sha]; !ok {
 			return Ranking{}, fmt.Errorf("missing vote count for %s", sha)
 		}
 	}
-	if total != len(commission.Members) {
-		return Ranking{}, fmt.Errorf("votes (%d) must equal the number of commission members (%d)", total, len(commission.Members))
-	}
-	winner, max := "", 0
-	for sha, votes := range commission.Votes {
-		if votes > max {
-			winner, max = sha, votes
-		}
-	}
-	if winner == "" || max*2 <= len(commission.Members) {
-		return Ranking{}, fmt.Errorf("no strict majority in commission votes %v", commission.Votes)
-	}
 
 	unresolvedSet := map[string]bool{}
 	for _, sha := range ranking.Unresolved {
 		unresolvedSet[sha] = true
 	}
-	// Resolve each contiguous tie group in place: entries are score-sorted, so
-	// distinct tie groups at different score levels are handled separately.
+	// Resolve each tie tier independently. Rank flattens every tied SHA into one
+	// list, so tier boundaries are recovered here by re-checking comparability:
+	// a run is split as soon as the next entry is not actually tied with the
+	// previous one. Each tier must clear its own strict majority, otherwise a
+	// low-scoring tier could be ranked above a higher-scoring one.
 	rest := make([]RankEntry, 0, len(ranking.Entries))
 	for i := 0; i < len(ranking.Entries); {
 		if !unresolvedSet[ranking.Entries[i].SnapshotSHA] {
@@ -712,10 +701,28 @@ func ApplyCommission(ranking Ranking, commission Commission) (Ranking, error) {
 			i++
 			continue
 		}
-		run := []RankEntry{}
+		run := []RankEntry{ranking.Entries[i]}
+		i++
 		for i < len(ranking.Entries) && unresolvedSet[ranking.Entries[i].SnapshotSHA] {
+			if order, _ := compareEntries(run[len(run)-1], ranking.Entries[i]); order != 0 {
+				break
+			}
 			run = append(run, ranking.Entries[i])
 			i++
+		}
+		tierTotal, tierWinner, tierMax := 0, "", 0
+		for _, entry := range run {
+			votes := commission.Votes[entry.SnapshotSHA]
+			tierTotal += votes
+			if votes > tierMax {
+				tierWinner, tierMax = entry.SnapshotSHA, votes
+			}
+		}
+		if tierTotal != len(commission.Members) {
+			return Ranking{}, fmt.Errorf("votes for tie tier %v (%d) must equal the number of commission members (%d)", entrySHAs(run), tierTotal, len(commission.Members))
+		}
+		if tierWinner == "" || tierMax*2 <= len(commission.Members) {
+			return Ranking{}, fmt.Errorf("no strict majority in commission votes for tie tier %v", entrySHAs(run))
 		}
 		sort.SliceStable(run, func(a, b int) bool {
 			votesA, votesB := commission.Votes[run[a].SnapshotSHA], commission.Votes[run[b].SnapshotSHA]
@@ -736,6 +743,15 @@ func ApplyCommission(ranking Ranking, commission Commission) (Ranking, error) {
 	ranking.Unresolved = nil
 	ranking.Commission = &commission
 	return ranking, nil
+}
+
+// entrySHAs lists the snapshot SHAs of a tie tier for error messages.
+func entrySHAs(entries []RankEntry) []string {
+	out := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		out = append(out, entry.SnapshotSHA)
+	}
+	return out
 }
 
 // compareEntries returns -1/0/1 and the tie-break level that decided the order.

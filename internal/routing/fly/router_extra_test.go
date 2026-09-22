@@ -192,7 +192,7 @@ func TestMemorySizeTracksExamples(t *testing.T) {
 	}
 }
 
-func TestAddFeedbackSaveError(t *testing.T) {
+func TestAddFeedbackUnreadableMemoryAborts(t *testing.T) {
 	dir := t.TempDir()
 	blocker := filepath.Join(dir, "blocker")
 	if err := os.WriteFile(blocker, []byte("x"), 0o644); err != nil {
@@ -205,10 +205,10 @@ func TestAddFeedbackSaveError(t *testing.T) {
 		Source: "accepted",
 	})
 	if err == nil {
-		t.Fatal("AddFeedback must surface a save failure")
+		t.Fatal("AddFeedback must surface an unreadable memory instead of overwriting it")
 	}
-	if size != 1 {
-		t.Fatalf("size = %d, want 1 even when saving fails", size)
+	if size != 0 {
+		t.Fatalf("size = %d, want 0 when the memory cannot be read", size)
 	}
 }
 

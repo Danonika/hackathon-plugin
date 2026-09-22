@@ -183,7 +183,15 @@ func (s *Store) Record(ctx context.Context, in RecordInput) (RecordResult, error
 		}
 		l.Evidence = mergeEvidence(l.Evidence, in.Evidence)
 		l.Confidence = confidence(l.Successes, l.Failures)
-		l.Scope = scope
+		// Never silently downgrade a promoted global learning back to project
+		// scope: a re-record defaults to "project" and would otherwise make the
+		// entry invisible to every scope query.
+		if scope == "global" || l.Scope != "global" {
+			l.Scope = scope
+			if scope == "global" {
+				l.Project = ""
+			}
+		}
 		l.UpdatedAt = now
 		result.Created = false
 		result.Learning = *l
@@ -336,14 +344,16 @@ func (s *Store) Promote(id string, minObservations int, minConfidence float64) (
 		minObservations = 1
 	}
 
+	// Acquire s.mu before the cross-process lock file, matching Record, so the
+	// two entry points cannot deadlock through lock-order inversion.
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	unlock, err := s.lockFile()
 	if err != nil {
 		return Learning{}, false, err
 	}
 	defer unlock()
-
-	s.mu.Lock()
-	defer s.mu.Unlock()
 
 	doc, err := s.load()
 	if err != nil {

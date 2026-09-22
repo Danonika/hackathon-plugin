@@ -17,8 +17,8 @@ if ($LASTEXITCODE -ne 0) { Write-Error "[repair] sync-harness failed"; exit 1 }
 $global:LASTEXITCODE = 0
 & (Join-Path $root "scripts\gen-mcp-manifest.ps1") -Root $root
 if ($LASTEXITCODE -ne 0) { Write-Error "[repair] manifest generation failed"; exit 1 }
-& (Join-Path $root "scripts\verify-prompt.ps1") install
-if ($LASTEXITCODE -ne 0) { Write-Warning "[repair] could not install the Codex /verify prompt" }
+& (Join-Path $root "scripts\install-prompts.ps1") install
+if ($LASTEXITCODE -ne 0) { Write-Warning "[repair] could not install the Codex command prompts" }
 $dirFailures = 0
 foreach ($d in @("logs", "evals", "data\artifacts", "data\index", "data\control", "data\judge-bundles")) {
   try {

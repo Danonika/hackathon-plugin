@@ -242,19 +242,20 @@ func (d Deps) loadTable(ctx context.Context, args map[string]any) (*table, []str
 // after trimming (e.g. "id" and "id ") or are blank.
 func uniqueHeaderKeys(headers []string) []string {
 	keys := make([]string, len(headers))
-	seen := map[string]int{}
+	used := map[string]bool{}
 	for i, h := range headers {
 		base := strings.TrimSpace(h)
 		if base == "" {
 			base = fmt.Sprintf("column_%d", i)
 		}
-		if n, ok := seen[base]; ok {
-			seen[base] = n + 1
-			keys[i] = fmt.Sprintf("%s_%d", base, n+1)
-		} else {
-			seen[base] = 0
-			keys[i] = base
+		key := base
+		// Register every emitted key (including generated ones) and keep
+		// probing, so a generated suffix cannot collide with a literal header.
+		for n := 1; used[key]; n++ {
+			key = fmt.Sprintf("%s_%d", base, n)
 		}
+		used[key] = true
+		keys[i] = key
 	}
 	return keys
 }

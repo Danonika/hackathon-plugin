@@ -53,10 +53,14 @@ function safeBinary(root, name) {
     const bin = path.join(root, "bin", name);
     const st = fs.statSync(bin);
     if (!st.isFile()) return "";
-    if (st.mode & 0o022) return "";
-    if (typeof process.getuid === "function" && typeof st.uid === "number") {
-      const uid = process.getuid();
-      if (st.uid !== uid && st.uid !== 0) return "";
+    // POSIX-only hardening: on Windows ordinary files report mode 0o100666,
+    // which would reject every candidate.
+    if (process.platform !== "win32") {
+      if (st.mode & 0o022) return "";
+      if (typeof process.getuid === "function" && typeof st.uid === "number") {
+        const uid = process.getuid();
+        if (st.uid !== uid && st.uid !== 0) return "";
+      }
     }
     return bin;
   } catch (_) {
@@ -75,7 +79,9 @@ function safeCwd() {
 function findRepoUp(start) {
   let dir = start;
   for (let i = 0; i < 8; i += 1) {
-    if (looksLikeRepo(dir)) return dir;
+    // Require the hackathonkit marker, not just any repo, so session state is never
+    // written into an unrelated checkout.
+    if (isHackathonKitRepo(dir)) return dir;
     const parent = path.dirname(dir);
     if (parent === dir) break;
     dir = parent;
@@ -104,7 +110,7 @@ function repoRoot() {
     if (isHackathonKitRepo(pluginRoot)) candidates.push(pluginRoot);
   }
   for (const candidate of candidates) {
-    if (looksLikeRepo(candidate)) {
+    if (isHackathonKitRepo(candidate)) {
       ROOT_VALIDATED = true;
       return candidate;
     }
@@ -280,6 +286,7 @@ function readActive() {
 }
 
 function pruneExpiredSessions() {
+  if (!ROOT_VALID) return;
   try {
     for (const name of fs.readdirSync(SESSIONS_DIR)) {
       if (!name.endsWith(".json")) continue;
@@ -293,8 +300,7 @@ function pruneExpiredSessions() {
   } catch (_) {}
 }
 
-function lastActiveID() {
-  const active = readActive();
+function lastActiveID() {  const active = readActive();
   return active.length ? active[active.length - 1].id : "";
 }
 
@@ -350,71 +356,78 @@ function toolName(payload) {
   return "";
 }
 
-switch (EVENT) {
-  case "session-start": {
-    const payload = parsePayload(readStdin());
-    const id = payloadSessionID(payload) || newSessionID();
-    writeActive({ id, root: ROOT, started_at: new Date().toISOString() });
-    appendJSONL(SESSIONS_LOG, {
-      ts: new Date().toISOString(),
-      type: "session_start",
-      session_id: id,
-      root: ROOT,
-    });
-    let context = "";
-    try {
-      context = binaryContext().trim();
-    } catch (_) {}
-    if (!context) context = fallbackContext();
-    process.stdout.write(context + "\n");
-    break;
-  }
-  case "tool-use": {
-    const raw = readStdin();
-    const payload = parsePayload(raw);
-    let tool = toolName(payload);
-    if (!tool) {
-      tool = (raw.match(/"tool_name"\s*:\s*"([^"]+)"/) || [])[1] || "";
-    }
-    const id = payloadSessionID(payload) || lastActiveID();
-    appendJSONL(EVENTS_LOG, {
-      ts: new Date().toISOString(),
-      type: "tool_use",
-      session_id: id,
-      tool: tool || "unknown",
-    });
-    break;
-  }
-  case "stop": {
-    const payload = parsePayload(readStdin());
-    let id = payloadSessionID(payload);
-    if (!id) {
-      const active = readActive();
-      if (active.length === 1) {
-        id = active[0].id;
-      } else {
-        // With zero or several active sessions the payload is the only
-        // reliable source; do not remove a session we cannot identify, but
-        // prune files that already outlived their TTL.
-        pruneExpiredSessions();
-        process.stderr.write("hackathonkit hooks: stop without a session id; keeping active sessions\n");
-        break;
-      }
-    }
-    if (!ownedByRoot(id)) {
-      process.stderr.write("hackathonkit hooks: stop for unknown or foreign session id; ignoring\n");
+try {
+  switch (EVENT) {
+    case "session-start": {
+      const payload = parsePayload(readStdin());
+      const id = payloadSessionID(payload) || newSessionID();
+      writeActive({ id, root: ROOT, started_at: new Date().toISOString() });
+      appendJSONL(SESSIONS_LOG, {
+        ts: new Date().toISOString(),
+        type: "session_start",
+        session_id: id,
+        root: ROOT,
+      });
+      let context = "";
+      try {
+        context = binaryContext().trim();
+      } catch (_) {}
+      if (!context) context = fallbackContext();
+      process.stdout.write(context + "\n");
       break;
     }
-    appendJSONL(SESSIONS_LOG, {
-      ts: new Date().toISOString(),
-      type: "session_end",
-      session_id: id,
-    });
-    removeActive(id);
-    break;
+    case "tool-use": {
+      const raw = readStdin();
+      const payload = parsePayload(raw);
+      let tool = toolName(payload);
+      if (!tool) {
+        tool = (raw.match(/"tool_name"\s*:\s*"([^"]+)"/) || [])[1] || "";
+      }
+      const id = payloadSessionID(payload) || lastActiveID();
+      appendJSONL(EVENTS_LOG, {
+        ts: new Date().toISOString(),
+        type: "tool_use",
+        session_id: id,
+        tool: tool || "unknown",
+      });
+      break;
+    }
+    case "stop": {
+      const payload = parsePayload(readStdin());
+      let id = payloadSessionID(payload);
+      if (!id) {
+        const active = readActive();
+        if (active.length === 1) {
+          id = active[0].id;
+        } else {
+          // With zero or several active sessions the payload is the only
+          // reliable source; do not remove a session we cannot identify, but
+          // prune files that already outlived their TTL.
+          pruneExpiredSessions();
+          process.stderr.write("hackathonkit hooks: stop without a session id; keeping active sessions\n");
+          break;
+        }
+      }
+      if (!ownedByRoot(id)) {
+        process.stderr.write("hackathonkit hooks: stop for unknown or foreign session id; ignoring\n");
+        break;
+      }
+      appendJSONL(SESSIONS_LOG, {
+        ts: new Date().toISOString(),
+        type: "session_end",
+        session_id: id,
+      });
+      removeActive(id);
+      break;
+    }
+    default:
+      process.stderr.write("hackathonkit hooks: unknown event " + EVENT + "\n");
   }
-  default:
-    process.stderr.write("hackathonkit hooks: unknown event " + EVENT + "\n");
+} catch (err) {
+  // A hook must never fail the harness session: report and exit 0.
+  try {
+    process.stderr.write("hackathonkit hooks: " + (err && err.message ? err.message : String(err)) + "\n");
+  } catch (_) {}
 }
 
 // Natural exit lets stdout flush; process.exit() can truncate piped output.

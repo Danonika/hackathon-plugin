@@ -138,10 +138,10 @@ else
   check "verify command" 0 "missing plugins/hackathonkit/commands/verify.md; run scripts/repair.sh"
 fi
 
-if sh "$ROOT/scripts/verify-prompt.sh" status >/dev/null 2>&1; then
-  check "verify prompt (codex)" 1 "installed in $HOME/.codex/prompts"
+if sh "$ROOT/scripts/install-prompts.sh" status >/dev/null 2>&1; then
+  check "command prompts (codex)" 1 "installed in $HOME/.codex/prompts"
 else
-  check "verify prompt (codex)" 0 "not installed; run scripts/verify-prompt.sh install"
+  check "command prompts (codex)" 0 "not installed; run scripts/install-prompts.sh install"
 fi
 
 AGENT_COUNT=0
