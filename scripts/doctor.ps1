@@ -1,4 +1,18 @@
 $ErrorActionPreference = "Continue"
+
+# A bounded TCP connect is far faster than Test-NetConnection's ICMP+TCP probe.
+function Test-TcpPort([string]$HostName, [int]$Port) {
+  try {
+    $client = New-Object System.Net.Sockets.TcpClient
+    $async = $client.BeginConnect($HostName, $Port, $null, $null)
+    if (-not $async.AsyncWaitHandle.WaitOne(1000)) { $client.Close(); return $false }
+    $client.EndConnect($async)
+    $client.Close()
+    return $true
+  } catch {
+    return $false
+  }
+}
 $root = Split-Path -Parent (Split-Path -Parent $PSCommandPath)
 $script:fail = 0
 
@@ -135,9 +149,9 @@ if ($codex) {
 }
 
 if ($engine) {
-  $pg = Test-NetConnection 127.0.0.1 -Port 5432 -InformationLevel Quiet -WarningAction SilentlyContinue
+  $pg = Test-TcpPort "127.0.0.1" 5432
   Write-Host ("[info] {0,-22} {1}" -f "postgres", $(if ($pg) { "localhost:5432 (optional metadata backend)" } else { "not running (optional metadata backend)" }))
-  $minio = Test-NetConnection 127.0.0.1 -Port 9000 -InformationLevel Quiet -WarningAction SilentlyContinue
+  $minio = Test-TcpPort "127.0.0.1" 9000
   Write-Host ("[info] {0,-22} {1}" -f "minio", $(if ($minio) { "localhost:9000 (optional artifact backend)" } else { "not running (optional artifact backend)" }))
 }
 

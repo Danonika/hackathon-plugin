@@ -113,7 +113,9 @@ if [ -d "$ROOT/.agents/skills" ]; then
   DST_COUNT=$(find "$ROOT/.agents/skills" -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')
   DST_SKILLS=$(find "$ROOT/.agents/skills" -name SKILL.md | wc -l | tr -d ' ')
 fi
-if [ "$SRC_COUNT" -gt 0 ] && [ "$SRC_COUNT" = "$DST_COUNT" ] && [ "$SRC_SKILLS" = "$DST_SKILLS" ]; then
+SRC_NAMES=$(cd "$ROOT/plugins/hackathonkit/skills" 2>/dev/null && ls -1d */ 2>/dev/null | sed 's#/##' | sort)
+DST_NAMES=$(cd "$ROOT/.agents/skills" 2>/dev/null && ls -1d */ 2>/dev/null | sed 's#/##' | sort)
+if [ "$SRC_COUNT" -gt 0 ] && [ "$SRC_NAMES" = "$DST_NAMES" ] && [ "$SRC_SKILLS" = "$DST_SKILLS" ]; then
   check "skills mirror" 1 "plugin=$SRC_COUNT/$SRC_SKILLS fallback=$DST_COUNT/$DST_SKILLS"
 else
   check "skills mirror" 0 "plugin=$SRC_COUNT/$SRC_SKILLS fallback=$DST_COUNT/$DST_SKILLS; run scripts/sync-harness.sh"
@@ -146,7 +148,7 @@ else
 fi
 
 if [ -f "$ROOT/configs/install-state.json" ]; then
-  check "install state" 1 "version $(sed -n 's/.*"version": *"\([^"]*\)".*/\1/p' "$ROOT/configs/install-state.json" | head -n 1)"
+  check "install state" 1 "version $(sed -n 's/^[[:space:]]*"version": *"\([^"]*\)".*/\1/p' "$ROOT/configs/install-state.json" | head -n 1)"
 else
   check "install state" 0 "missing configs/install-state.json; run scripts/setup.sh"
 fi

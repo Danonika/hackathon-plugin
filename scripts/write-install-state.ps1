@@ -4,6 +4,15 @@ param(
   [string]$Runtime = "unknown"
 )
 
+if ($Profile -notin @("core", "full")) {
+  Write-Error "[install-state] invalid profile: $Profile (expected core or full)"
+  exit 1
+}
+if ($Runtime -notin @("binary", "docker", "unknown")) {
+  Write-Error "[install-state] invalid runtime: $Runtime (expected binary, docker or unknown)"
+  exit 1
+}
+
 $pluginJson = Join-Path $Root "plugins\hackathonkit\.codex-plugin\plugin.json"
 $Version = "unknown"
 if (Test-Path $pluginJson) {
@@ -14,7 +23,14 @@ if (Test-Path $pluginJson) {
 $Skills = 0
 $mirror = Join-Path $Root ".agents\skills"
 if (Test-Path $mirror) {
-  $Skills = (Get-ChildItem -Directory $mirror | Measure-Object).Count
+  $srcSkills = Join-Path $Root "plugins\hackathonkit\skills"
+  $srcNames = @(Get-ChildItem -LiteralPath $srcSkills -Directory -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Name | Sort-Object)
+  $dstNames = @(Get-ChildItem -LiteralPath $mirror -Directory -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Name | Sort-Object)
+  $missing = @($srcNames | Where-Object { $_ -notin $dstNames })
+  if ($missing.Count -gt 0) {
+    Write-Warning "[install-state] mirror is missing $($missing.Count) skill(s): $($missing -join ', ')"
+  }
+  $Skills = $dstNames.Count
 }
 
 $state = [ordered]@{

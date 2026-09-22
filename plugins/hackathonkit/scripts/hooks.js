@@ -239,6 +239,22 @@ function readActive() {
   }
 }
 
+function pruneExpiredSessions() {
+  const now = Date.now();
+  try {
+    for (const name of fs.readdirSync(SESSIONS_DIR)) {
+      if (!name.endsWith(".json")) continue;
+      const full = path.join(SESSIONS_DIR, name);
+      try {
+        const stat = fs.statSync(full);
+        if (now - stat.mtimeMs > SESSION_TTL_MS) {
+          fs.unlinkSync(full);
+        }
+      } catch (_) {}
+    }
+  } catch (_) {}
+}
+
 function lastActiveID() {
   const active = readActive();
   return active.length ? active[active.length - 1].id : "";
@@ -339,7 +355,9 @@ switch (EVENT) {
         id = active[0].id;
       } else {
         // With zero or several active sessions the payload is the only
-        // reliable source; do not remove a session we cannot identify.
+        // reliable source; do not remove a session we cannot identify, but
+        // prune files that already outlived their TTL.
+        pruneExpiredSessions();
         process.stderr.write("hackathonkit hooks: stop without a session id; keeping active sessions\n");
         break;
       }

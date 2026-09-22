@@ -72,10 +72,11 @@ fi
 
 sh "$ROOT/scripts/sync-harness.sh"
 
+EXPLICIT_ONLY_SKILLS="judge project-cost roast-project cp-expert-refactoring system-design-expert self-improvement-controller output-self-check skill-authoring qa-expert"
 if [ "$PROFILE" = "core" ]; then
   for dir in "$ROOT/.agents/skills" "$ROOT/.claude/skills"; do
     [ -d "$dir" ] || continue
-    for skill in judge project-cost roast-project cp-expert-refactoring system-design-expert self-improvement-controller output-self-check skill-authoring qa-expert; do
+    for skill in $EXPLICIT_ONLY_SKILLS; do
       rm -rf "$dir/$skill"
     done
   done
