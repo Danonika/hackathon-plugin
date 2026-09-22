@@ -85,16 +85,19 @@ func BuildHandoff(ctx context.Context, store *Store, learn *learning.Store, root
 // RenderHandoff formats a handoff as a paste-ready markdown block.
 func RenderHandoff(h Handoff) string {
 	var b strings.Builder
+	line := func(value string) string {
+		return strings.Join(strings.Fields(value), " ")
+	}
 	b.WriteString("## Session handoff\n")
-	fmt.Fprintf(&b, "- session: %s (%s, risk %.2f)\n", h.Session.ID, h.Session.Status, h.Session.RiskScore)
+	fmt.Fprintf(&b, "- session: %s (%s, risk %.2f)\n", line(h.Session.ID), line(h.Session.Status), h.Session.RiskScore)
 	if h.Session.Task != "" {
-		fmt.Fprintf(&b, "- task: %s\n", h.Session.Task)
+		fmt.Fprintf(&b, "- task: %s\n", line(h.Session.Task))
 	}
 	if h.Session.Worktree != "" {
-		fmt.Fprintf(&b, "- worktree: %s\n", h.Session.Worktree)
+		fmt.Fprintf(&b, "- worktree: %s\n", line(h.Session.Worktree))
 	}
 	if len(h.Session.RiskReasons) > 0 {
-		fmt.Fprintf(&b, "- risk reasons: %s\n", strings.Join(h.Session.RiskReasons, "; "))
+		fmt.Fprintf(&b, "- risk reasons: %s\n", line(strings.Join(h.Session.RiskReasons, "; ")))
 	}
 	if h.Plan != nil {
 		fmt.Fprintf(&b, "- plan: %s\n", plans.Summary(*h.Plan))
@@ -118,7 +121,7 @@ func RenderHandoff(h Handoff) string {
 	if len(h.Learnings) > 0 {
 		b.WriteString("- learnings to reuse:\n")
 		for _, item := range h.Learnings {
-			fmt.Fprintf(&b, "  - [%.2f] when %s -> %s\n", item.Confidence, item.Trigger, item.Insight)
+			fmt.Fprintf(&b, "  - [%.2f] when %s -> %s\n", item.Confidence, line(item.Trigger), line(item.Insight))
 		}
 	}
 	if h.PendingDecisions > 0 {

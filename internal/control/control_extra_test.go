@@ -225,15 +225,15 @@ func TestIngestJSONLEdgeCases(t *testing.T) {
 		return nil
 	}
 
-	if n, _, err := store.ingestJSONL(ctx, "missing", filepath.Join(dir, "nope.jsonl"), handler); err != nil || n != 0 {
+	if n, _, _, err := store.ingestJSONL(ctx, "missing", filepath.Join(dir, "nope.jsonl"), handler); err != nil || n != 0 {
 		t.Fatalf("missing file = %d %v", n, err)
 	}
-	if _, _, err := store.ingestJSONL(ctx, "dir", dir, handler); err == nil {
+	if _, _, _, err := store.ingestJSONL(ctx, "dir", dir, handler); err == nil {
 		t.Fatal("expected read error for a directory")
 	}
 
 	write(t, path, "\n  \n"+`{"a":1}`+"\n"+`{"b":2`)
-	n, _, err := store.ingestJSONL(ctx, "stream", path, handler)
+	n, _, _, err := store.ingestJSONL(ctx, "stream", path, handler)
 	if err != nil || n != 1 || count != 1 {
 		t.Fatalf("first pass = %d err=%v count=%d", n, err, count)
 	}
@@ -250,14 +250,14 @@ func TestIngestJSONLEdgeCases(t *testing.T) {
 		t.Fatal(err)
 	}
 	f.Close()
-	n, _, err = store.ingestJSONL(ctx, "stream", path, handler)
+	n, _, _, err = store.ingestJSONL(ctx, "stream", path, handler)
 	if err != nil || n != 1 || count != 2 {
 		t.Fatalf("second pass = %d err=%v count=%d", n, err, count)
 	}
 
 	bad := filepath.Join(dir, "bad.jsonl")
 	write(t, bad, "not json\n")
-	if n, _, err := store.ingestJSONL(ctx, "bad", bad, handler); err != nil || n != 0 {
+	if n, _, _, err := store.ingestJSONL(ctx, "bad", bad, handler); err != nil || n != 0 {
 		t.Fatalf("malformed line = %d %v", n, err)
 	}
 
@@ -265,7 +265,7 @@ func TestIngestJSONLEdgeCases(t *testing.T) {
 	if err := store.SetCursor(ctx, "stream", 5000); err != nil {
 		t.Fatal(err)
 	}
-	n, rotated, err := store.ingestJSONL(ctx, "stream", path, handler)
+	n, _, rotated, err := store.ingestJSONL(ctx, "stream", path, handler)
 	if err != nil || n != 1 || !rotated {
 		t.Fatalf("oversized cursor = %d rotated=%v err=%v", n, rotated, err)
 	}
@@ -276,7 +276,7 @@ func TestIngestDecisionsCursors(t *testing.T) {
 	store := testStore(t)
 	ctx := context.Background()
 
-	if n, err := store.ingestDecisions(ctx, root); err != nil || n != 0 {
+	if n, _, err := store.ingestDecisions(ctx, root); err != nil || n != 0 {
 		t.Fatalf("missing dir = %d %v", n, err)
 	}
 
@@ -285,10 +285,10 @@ func TestIngestDecisionsCursors(t *testing.T) {
 	write(t, filepath.Join(root, "evals", "decisions", "run-1", "partial.json"), `{"decision":`)
 	write(t, filepath.Join(root, "evals", "decisions", "notes.txt"), "ignored")
 
-	if n, err := store.ingestDecisions(ctx, root); err != nil || n != 1 {
+	if n, _, err := store.ingestDecisions(ctx, root); err != nil || n != 1 {
 		t.Fatalf("first pass = %d %v", n, err)
 	}
-	if n, err := store.ingestDecisions(ctx, root); err != nil || n != 0 {
+	if n, _, err := store.ingestDecisions(ctx, root); err != nil || n != 0 {
 		t.Fatalf("second pass = %d %v", n, err)
 	}
 
@@ -300,15 +300,15 @@ func TestIngestDecisionsCursors(t *testing.T) {
 		t.Fatal(err)
 	}
 	f.Close()
-	if n, err := store.ingestDecisions(ctx, root); err != nil || n != 1 {
+	if n, _, err := store.ingestDecisions(ctx, root); err != nil || n != 1 {
 		t.Fatalf("appended pass = %d %v", n, err)
 	}
 
 	if err := store.SetCursor(ctx, "decision:evals/decisions/run-1/technical.json", 9999); err != nil {
 		t.Fatal(err)
 	}
-	if n, err := store.ingestDecisions(ctx, root); err != nil || n != 1 {
-		t.Fatalf("oversized cursor pass = %d %v", n, err)
+	if n, _, err := store.ingestDecisions(ctx, root); err != nil || n != 0 {
+		t.Fatalf("identical rewrite must be deduped = %d %v", n, err)
 	}
 }
 
@@ -351,8 +351,8 @@ func TestRecomputeRiskStableAndEnded(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if sess.RiskScore <= 0 {
-		t.Fatalf("global event after endedAt must be attributed: %+v", sess)
+	if sess.RiskScore != 0 {
+		t.Fatalf("global event after endedAt must not be attributed: %+v", sess)
 	}
 }
 
@@ -506,7 +506,7 @@ func TestIngestCursorAdvancesOnHandlerError(t *testing.T) {
 		seen = append(seen, n)
 		return nil
 	}
-	if _, _, err := store.ingestJSONL(ctx, "stream", path, handler); err == nil {
+	if _, _, _, err := store.ingestJSONL(ctx, "stream", path, handler); err == nil {
 		t.Fatal("expected the handler error to propagate")
 	}
 	offset, err := store.Cursor(ctx, "stream")
@@ -523,7 +523,7 @@ func TestIngestCursorAdvancesOnHandlerError(t *testing.T) {
 		seen = append(seen, int(rec["n"].(float64)))
 		return nil
 	}
-	if _, _, err := store.ingestJSONL(ctx, "stream", path, retry); err != nil {
+	if _, _, _, err := store.ingestJSONL(ctx, "stream", path, retry); err != nil {
 		t.Fatal(err)
 	}
 	if len(seen) != 1 || seen[0] != 3 {

@@ -216,7 +216,7 @@ func TestCmdIngestJSON(t *testing.T) {
 	if err := json.Unmarshal(out.Bytes(), &result); err != nil {
 		t.Fatalf("ingest JSON = %q: %v", out.String(), err)
 	}
-	if result.Sessions != 2 || result.Events != 5 || result.Files != 5 {
+	if result.Sessions != 2 || result.Events != 6 || result.Files != 5 {
 		t.Fatalf("ingest result = %+v", result)
 	}
 	store, err := control.Open(control.DefaultPath(root))

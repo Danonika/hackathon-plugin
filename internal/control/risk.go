@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"math"
 	"regexp"
 	"strings"
@@ -86,30 +87,31 @@ func payloadHasPanic(payload map[string]any) bool {
 
 // RecomputeRisk refreshes risk for every session, attributing global MCP call
 // events to sessions by their time window.
+// riskScanLimit caps how many rows a single risk pass loads.
+const riskScanLimit = 200000
+
 func (s *Store) RecomputeRisk(ctx context.Context) (int, error) {
-	sessions, err := s.Sessions(ctx, 10000)
+	sessions, err := s.Sessions(ctx, riskScanLimit)
 	if err != nil {
 		return 0, err
+	}
+	if len(sessions) == riskScanLimit {
+		log.Printf("control: risk scan truncated at %d sessions; older sessions were not rescored", riskScanLimit)
 	}
 	now := time.Now().UTC()
-	latest, err := s.latestGlobalTS(ctx)
-	if err != nil {
-		return 0, err
-	}
 	updated := 0
 	for _, sess := range sessions {
-		events, err := s.Events(ctx, sess.ID, 10000)
+		events, err := s.Events(ctx, sess.ID, riskScanLimit)
 		if err != nil {
 			return updated, err
 		}
+		// A session's window ends at its own end (or now); global events after
+		// that must not be attributed to it.
 		end := now
 		if sess.EndedAt != nil && sess.EndedAt.Before(end) {
 			end = *sess.EndedAt
 		}
-		if latest.After(end) {
-			end = latest
-		}
-		globals, err := s.EventsBetween(ctx, sess.CreatedAt, end, 10000)
+		globals, err := s.EventsBetween(ctx, sess.CreatedAt, end, riskScanLimit)
 		if err != nil {
 			return updated, err
 		}

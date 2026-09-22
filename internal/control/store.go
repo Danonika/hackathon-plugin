@@ -163,7 +163,9 @@ func parseTime(value string) time.Time {
 	if value == "" {
 		return time.Time{}
 	}
-	for _, layout := range []string{time.RFC3339Nano, time.RFC3339, timeLayout, "2006-01-02T15:04:05.000Z"} {
+	// Prefer the fixed-width layout written by formatTime so stored values sort
+	// consistently; the others are read-compat fallbacks for older records.
+	for _, layout := range []string{timeLayout, time.RFC3339Nano, time.RFC3339, "2006-01-02T15:04:05.000Z"} {
 		if t, err := time.Parse(layout, value); err == nil {
 			return t.UTC()
 		}
@@ -404,7 +406,11 @@ func (s *Store) Counts(ctx context.Context) (sessions int, events int, err error
 // in-place rewrites of immutable-looking files.
 func (s *Store) CursorUpdatedAt(ctx context.Context, name string) (time.Time, error) {
 	var value string
-	if err := s.db.QueryRowContext(ctx, `SELECT COALESCE(updated_at,'') FROM cursors WHERE name=?`, name).Scan(&value); err != nil {
+	err := s.db.QueryRowContext(ctx, `SELECT COALESCE(updated_at,'') FROM cursors WHERE name=?`, name).Scan(&value)
+	if err == sql.ErrNoRows {
+		return time.Time{}, nil
+	}
+	if err != nil {
 		return time.Time{}, err
 	}
 	return parseTime(value), nil

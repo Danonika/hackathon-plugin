@@ -103,8 +103,8 @@ func TestIngestIsIdempotent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if first.Events != 4 {
-		t.Fatalf("first ingest events = %d, want 4", first.Events)
+	if first.Events != 5 {
+		t.Fatalf("first ingest events = %d, want 5 (4 jsonl + 1 decision)", first.Events)
 	}
 	if first.Sessions != 1 {
 		t.Fatalf("sessions = %d, want 1", first.Sessions)
