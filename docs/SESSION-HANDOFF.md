@@ -5,7 +5,7 @@ Durable state for resuming after `/compact` or in a new session. Read this and
 
 ## Where we are
 
-- Latest release: **v0.16.19**, pushed. Previous: v0.13.0–v0.16.18.
+- Latest release: **v0.16.28**, pushed. Previous: v0.13.0–v0.16.27.
 - Scan 2 register: **408/416 fixed** (8 lows annotated reviewed-intentional).
 - Scan 3 (final verification, 421 findings): all 5 criticals + 29 highs fixed
   (v0.16.14); 134 mediums fixed (v0.16.15–v0.16.19). **Current backlog:
