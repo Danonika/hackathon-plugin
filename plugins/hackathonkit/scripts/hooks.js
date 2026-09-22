@@ -45,13 +45,19 @@ function isHackathonKitRepo(dir) {
   }
 }
 
-// Never execute a binary that another user could replace.
+// Never execute a binary that another user could replace. Reject any
+// group/world-writable mode and, on POSIX, require ownership by the current
+// user or root.
 function safeBinary(root, name) {
   try {
     const bin = path.join(root, "bin", name);
     const st = fs.statSync(bin);
     if (!st.isFile()) return "";
-    if (st.mode & 0o002) return "";
+    if (st.mode & 0o022) return "";
+    if (typeof process.getuid === "function" && typeof st.uid === "number") {
+      const uid = process.getuid();
+      if (st.uid !== uid && st.uid !== 0) return "";
+    }
     return bin;
   } catch (_) {
     return "";
@@ -207,8 +213,19 @@ function writeActive(entry) {
   if (!ROOT_VALID) return;
   try {
     fs.mkdirSync(SESSIONS_DIR, { recursive: true });
-    fs.writeFileSync(sessionFile(entry.id), JSON.stringify(entry) + "\n");
+    const now = new Date().toISOString();
+    fs.writeFileSync(sessionFile(entry.id), JSON.stringify({ ...entry, updated_at: now }) + "\n");
   } catch (_) {}
+}
+
+function ownedByRoot(id) {
+  if (!id || !ROOT_VALID) return false;
+  try {
+    const entry = JSON.parse(fs.readFileSync(sessionFile(id), "utf8"));
+    return Boolean(entry && entry.root === ROOT);
+  } catch (_) {
+    return false;
+  }
 }
 
 function removeActive(id) {
@@ -230,8 +247,9 @@ function readActive() {
         if (!entry || typeof entry.id !== "string" || !entry.id) continue;
         const stat = fs.statSync(full);
         const started = Date.parse(entry.started_at || "") || stat.mtimeMs;
-        const lastActivity = Math.max(Date.parse(entry.updated_at || "") || 0, stat.mtimeMs);
-        if (now - lastActivity > SESSION_TTL_MS) {
+        // Sessions are ordered/expired by their file mtime (creation time):
+        // the tool-use path does not currently refresh it.
+        if (now - stat.mtimeMs > SESSION_TTL_MS) {
           // A session that never emitted stop (crash, timeout) must not keep
           // stealing events; expire it.
           try {
@@ -242,7 +260,7 @@ function readActive() {
         entries.push({ entry, mtime: stat.mtimeMs });
       } catch (_) {}
     }
-    // Latest activity first: the most recently touched session wins.
+    // Oldest first; lastActiveID takes the tail (most recently started).
     entries.sort((a, b) => a.mtime - b.mtime);
     return entries.map((item) => item.entry);
   } catch (_) {
@@ -373,6 +391,10 @@ switch (EVENT) {
         process.stderr.write("hackathonkit hooks: stop without a session id; keeping active sessions\n");
         break;
       }
+    }
+    if (!ownedByRoot(id)) {
+      process.stderr.write("hackathonkit hooks: stop for unknown or foreign session id; ignoring\n");
+      break;
     }
     appendJSONL(SESSIONS_LOG, {
       ts: new Date().toISOString(),

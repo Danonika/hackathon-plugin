@@ -157,17 +157,14 @@ func TestParseChartPointsDefaults(t *testing.T) {
 		map[string]any{"y": "bad"},
 		"not-a-map",
 	})
-	if len(points) != 4 {
-		t.Fatalf("points = %+v", points)
+	if len(points) != 3 {
+		t.Fatalf("points with no usable Y must be dropped: %+v", points)
 	}
 	if points[0].X != "a" || points[1].X != "3" || points[2].X != "2026-01-01" {
 		t.Fatalf("x parsing = %+v", points)
 	}
 	if points[0].Y != 1 || points[1].Y != 2 || points[2].Y != 4 {
 		t.Fatalf("y parsing = %+v", points)
-	}
-	if points[3].X != "" || points[3].Y != 0 {
-		t.Fatalf("default point = %+v", points[3])
 	}
 	if got := parseChartPoints("nope"); got != nil {
 		t.Fatalf("non-array points = %+v", got)

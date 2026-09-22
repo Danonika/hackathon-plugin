@@ -161,7 +161,7 @@ func workbookSheets(zr *zip.ReadCloser) ([]xlsxSheetRef, []string) {
 	rels := map[string]string{}
 	if f := zipFind(zr, "xl/_rels/workbook.xml.rels"); f != nil {
 		if rc, err := f.Open(); err == nil {
-			dec := xml.NewDecoder(rc)
+			dec := xml.NewDecoder(&maxBytesReader{r: rc, remaining: maxXLSXPartBytes})
 			for {
 				tok, err := dec.Token()
 				if err == io.EOF || err != nil {
@@ -193,7 +193,7 @@ func workbookSheets(zr *zip.ReadCloser) ([]xlsxSheetRef, []string) {
 	refs := []xlsxSheetRef{}
 	if f := zipFind(zr, "xl/workbook.xml"); f != nil {
 		if rc, err := f.Open(); err == nil {
-			dec := xml.NewDecoder(rc)
+			dec := xml.NewDecoder(&maxBytesReader{r: rc, remaining: maxXLSXPartBytes})
 			for {
 				tok, err := dec.Token()
 				if err == io.EOF || err != nil {
@@ -325,6 +325,7 @@ func readSheetRows(f *zip.File, shared []string, styles xlsxStyles) ([][]string,
 			case "c":
 				curRef, curType = "", ""
 				curStyle = -1
+				inV, inT = false, false
 				for _, a := range t.Attr {
 					switch a.Name.Local {
 					case "r":
@@ -448,6 +449,7 @@ const (
 	maxXLSXSharedStrings = 1000000
 	maxXLSXSheetBytes    = 256 << 20
 	maxXLSXCells         = 5000000
+	maxXLSXPartBytes     = 64 << 20
 )
 
 type xlsxStyles struct {
@@ -471,7 +473,7 @@ func readXLSXStyles(zr *zip.ReadCloser) xlsxStyles {
 	}
 	if f := zipFind(zr, "xl/workbook.xml"); f != nil {
 		if rc, err := f.Open(); err == nil {
-			dec := xml.NewDecoder(rc)
+			dec := xml.NewDecoder(&maxBytesReader{r: rc, remaining: maxXLSXPartBytes})
 			for {
 				tok, err := dec.Token()
 				if err == io.EOF || err != nil {
@@ -499,7 +501,7 @@ func readXLSXStyles(zr *zip.ReadCloser) xlsxStyles {
 		return out
 	}
 	defer rc.Close()
-	dec := xml.NewDecoder(rc)
+	dec := xml.NewDecoder(&maxBytesReader{r: rc, remaining: maxXLSXPartBytes})
 	customFmt := map[int]fmtKind{}
 	styleFormats := []int{}
 	inCellXfs := false

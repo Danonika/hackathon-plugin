@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"encoding/xml"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -15,6 +16,21 @@ import (
 	"hackathonkit.local/agentkit/internal/mcp"
 	"github.com/ledongthuc/pdf"
 )
+
+// errDocxTruncated reports that word/document.xml hit the size cap; callers
+// keep the partial text and surface a warning.
+var errDocxTruncated = errors.New("docx: word/document.xml exceeds the size limit")
+
+type countingReader struct {
+	r io.Reader
+	n int64
+}
+
+func (c *countingReader) Read(p []byte) (int, error) {
+	n, err := c.r.Read(p)
+	c.n += int64(n)
+	return n, err
+}
 
 const maxExtractedChars = 10_000_000
 const maxRawTextBytes = 20 << 20
@@ -60,6 +76,9 @@ func extractText(path string) (string, []string, error) {
 	switch ext {
 	case "docx":
 		text, err := docxText(path)
+		if errors.Is(err, errDocxTruncated) {
+			return text, []string{"docx: word/document.xml exceeded the size limit; text was truncated"}, nil
+		}
 		return text, nil, err
 	case "xlsx":
 		sheets, warnings, err := readXLSXSheets(path)
@@ -157,7 +176,8 @@ func docxText(path string) (string, error) {
 		return "", err
 	}
 	defer rc.Close()
-	limited := io.LimitReader(rc, maxDocxXMLBytes+1)
+	counter := &countingReader{r: rc}
+	limited := io.LimitReader(counter, maxDocxXMLBytes+1)
 	dec := xml.NewDecoder(limited)
 	var b strings.Builder
 	for {
@@ -183,6 +203,9 @@ func docxText(path string) (string, error) {
 				b.WriteString("\n")
 			}
 		}
+	}
+	if counter.n > maxDocxXMLBytes {
+		return strings.TrimSpace(b.String()), errDocxTruncated
 	}
 	return strings.TrimSpace(b.String()), nil
 }
@@ -321,6 +344,9 @@ func registerDocuments(reg *mcp.Registry, d Deps) {
 			}
 			if maxChars <= 0 {
 				maxChars = 60000
+			}
+			if maxChars > 10_000_000 {
+				maxChars = 10_000_000
 			}
 			offset := argInt(args, "offset", 0)
 			if offset < 0 {

@@ -174,7 +174,7 @@ func TestMemorySizeTracksExamples(t *testing.T) {
 	if r.MemorySize() != 0 {
 		t.Fatalf("empty memory size = %d, want 0", r.MemorySize())
 	}
-	if _, err := r.AddFeedback(ctx, FeedbackEvent{
+	if _, _, err := r.AddFeedback(ctx, FeedbackEvent{
 		Task:   "extract text from a pdf contract",
 		Chosen: []string{"documents.extract"},
 		Source: "accepted",
@@ -199,7 +199,7 @@ func TestAddFeedbackSaveError(t *testing.T) {
 		t.Fatal(err)
 	}
 	r := NewRouter(config.RoutingSettings{}).WithMemory(filepath.Join(blocker, "mem.json"))
-	size, err := r.AddFeedback(context.Background(), FeedbackEvent{
+	size, _, err := r.AddFeedback(context.Background(), FeedbackEvent{
 		Task:   "analyze the csv table",
 		Chosen: []string{"data.inspect"},
 		Source: "accepted",

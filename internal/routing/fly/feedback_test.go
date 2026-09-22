@@ -16,7 +16,7 @@ func TestFeedbackMemoryLearnsCorrection(t *testing.T) {
 		WithMemory(filepath.Join(dir, "fly-memory.json"))
 	ctx := context.Background()
 
-	size, err := router.AddFeedback(ctx, FeedbackEvent{
+	size, _, err := router.AddFeedback(ctx, FeedbackEvent{
 		Task:   "сделай разбор вложения номер семь",
 		Chosen: []string{"timeseries.detect_anomalies", "charts.create"},
 		Source: "normal-teacher",
@@ -34,7 +34,7 @@ func TestFeedbackMemoryLearnsCorrection(t *testing.T) {
 		t.Fatalf("expected timeseries route learned from feedback, got %q (%v)", res.Route, res.CategoryScores)
 	}
 
-	dedup, err := router.AddFeedback(ctx, FeedbackEvent{
+	dedup, _, err := router.AddFeedback(ctx, FeedbackEvent{
 		Task:   "сделай разбор вложения номер семь",
 		Chosen: []string{"data.inspect"},
 		Source: "codex-correction",

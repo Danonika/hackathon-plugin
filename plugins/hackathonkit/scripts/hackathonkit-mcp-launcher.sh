@@ -9,7 +9,7 @@ SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$SELF")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 
 if [ -f "$REPO_ROOT/bin/hackathonkit-mcp" ] && [ -x "$REPO_ROOT/bin/hackathonkit-mcp" ]; then
-  exec "$REPO_ROOT/bin/hackathonkit-mcp" --repo-root "$REPO_ROOT"
+  exec "$REPO_ROOT/bin/hackathonkit-mcp" --repo-root "$REPO_ROOT" "$@"
 fi
 
 if [ ! -f "$REPO_ROOT/docker-compose.yml" ]; then
@@ -28,7 +28,11 @@ if ! docker compose version >/dev/null 2>&1; then
 fi
 
 cd "$REPO_ROOT"
-if ! docker compose -f "$REPO_ROOT/docker-compose.yml" run --rm -T hackathonkit-mcp; then
-  echo "Hackathon Agent Kit launcher: docker compose run failed (check the daemon and required .env values)" >&2
-  exit 1
+set +e
+docker compose -f "$REPO_ROOT/docker-compose.yml" run --rm -T hackathonkit-mcp "$@"
+status=$?
+set -e
+if [ "$status" -ne 0 ]; then
+  echo "Hackathon Agent Kit launcher: docker compose run failed with status $status (check the daemon and required .env values)" >&2
 fi
+exit "$status"

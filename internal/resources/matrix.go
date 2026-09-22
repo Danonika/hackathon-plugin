@@ -113,8 +113,18 @@ func Plan(matrix Matrix, statuses []Status, trackRef string) (TrackPlan, []Decis
 			}
 		}
 		if chosenIndex < 0 {
-			decision.Chosen = variants[len(variants)-1]
-			chosenIndex = len(variants) - 1
+			fallbackIndex := -1
+			for i := len(variants) - 1; i >= 0; i-- {
+				if variants[i].Provider == "" {
+					fallbackIndex = i
+					break
+				}
+			}
+			if fallbackIndex < 0 {
+				fallbackIndex = len(variants) - 1
+			}
+			decision.Chosen = variants[fallbackIndex]
+			chosenIndex = fallbackIndex
 			decision.Degraded = true
 			if decision.Chosen.Provider != "" {
 				// No variant is ready and the fallback itself is provider-backed:

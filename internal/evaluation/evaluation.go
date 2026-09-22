@@ -427,7 +427,7 @@ func Calibrate(run1, run2 Aggregate, minDelta float64, minValid int) (Calibratio
 	if minDelta < 0 || math.IsNaN(minDelta) {
 		return Calibration{}, fmt.Errorf("min_delta must be >= 0, got %v", minDelta)
 	}
-	if run1.SnapshotSHA != "" && run2.SnapshotSHA != "" && run1.SnapshotSHA != run2.SnapshotSHA {
+	if run1.SnapshotSHA != run2.SnapshotSHA {
 		return Calibration{}, fmt.Errorf("calibration runs must score the same snapshot (%q vs %q)", run1.SnapshotSHA, run2.SnapshotSHA)
 	}
 	delta := math.Abs(run1.MeanTotal - run2.MeanTotal)
@@ -468,6 +468,7 @@ type CompareInput struct {
 	Candidate               float64
 	Best                    float64
 	Target                  float64
+	TargetSet               bool
 	NoiseFloor              float64
 	MandatoryScenarioFailed bool
 }
@@ -482,6 +483,7 @@ type Comparison struct {
 	NoiseFloor      float64  `json:"noise_floor"`
 	Improvement     float64  `json:"improvement"`
 	MandatoryFailed bool     `json:"mandatory_scenario_failed"`
+	InputError      string   `json:"input_error,omitempty"`
 }
 
 const epsilon = 1e-9
@@ -499,6 +501,10 @@ func Compare(in CompareInput) Comparison {
 	}
 	// Decisions use unrounded values (regulation 9.5: the unrounded mean
 	// determines the place); rounding is display-only.
+	if math.IsNaN(in.NoiseFloor) || math.IsInf(in.NoiseFloor, 0) || in.NoiseFloor < 0 {
+		// Fail closed: an invalid floor must not disable the regression guard.
+		in.NoiseFloor = 0
+	}
 	improvement := in.Candidate - in.Best
 	out := Comparison{
 		Mode:            mode,
@@ -528,7 +534,7 @@ func Compare(in CompareInput) Comparison {
 			return out
 		}
 	}
-	if in.Target > 0 && in.Candidate >= in.Target-epsilon {
+	if (in.TargetSet || in.Target > 0) && in.Candidate >= in.Target-epsilon {
 		out.Decision = DecisionReached
 		out.Reason = fmt.Sprintf("target %v reached with %v", out.Target, out.Candidate)
 		return out

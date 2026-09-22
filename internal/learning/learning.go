@@ -65,8 +65,9 @@ type RecordInput struct {
 }
 
 type RecordResult struct {
-	Learning Learning `json:"learning"`
-	Created  bool     `json:"created"`
+	Learning       Learning `json:"learning"`
+	Created        bool     `json:"created"`
+	EmbeddingError string   `json:"embedding_error,omitempty"`
 }
 
 type fileFormat struct {
@@ -139,9 +140,14 @@ func (s *Store) Record(ctx context.Context, in RecordInput) (RecordResult, error
 	// Embed before taking the lock: the embedder can be a network client and
 	// must not block other store operations while it runs.
 	var vector []float64
+	var embedErr error
 	if s.embedder != nil {
 		if v, err := s.embed(ctx, trigger+" "+insight); err == nil {
 			vector = v
+		} else {
+			// A failed embed must be observable: the entry is still stored,
+			// but semantic recall degrades to keyword matching.
+			embedErr = err
 		}
 	}
 
@@ -206,6 +212,9 @@ func (s *Store) Record(ctx context.Context, in RecordInput) (RecordResult, error
 				break
 			}
 		}
+	}
+	if embedErr != nil {
+		result.EmbeddingError = embedErr.Error()
 	}
 	doc.Learnings = evict(doc.Learnings, maxEntries)
 	if err := s.save(doc); err != nil {
@@ -390,6 +399,8 @@ func (s *Store) embed(ctx context.Context, text string) ([]float64, error) {
 }
 
 // lockFile serializes load-modify-save across processes sharing this path.
+const lockStaleAfter = 30 * time.Second
+
 func (s *Store) lockFile() (func(), error) {
 	lockPath := s.path + ".lock"
 	if err := os.MkdirAll(filepath.Dir(lockPath), 0o755); err != nil {
@@ -398,11 +409,17 @@ func (s *Store) lockFile() (func(), error) {
 	for i := 0; i < 50; i++ {
 		f, err := os.OpenFile(lockPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
 		if err == nil {
+			fmt.Fprintf(f, "%d\n", os.Getpid())
 			f.Close()
 			return func() { _ = os.Remove(lockPath) }, nil
 		}
 		if !os.IsExist(err) {
 			return nil, err
+		}
+		// Reclaim a lock whose owner died between create and remove.
+		if info, statErr := os.Stat(lockPath); statErr == nil && time.Since(info.ModTime()) > lockStaleAfter {
+			_ = os.Remove(lockPath)
+			continue
 		}
 		time.Sleep(20 * time.Millisecond)
 	}

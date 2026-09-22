@@ -52,7 +52,7 @@ func TestFlyFeedbackTool(t *testing.T) {
 		t.Fatalf("status %s data %+v warnings %v", env.Status, env.Data, env.Warnings)
 	}
 	data := env.Data.(map[string]any)
-	if data["learned"] != true || data["source"] != "codex-correction" {
+	if data["learned"] != false || data["source"] != "codex-correction" {
 		t.Fatalf("data = %+v", data)
 	}
 	if data["stored"].(int) < 1 {

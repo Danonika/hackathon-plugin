@@ -132,6 +132,9 @@ func FreezeBundle(opts BundleOptions) (Bundle, error) {
 			excludes = append(excludes, e)
 		}
 	}
+	if err := validateExcludes(excludes); err != nil {
+		return Bundle{}, err
+	}
 	excludeRules := compileExcludes(excludes)
 
 	if entries, err := os.ReadDir(outAbs); err == nil && len(entries) > 0 {
@@ -277,6 +280,20 @@ func compileExcludes(patterns []string) []excludeRule {
 		})
 	}
 	return rules
+}
+
+// validateExcludes rejects malformed glob patterns up front instead of
+// silently matching nothing (which would leak files into the bundle).
+func validateExcludes(patterns []string) error {
+	for _, pattern := range patterns {
+		if !strings.ContainsAny(pattern, "*?[") {
+			continue
+		}
+		if _, err := path.Match(pattern, ""); err != nil {
+			return fmt.Errorf("invalid exclude pattern %q: %w", pattern, err)
+		}
+	}
+	return nil
 }
 
 func isExcluded(rel string, rules []excludeRule) bool {

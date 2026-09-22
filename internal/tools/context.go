@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"os"
@@ -44,7 +45,11 @@ func registerContextBudget(reg *mcp.Registry, d Deps) {
 		func(ctx context.Context, args map[string]any) (any, error) {
 			items := []contextItem{}
 			items = append(items, toolContextItems(reg)...)
-			items = append(items, skillContextItems(ctx, d.Cfg.Root())...)
+			skillItems, skillErr := skillContextItems(ctx, d.Cfg.Root())
+			if skillErr != nil {
+				return mcp.Fail(trace(ctx), skillErr.Error()), nil
+			}
+			items = append(items, skillItems...)
 			items = append(items, manifestContextItems(d.Cfg.Root())...)
 			sort.SliceStable(items, func(i, j int) bool {
 				if items[i].Tokens != items[j].Tokens {
@@ -63,8 +68,8 @@ func registerContextBudget(reg *mcp.Registry, d Deps) {
 					flagged++
 				}
 			}
-			recommendations := contextRecommendations(items, byKind)
-			truncated := len(recommendations) < flagged
+			recommendations, dropped := contextRecommendations(items, byKind)
+			truncated := dropped
 			data := map[string]any{
 				"recommendations_truncated": truncated,
 				"total_tokens":              total,
@@ -126,7 +131,7 @@ func toolContextItems(reg *mcp.Registry) []contextItem {
 	return items
 }
 
-func skillContextItems(ctx context.Context, root string) []contextItem {
+func skillContextItems(ctx context.Context, root string) ([]contextItem, error) {
 	base := filepath.Join(root, "plugins", "hackathonkit", "skills")
 	items := []contextItem{}
 	walkErr := filepath.WalkDir(base, func(path string, entry os.DirEntry, err error) error {
@@ -179,9 +184,12 @@ func skillContextItems(ctx context.Context, root string) []contextItem {
 		return nil
 	})
 	if walkErr != nil {
+		if errors.Is(walkErr, context.Canceled) || errors.Is(walkErr, context.DeadlineExceeded) {
+			return items, walkErr
+		}
 		items = append(items, contextItem{Kind: "skill", Name: "skills scan", Flag: "walk failed: " + walkErr.Error()})
 	}
-	return items
+	return items, nil
 }
 
 func manifestContextItems(root string) []contextItem {
@@ -223,7 +231,7 @@ func manifestContextItems(root string) []contextItem {
 	return items
 }
 
-func contextRecommendations(items []contextItem, byKind map[string]int) []contextRecommendation {
+func contextRecommendations(items []contextItem, byKind map[string]int) ([]contextRecommendation, bool) {
 	out := []contextRecommendation{}
 	for _, item := range items {
 		if item.Flag == "" {
@@ -246,10 +254,12 @@ func contextRecommendations(items []contextItem, byKind map[string]int) []contex
 			Suggestion: "merge overlapping tools or shorten descriptions and schemas",
 		})
 	}
+	dropped := false
 	if len(out) > 10 {
 		out = out[:10]
+		dropped = true
 	}
-	return out
+	return out, dropped
 }
 
 func estimateTokens(bytes int) int {

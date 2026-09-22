@@ -3,6 +3,7 @@
 #
 #   scripts/docker-check.sh          # config, build, selftest, infra, smoke
 #   scripts/docker-check.sh --full   # also build and run the Go-enabled quality image
+#   scripts/docker-check.sh --keep-infra  # leave postgres/redis/minio running
 #
 # Exit codes: 0 ok, 1 failed, 2 docker unavailable.
 set -e
@@ -10,12 +11,14 @@ ROOT="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
 cd "$ROOT"
 
 MODE="fast"
+KEEP_INFRA=0
 for arg in "$@"; do
   case "$arg" in
     --full) MODE="full" ;;
     --fast) MODE="fast" ;;
+    --keep-infra) KEEP_INFRA=1 ;;
     -h|--help)
-      echo "usage: scripts/docker-check.sh [--full]"
+      echo "usage: scripts/docker-check.sh [--full] [--keep-infra]"
       exit 0
       ;;
     *)
@@ -49,7 +52,7 @@ mkdir -p logs evals data/artifacts data/index data/control data/judge-bundles
 
 redact_logs() {
   if sed -E 's/a/b/' </dev/null >/dev/null 2>&1; then
-    sed -E -e 's#://[^/@ ]+@#://***@#g' -e 's/([A-Za-z_]*(PASSWORD|PASS|TOKEN|SECRET|DSN|KEY)[A-Za-z_]*)([=: ]+)[^ "]+/\1\3[redacted]/g'
+    sed -E -e 's#://[^/@ ]+@#://***@#g' -e 's/([A-Za-z_]*([Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd]|[Pp][Aa][Ss][Ss]|[Tt][Oo][Kk][Ee][Nn]|[Ss][Ee][Cc][Rr][Ee][Tt]|[Dd][Ss][Nn]|[Kk][Ee][Yy])[A-Za-z_]*)([=: ]+)("[^"]*"|[^ " ]+)/\1\3[redacted]/g'
   else
     # Fail closed: never print unredacted container logs.
     printf '[docker-check] sed -E unavailable; container logs withheld to avoid leaking credentials\n'
@@ -125,17 +128,21 @@ if command -v curl >/dev/null 2>&1; then
     sleep 2
   done
 else
-  echo "[docker-check] curl not found; probing minio from inside the container"
+  echo "[docker-check] curl not found; probing the minio health endpoint from inside the stack"
   MINIO_OK=0
   for _ in $(seq 1 30); do
-    if docker compose exec -T minio sh -c 'exit 0' >/dev/null 2>&1; then
+    if docker compose exec -T minio sh -c 'curl -fsS http://127.0.0.1:9000/minio/health/live >/dev/null 2>&1 || wget -q -O- http://127.0.0.1:9000/minio/health/live >/dev/null 2>&1' >/dev/null 2>&1; then
+      MINIO_OK=1
+      break
+    fi
+    if docker compose exec -T postgres sh -c 'wget -q -O- http://minio:9000/minio/health/live >/dev/null 2>&1' >/dev/null 2>&1; then
       MINIO_OK=1
       break
     fi
     sleep 2
   done
   if [ "$MINIO_OK" != "1" ]; then
-    echo "[docker-check] minio container is not accepting exec connections" >&2
+    echo "[docker-check] minio health endpoint did not become ready" >&2
     exit 1
   fi
 fi
@@ -151,5 +158,11 @@ fi
 echo "[docker-check] MCP handshake over compose"
 sh scripts/smoke.sh --compose
 
+if [ "$KEEP_INFRA" = "1" ]; then
+  echo "[docker-check] leaving infrastructure running (--keep-infra)"
+else
+  stop_infra
+  INFRA_STARTED=0
+fi
 trap - EXIT
 echo "[docker-check] ok (mode: $MODE)"

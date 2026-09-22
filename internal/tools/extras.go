@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -229,15 +230,28 @@ func parseChartPoints(raw any) []chartPoint {
 			}
 		}
 		var y float64
+		usable := true
 		switch yv := m["y"].(type) {
 		case float64:
 			y = yv
 		case int:
 			y = float64(yv)
+		case json.Number:
+			if parsed, perr := yv.Float64(); perr == nil {
+				y = parsed
+			} else {
+				usable = false
+			}
 		default:
 			if vv, ok := m["v"].(float64); ok {
 				y = vv
+			} else {
+				usable = false
 			}
+		}
+		if !usable {
+			// Never fabricate a zero datum: drop points with no numeric Y.
+			continue
 		}
 		out = append(out, chartPoint{X: x, Y: y})
 	}
@@ -370,30 +384,28 @@ func renderChartSVG(title, kind string, series []chartSeries) string {
 		}
 	}
 
-	longest := series[0]
-	for _, s := range series {
-		if len(s.Points) > len(longest.Points) {
-			longest = s
-		}
-	}
-	if len(longest.Points) > 0 {
-		positions := []int{0, len(longest.Points) / 2, len(longest.Points) - 1}
+	labelSeries := series[0]
+	if len(labelSeries.Points) > 0 {
+		positions := []int{0, len(labelSeries.Points) / 2, len(labelSeries.Points) - 1}
 		seen := map[int]bool{}
 		for _, idx := range positions {
 			if seen[idx] {
 				continue
 			}
 			seen[idx] = true
-			label := longest.Points[idx].X
+			label := labelSeries.Points[idx].X
 			if label == "" {
 				label = fmt.Sprintf("%d", idx)
 			}
 			if runes := []rune(label); len(runes) > 24 {
 				label = string(runes[:24]) + "..."
 			}
-			labelX := xPos(idx, len(longest.Points))
+			labelX := xPos(idx, len(labelSeries.Points))
+			if useX && idx < len(xVals) {
+				labelX = xPosValue(xVals[idx])
+			}
 			if kind == "bar" {
-				slot := plotW / float64(len(longest.Points))
+				slot := plotW / float64(len(labelSeries.Points))
 				labelX = left + slot*float64(idx) + slot/2
 			}
 			fmt.Fprintf(&b, `<text x="%.0f" y="%.0f" font-size="11" fill="#6b7280" text-anchor="middle">%s</text>`+"\n",

@@ -165,7 +165,7 @@ func rebuildFromFeedback(root string, cfg config.File, client *openai.Client, st
 			continue
 		}
 		seen[key] = true
-		if _, err := router.AddFeedback(context.Background(), fly.FeedbackEvent{
+		if _, _, err := router.AddFeedback(context.Background(), fly.FeedbackEvent{
 			Task: line.Task, Chosen: line.Chosen, Source: line.Source,
 		}); err != nil {
 			return err

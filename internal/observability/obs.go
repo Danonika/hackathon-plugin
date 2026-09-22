@@ -93,8 +93,9 @@ func Log(l *log.Logger, level, msg string, fields map[string]any) {
 	}
 	if err := l.Output(2, string(b)); err != nil {
 		// A partial write can leave a record without a trailing newline,
-		// concatenating the next record onto it; try to close the line.
-		fmt.Fprint(l.Writer(), "\n")
+		// concatenating the next record onto it; close the line through the
+		// logger so its mutex serializes the write.
+		_ = l.Output(2, "")
 		fmt.Fprintf(os.Stderr, "observability: log write failed: %v\n", err)
 	}
 }

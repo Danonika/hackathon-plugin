@@ -133,8 +133,8 @@ func registerResources(reg *mcp.Registry, d Deps) {
 				d.Metrics.Inc("resources_probe_total")
 			}
 			incomplete := configured < len(results)
-			if live {
-				incomplete = reachable < configured
+			if live && reachable < configured {
+				incomplete = true
 			}
 			if incomplete {
 				return mcp.Partial(trace(ctx), data, "some providers are not configured or not reachable").WithMetrics(map[string]any{

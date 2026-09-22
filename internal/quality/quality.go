@@ -233,16 +233,6 @@ func LatestReport(root string) (Report, bool, error) {
 		if !entry.IsDir() {
 			continue
 		}
-		info, infoErr := entry.Info()
-		if infoErr != nil {
-			if firstErr == nil {
-				firstErr = infoErr
-			}
-			continue
-		}
-		if info.ModTime().Before(bestTime) {
-			continue
-		}
 		gatePath := filepath.Join(Dir(root), entry.Name(), "gate.json")
 		gateInfo, gateErr := os.Stat(gatePath)
 		if gateErr != nil {
@@ -279,6 +269,19 @@ func LatestReport(root string) (Report, bool, error) {
 // GitSHA resolves HEAD without requiring a git binary.
 func GitSHA(root string) string {
 	gitDir := filepath.Join(root, ".git")
+	if info, err := os.Stat(gitDir); err == nil && !info.IsDir() {
+		// Worktree-style .git file: "gitdir: <path>".
+		if raw, err := os.ReadFile(gitDir); err == nil {
+			line := strings.TrimSpace(string(raw))
+			if strings.HasPrefix(line, "gitdir:") {
+				target := strings.TrimSpace(strings.TrimPrefix(line, "gitdir:"))
+				if !filepath.IsAbs(target) {
+					target = filepath.Join(root, target)
+				}
+				gitDir = target
+			}
+		}
+	}
 	head, err := os.ReadFile(filepath.Join(gitDir, "HEAD"))
 	if err != nil {
 		return "unknown"
@@ -291,6 +294,9 @@ func GitSHA(root string) string {
 		return "unknown"
 	}
 	ref := strings.TrimSpace(strings.TrimPrefix(value, "ref: "))
+	if !strings.HasPrefix(ref, "refs/") || strings.Contains(ref, "..") {
+		return "unknown"
+	}
 	if data, err := os.ReadFile(filepath.Join(gitDir, filepath.FromSlash(ref))); err == nil {
 		if sha := strings.TrimSpace(string(data)); sha != "" {
 			return sha

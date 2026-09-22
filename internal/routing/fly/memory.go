@@ -169,7 +169,7 @@ func (r *Router) MemorySize() int {
 	return len(r.loadMemory().Examples)
 }
 
-func (r *Router) AddFeedback(ctx context.Context, ev FeedbackEvent) (int, error) {
+func (r *Router) AddFeedback(ctx context.Context, ev FeedbackEvent) (int, bool, error) {
 	example := FeedbackExample{
 		Hash:         hashTask(ev.Task),
 		Task:         ev.Task,
@@ -187,6 +187,18 @@ func (r *Router) AddFeedback(ctx context.Context, ev FeedbackEvent) (int, error)
 
 	memoryMu.Lock()
 	mem := r.loadMemory()
+	if mem.Model != "" && mem.Model != r.modelTag {
+		// Examples embedded under a different model are not comparable with
+		// the current task vectors; drop the stale vectors (keyword-only
+		// examples remain usable).
+		pruned := make([]FeedbackExample, 0, len(mem.Examples))
+		for _, existing := range mem.Examples {
+			if len(existing.Vector) == 0 {
+				pruned = append(pruned, existing)
+			}
+		}
+		mem.Examples = pruned
+	}
 	mem.Model = r.modelTag
 	kept := make([]FeedbackExample, 0, len(mem.Examples)+1)
 	for _, existing := range mem.Examples {
@@ -203,10 +215,10 @@ func (r *Router) AddFeedback(ctx context.Context, ev FeedbackEvent) (int, error)
 	err := r.saveMemory(mem)
 	memoryMu.Unlock()
 	if err != nil {
-		return len(kept), err
+		return len(kept), false, err
 	}
-	r.applyDopamine(ctx, ev)
-	return len(kept), nil
+	learned := r.applyDopamine(ctx, ev)
+	return len(kept), learned, nil
 }
 
 func (r *Router) memoryCategoryScores(taskVector []float64, k int) (map[string]float64, bool) {

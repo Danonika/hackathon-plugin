@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"unicode"
@@ -10,6 +11,16 @@ import (
 	"hackathonkit.local/agentkit/internal/mcp"
 	"hackathonkit.local/agentkit/internal/plans"
 )
+
+func validPlanSlug(rawSlug, slug string) bool {
+	if rawSlug == "" || slug == "" {
+		return false
+	}
+	if slug == "plan" && strings.ToLower(strings.TrimSpace(rawSlug)) != "plan" {
+		return false
+	}
+	return containsLetterOrDigit(slug)
+}
 
 func containsLetterOrDigit(value string) bool {
 	for _, r := range value {
@@ -43,12 +54,16 @@ func registerPlans(reg *mcp.Registry, d Deps) {
 		func(ctx context.Context, args map[string]any) (any, error) {
 			rawSlug := argString(args, "slug")
 			slug := plans.Slug(rawSlug)
-			if rawSlug == "" || !containsLetterOrDigit(rawSlug) {
+			if !validPlanSlug(rawSlug, slug) {
 				return mcp.Fail(trace(ctx), "slug must contain at least one letter or digit"), nil
 			}
 			if !argBool(args, "overwrite", false) {
-				if existing, err := plans.Load(d.Cfg.Root(), slug); err == nil && existing.Slug != "" {
+				existing, err := plans.Load(d.Cfg.Root(), slug)
+				if err == nil && existing.Slug != "" {
 					return mcp.Fail(trace(ctx), fmt.Sprintf("plan %q already exists (revision %d); use plan.update or pass overwrite=true", slug, existing.Revision)), nil
+				}
+				if err != nil && !os.IsNotExist(err) {
+					return mcp.Fail(trace(ctx), "cannot read existing plan: "+err.Error()), nil
 				}
 			}
 			warnings := []string{}
@@ -133,7 +148,7 @@ func registerPlans(reg *mcp.Registry, d Deps) {
 			slug := plans.Slug(rawSlug)
 			stageID := argString(args, "stage")
 			status := plans.NormalizeStatus(argString(args, "status"))
-			if rawSlug == "" || (slug == "plan" && strings.ToLower(strings.TrimSpace(rawSlug)) != "plan") || stageID == "" || status == "" {
+			if !validPlanSlug(rawSlug, slug) || stageID == "" || status == "" {
 				return mcp.Fail(trace(ctx), "slug, stage and status are required (slug must contain at least one letter or digit)"), nil
 			}
 			if !plans.ValidStatus(status) {
@@ -194,7 +209,11 @@ func registerPlans(reg *mcp.Registry, d Deps) {
 				}
 				return mcp.OK(trace(ctx), planData(d.Cfg.Root(), plan)), nil
 			}
-			plan, ok = plans.Latest(d.Cfg.Root())
+			var latestErr error
+			plan, ok, latestErr = plans.LatestErr(d.Cfg.Root())
+			if latestErr != nil {
+				return mcp.Partial(trace(ctx), map[string]any{"plan": nil}, "latest plan unreadable: "+latestErr.Error()), nil
+			}
 			if !ok {
 				return mcp.Partial(trace(ctx), map[string]any{"plan": nil}, "no plan found; create one with plan.create"), nil
 			}

@@ -97,7 +97,11 @@ func (s *Server) ServeStreams(ctx context.Context, in io.Reader, out io.Writer) 
 					if errors.Is(derr, bufio.ErrBufferFull) {
 						continue
 					}
-					scanErr <- nil
+					if errors.Is(derr, io.EOF) {
+						scanErr <- nil
+					} else {
+						scanErr <- derr
+					}
 					return
 				}
 				select {

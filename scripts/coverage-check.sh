@@ -23,7 +23,10 @@ if ! awk -v t="$TARGET" 'BEGIN { exit (t + 0 >= 0 && t + 0 <= 100) ? 0 : 1 }'; t
   exit 2
 fi
 PROFILE=$(mktemp "${TMPDIR:-/tmp}/hackathonkit-coverage.XXXXXX")
-trap 'rm -f "$PROFILE"' EXIT INT TERM
+cleanup_profile() { rm -f "$PROFILE"; }
+trap cleanup_profile EXIT
+trap 'cleanup_profile; exit 130' INT
+trap 'cleanup_profile; exit 143' TERM
 cd "$ROOT"
 
 # Containers may run as root over a repo owned by another user; disable VCS

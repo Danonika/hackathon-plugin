@@ -190,7 +190,7 @@ func registerSystem(reg *mcp.Registry, d Deps) {
 			for _, name := range argStringSlice(args, "recommended") {
 				recommended = append(recommended, fly.Recommendation{Capability: name})
 			}
-			size, err := d.Router.AddFeedback(ctx, fly.FeedbackEvent{
+			size, learned, err := d.Router.AddFeedback(ctx, fly.FeedbackEvent{
 				Task:          task,
 				Recommended:   recommended,
 				Chosen:        chosen,
@@ -228,7 +228,7 @@ func registerSystem(reg *mcp.Registry, d Deps) {
 			return mcp.OK(trace(ctx), map[string]any{
 				"stored":  size,
 				"source":  source,
-				"learned": true,
+				"learned": learned,
 			}).WithMetrics(map[string]any{"memory_size": size}), nil
 		},
 	))

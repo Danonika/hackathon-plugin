@@ -32,8 +32,10 @@ func BuildHandoff(ctx context.Context, store *Store, learn *learning.Store, root
 	}
 	handoff.Session = session
 
-	if plan, ok := plans.Latest(root); ok {
+	if plan, ok, planErr := plans.LatestErr(root); ok {
 		handoff.Plan = &plan
+	} else if planErr != nil {
+		handoff.Notes = append(handoff.Notes, "latest plan unreadable: "+planErr.Error())
 	}
 	if learn != nil {
 		if items, err := learn.Top(maxLearnings, 0.5); err == nil {
@@ -121,6 +123,12 @@ func RenderHandoff(h Handoff) string {
 	}
 	if h.PendingDecisions > 0 {
 		fmt.Fprintf(&b, "- pending eval decisions: %d\n", h.PendingDecisions)
+	}
+	if len(h.Notes) > 0 {
+		b.WriteString("- warnings (handoff degraded):\n")
+		for _, note := range h.Notes {
+			fmt.Fprintf(&b, "  - %s\n", note)
+		}
 	}
 	b.WriteString("Resume by following the plan's current stage; record new learnings with learning.record.\n")
 	return b.String()
