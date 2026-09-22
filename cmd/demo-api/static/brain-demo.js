@@ -34,11 +34,29 @@ function toast(message, kind = 'info') {
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => element.classList.remove('show'), 2600);
 }
+const SPEECH = {
+  reward: [
+    "I'm the best at this hackathon!",
+    "This hackathon is mine!",
+    "First place? Obviously.",
+    "I'm the best here!",
+    "Sweet victory!"
+  ],
+  pain: [
+    "I need this job.",
+    "I have a family at home.",
+    "Please, give me one more chance.",
+    "I should work harder.",
+    "Don't give up on me."
+  ],
+  idle: 'I can do better'
+};
 function speech(reward) {
-  text('fly-speech', reward ? 'Ура! Спасибо!' : 'Ну и ладно… Я ухожу.');
+  const phrases = reward ? SPEECH.reward : SPEECH.pain;
+  text('fly-speech', phrases[Math.floor(Math.random() * phrases.length)]);
   $('fly-speech')?.classList.add('show');
   clearTimeout(speechTimer);
-  speechTimer = setTimeout(() => text('fly-speech', 'I can do better'), reward ? 4700 : 7300);
+  speechTimer = setTimeout(() => text('fly-speech', SPEECH.idle), reward ? 4700 : 7300);
 }
 
 const tune = { ...DEFAULT_TUNE };
