@@ -341,7 +341,7 @@ func TestCmdWorktreeLifecycle(t *testing.T) {
 	initGitRepo(t, root)
 
 	createOut := captureStdout(t, func() {
-		if err := cmdWorktree([]string{"create", "My Feature!"}); err != nil {
+		if err := cmdWorktree([]string{"create", "My Feature!"}, os.Stdout, os.Stderr); err != nil {
 			t.Fatalf("worktree create: %v", err)
 		}
 	})
@@ -353,7 +353,7 @@ func TestCmdWorktreeLifecycle(t *testing.T) {
 		t.Fatalf("worktree dir: %v", err)
 	}
 	listOut := captureStdout(t, func() {
-		if err := cmdWorktree([]string{"list"}); err != nil {
+		if err := cmdWorktree([]string{"list"}, os.Stdout, os.Stderr); err != nil {
 			t.Fatalf("worktree list: %v", err)
 		}
 	})
@@ -361,11 +361,11 @@ func TestCmdWorktreeLifecycle(t *testing.T) {
 		t.Fatalf("worktree list = %q", listOut)
 	}
 
-	if err := cmdWorktree([]string{"create", "My Feature!"}); err == nil || !strings.Contains(err.Error(), "already exists") {
+	if err := cmdWorktree([]string{"create", "My Feature!"}, os.Stdout, os.Stderr); err == nil || !strings.Contains(err.Error(), "already exists") {
 		t.Fatalf("duplicate create err = %v", err)
 	}
 
-	if err := cmdWorktree([]string{"remove", "My Feature!"}); err != nil {
+	if err := cmdWorktree([]string{"remove", "My Feature!"}, os.Stdout, os.Stderr); err != nil {
 		t.Fatalf("worktree remove: %v", err)
 	}
 	if _, err := os.Stat(dir); !os.IsNotExist(err) {
@@ -374,7 +374,7 @@ func TestCmdWorktreeLifecycle(t *testing.T) {
 
 	// The branch survives worktree removal, so create must reuse it.
 	captureStdout(t, func() {
-		if err := cmdWorktree([]string{"create", "My Feature!"}); err != nil {
+		if err := cmdWorktree([]string{"create", "My Feature!"}, os.Stdout, os.Stderr); err != nil {
 			t.Fatalf("worktree recreate: %v", err)
 		}
 	})
@@ -393,11 +393,11 @@ func TestCmdWorktreeErrors(t *testing.T) {
 		{"remove"},
 	}
 	for _, args := range cases {
-		if err := cmdWorktree(args); err == nil {
+		if err := cmdWorktree(args, os.Stdout, os.Stderr); err == nil {
 			t.Fatalf("cmdWorktree(%v) must fail", args)
 		}
 	}
-	if err := cmdWorktree([]string{"remove", "does-not-exist"}); err == nil {
+	if err := cmdWorktree([]string{"remove", "does-not-exist"}, os.Stdout, os.Stderr); err == nil {
 		t.Fatal("removing a missing worktree must fail")
 	}
 }
@@ -443,17 +443,17 @@ func TestNewCommandLookPathRunGit(t *testing.T) {
 	if err != nil || !strings.Contains(string(out), "git version") {
 		t.Fatalf("newCommand git --version: %v %q", err, out)
 	}
-	if err := runGit(root, "rev-parse", "--is-inside-work-tree"); err != nil {
+	if err := runGit(io.Discard, io.Discard, root, "rev-parse", "--is-inside-work-tree"); err != nil {
 		t.Fatalf("runGit: %v", err)
 	}
-	if err := runGit(root, "definitely-not-a-git-command"); err == nil {
+	if err := runGit(io.Discard, io.Discard, root, "definitely-not-a-git-command"); err == nil {
 		t.Fatal("runGit with unknown subcommand must fail")
 	}
 }
 
 func TestCmdRunRequiresTask(t *testing.T) {
 	tempRoot(t)
-	if err := cmdRun(nil); err == nil || !strings.Contains(err.Error(), "--task is required") {
+	if err := cmdRun(nil, os.Stdout, os.Stderr); err == nil || !strings.Contains(err.Error(), "--task is required") {
 		t.Fatalf("cmdRun err = %v", err)
 	}
 }
@@ -461,7 +461,7 @@ func TestCmdRunRequiresTask(t *testing.T) {
 func TestCmdRunWithoutCodex(t *testing.T) {
 	root := tempRoot(t)
 	t.Setenv("PATH", t.TempDir())
-	err := cmdRun([]string{"--task", "do something"})
+	err := cmdRun([]string{"--task", "do something"}, os.Stdout, os.Stderr)
 	if err == nil || !strings.Contains(err.Error(), "codex CLI not found") {
 		t.Fatalf("cmdRun err = %v", err)
 	}
@@ -477,7 +477,7 @@ func TestCmdRunSuccess(t *testing.T) {
 	root := tempRoot(t)
 	withPath(t, fakeCodex(t, 0))
 	out := captureStdout(t, func() {
-		if err := cmdRun([]string{"--task", "Fix the login bug", "--slug", "My Fix", "--model", "gpt-test"}); err != nil {
+		if err := cmdRun([]string{"--task", "Fix the login bug", "--slug", "My Fix", "--model", "gpt-test"}, os.Stdout, os.Stderr); err != nil {
 			t.Fatalf("cmdRun: %v", err)
 		}
 	})
@@ -507,7 +507,7 @@ func TestCmdRunCodexFailure(t *testing.T) {
 	tempRoot(t)
 	withPath(t, fakeCodex(t, 3))
 	out := captureStdout(t, func() {
-		if err := cmdRun([]string{"--task", "Break things"}); err == nil {
+		if err := cmdRun([]string{"--task", "Break things"}, os.Stdout, os.Stderr); err == nil {
 			t.Fatal("cmdRun must surface the codex failure")
 		}
 	})
@@ -527,7 +527,7 @@ func TestCmdRunWorktree(t *testing.T) {
 	initGitRepo(t, root)
 	withPath(t, fakeCodex(t, 0))
 	out := captureStdout(t, func() {
-		if err := cmdRun([]string{"--task", "Add feature", "--worktree"}); err != nil {
+		if err := cmdRun([]string{"--task", "Add feature", "--worktree"}, os.Stdout, os.Stderr); err != nil {
 			t.Fatalf("cmdRun --worktree: %v", err)
 		}
 	})
@@ -558,7 +558,7 @@ func TestCmdRunWorktreeFailure(t *testing.T) {
 	}
 	tempRoot(t)
 	withPath(t, fakeCodex(t, 0))
-	if err := cmdRun([]string{"--task", "no git here", "--worktree"}); err == nil {
+	if err := cmdRun([]string{"--task", "no git here", "--worktree"}, os.Stdout, os.Stderr); err == nil {
 		t.Fatal("cmdRun --worktree outside a git repo must fail")
 	}
 }
@@ -574,7 +574,7 @@ func TestTUIModelLoadViewAndUpdate(t *testing.T) {
 
 	model := newTUIModel(store, nil)
 	// Loading is asynchronous in the TUI; apply the load command's result.
-	if msg, ok := loadCmd(store, 0)().(loadedMsg); ok {
+	if msg, ok := loadCmd(store, 0, 0)().(loadedMsg); ok {
 		model.applyLoaded(msg)
 	}
 	if len(model.sessions) != 2 {
@@ -663,7 +663,7 @@ func TestTUIModelEmptyAndErrorStates(t *testing.T) {
 		t.Fatal(err)
 	}
 	broken := newTUIModel(store, nil)
-	if msg, ok := loadCmd(store, 0)().(loadedMsg); ok {
+	if msg, ok := loadCmd(store, 0, 0)().(loadedMsg); ok {
 		broken.applyLoaded(msg)
 	}
 	if view := broken.View(); !strings.Contains(view, "error:") {

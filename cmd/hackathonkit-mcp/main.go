@@ -31,7 +31,7 @@ import (
 	"hackathonkit.local/agentkit/internal/tools"
 )
 
-const version = "0.16.25"
+const version = "0.16.26"
 
 // redactBackendError strips credentials from driver/connection errors before
 // they are logged (DSNs can appear in Postgres and MinIO errors).
@@ -130,7 +130,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	}
 
 	if *sessionContext {
-		printSessionContext(root, mgr, stdout)
+		printSessionContext(root, mgr, stdout, stderr)
 		return 0
 	}
 
@@ -298,7 +298,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 // printSessionContext emits a compact context block for SessionStart hooks:
 // routing mode, resource profile, top learnings, current plan stage and
 // pending eval decisions.
-func printSessionContext(root string, mgr *config.Manager, out io.Writer) {
+func printSessionContext(root string, mgr *config.Manager, out, diag io.Writer) {
 	state := mgr.Routing()
 	fmt.Fprintln(out, "Hackathon Agent Kit session context")
 	fmt.Fprintf(out, "routing: %s (config v%d)\n", state.Mode, state.Version)
@@ -330,7 +330,7 @@ func printSessionContext(root string, mgr *config.Manager, out io.Writer) {
 	if plan, ok := plans.Latest(root); ok {
 		fmt.Fprintln(out, plans.Summary(plan))
 	}
-	if count := countFiles(filepath.Join(root, "evals", "decisions")); count > 0 {
+	if count := countFiles(filepath.Join(root, "evals", "decisions"), diag); count > 0 {
 		fmt.Fprintf(out, "pending eval decisions: %d\n", count)
 	}
 }
@@ -390,7 +390,7 @@ func printResources(root string, out io.Writer) error {
 	return enc.Encode(resources.View(profile, present))
 }
 
-func countFiles(dir string) int {
+func countFiles(dir string, diag io.Writer) int {
 	count := 0
 	if err := filepath.WalkDir(dir, func(path string, entry os.DirEntry, err error) error {
 		if err != nil {
@@ -406,7 +406,7 @@ func countFiles(dir string) int {
 	}); err != nil && !os.IsNotExist(err) {
 		// The session context is advisory: an unreadable directory must not
 		// silently look like zero pending decisions, so report it.
-		fmt.Fprintf(os.Stderr, "session-context: cannot read %s: %v\n", dir, err)
+		fmt.Fprintf(diag, "session-context: cannot read %s: %v\n", dir, err)
 	}
 	return count
 }

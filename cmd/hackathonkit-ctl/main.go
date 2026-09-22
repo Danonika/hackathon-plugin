@@ -37,9 +37,9 @@ func run(args []string, stdout, stderr io.Writer) int {
 	case "daemon":
 		err = cmdDaemon(args[1:])
 	case "worktree":
-		err = cmdWorktree(args[1:])
+		err = cmdWorktree(args[1:], stdout, stderr)
 	case "run":
-		err = cmdRun(args[1:])
+		err = cmdRun(args[1:], stdout, stderr)
 	case "tui":
 		err = cmdTUI(args[1:])
 	case "version", "--version", "-v":
@@ -183,7 +183,7 @@ func cmdSessions(args []string, stdout io.Writer) error {
 	}
 }
 
-func cmdWorktree(args []string) error {
+func cmdWorktree(args []string, stdout, stderr io.Writer) error {
 	root := repoRoot()
 	if len(args) == 0 {
 		return fmt.Errorf("usage: hackathonkit-ctl worktree create|list|remove")
@@ -191,16 +191,16 @@ func cmdWorktree(args []string) error {
 	base := filepath.Join(root, "data", "worktrees")
 	switch args[0] {
 	case "list":
-		return runGit(root, "worktree", "list")
+		return runGit(stdout, stderr, root, "worktree", "list")
 	case "create":
 		if len(args) < 2 {
 			return fmt.Errorf("usage: hackathonkit-ctl worktree create <slug>")
 		}
-		dir, err := addWorktree(root, slugify(args[1]))
+		dir, err := addWorktree(root, slugify(args[1]), stdout, stderr)
 		if err != nil {
 			return err
 		}
-		fmt.Println(dir)
+		fmt.Fprintln(stdout, dir)
 		return nil
 	case "remove":
 		if len(args) < 2 {
@@ -214,9 +214,9 @@ func cmdWorktree(args []string) error {
 		}
 		dir := filepath.Join(base, slugify(args[1]))
 		if force {
-			return runGit(root, "worktree", "remove", "--force", dir)
+			return runGit(stdout, stderr, root, "worktree", "remove", "--force", dir)
 		}
-		if err := runGit(root, "worktree", "remove", dir); err != nil {
+		if err := runGit(stdout, stderr, root, "worktree", "remove", dir); err != nil {
 			return fmt.Errorf("%w (use --force to discard local changes)", err)
 		}
 		return nil
@@ -227,7 +227,7 @@ func cmdWorktree(args []string) error {
 
 // addWorktree creates a git worktree for a run, retrying without -b when the
 // branch already exists (the same behaviour the `worktree create` command had).
-func addWorktree(root, name string) (string, error) {
+func addWorktree(root, name string, stdout, stderr io.Writer) (string, error) {
 	base := filepath.Join(root, "data", "worktrees")
 	dir := filepath.Join(base, name)
 	if err := os.MkdirAll(base, 0o755); err != nil {
@@ -237,7 +237,7 @@ func addWorktree(root, name string) (string, error) {
 		return "", fmt.Errorf("worktree already exists: %s", dir)
 	}
 	branch := "hackathonkit/" + name
-	firstErr := runGit(root, "worktree", "add", "-b", branch, dir)
+	firstErr := runGit(stdout, stderr, root, "worktree", "add", "-b", branch, dir)
 	if firstErr == nil {
 		return dir, nil
 	}
@@ -246,7 +246,7 @@ func addWorktree(root, name string) (string, error) {
 	if !branchExists(root, branch) {
 		return "", firstErr
 	}
-	if err := runGit(root, "worktree", "add", dir, branch); err != nil {
+	if err := runGit(stdout, stderr, root, "worktree", "add", dir, branch); err != nil {
 		return "", fmt.Errorf("%v (retry without -b: %w)", firstErr, err)
 	}
 	return dir, nil
@@ -266,11 +266,11 @@ func lookPath(name string) (string, error) {
 	return exec.LookPath(name)
 }
 
-func runGit(root string, args ...string) error {
+func runGit(stdout, stderr io.Writer, root string, args ...string) error {
 	cmd := newCommand("git", args...)
 	cmd.Dir = root
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
+	cmd.Stdout = stdout
+	cmd.Stderr = stderr
 	return cmd.Run()
 }
 
@@ -296,7 +296,7 @@ func slugify(value string) string {
 	return out
 }
 
-func cmdRun(args []string) error {
+func cmdRun(args []string, stdout, stderr io.Writer) error {
 	fs := flag.NewFlagSet("run", flag.ContinueOnError)
 	task := fs.String("task", "", "task description passed to codex exec")
 	slug := fs.String("slug", "", "session slug (default: derived from the task)")
@@ -321,14 +321,17 @@ func cmdRun(args []string) error {
 	ctx := context.Background()
 
 	name := slugify(*slug)
-	if name == "session" {
+	if strings.TrimSpace(*slug) == "" {
 		name = slugify(truncate(*task, 40))
+	}
+	if name == "" {
+		name = "session"
 	}
 	sessionID := fmt.Sprintf("s-%s-%d", time.Now().UTC().Format("20060102-150405"), os.Getpid())
 	worktree := ""
 	dir := root
 	if *useWorktree {
-		wtDir, err := addWorktree(root, name)
+		wtDir, err := addWorktree(root, name, stdout, stderr)
 		if err != nil {
 			return err
 		}
@@ -340,15 +343,15 @@ func cmdRun(args []string) error {
 		ID: sessionID, Root: root, Kind: "agent", Task: *task, Status: "active", Worktree: worktree,
 	}); err != nil {
 		if worktree != "" {
-			_ = runGit(root, "worktree", "remove", "--force", worktree)
+			_ = runGit(stdout, stderr, root, "worktree", "remove", "--force", worktree)
 		}
 		return err
 	}
 	if err := store.AppendEvent(ctx, control.Event{SessionID: sessionID, Type: "agent_start", Payload: map[string]any{"task": *task, "dir": dir}}); err != nil {
-		fmt.Fprintln(os.Stderr, "warning: agent_start event not stored:", err)
+		fmt.Fprintln(stderr, "warning: agent_start event not stored:", err)
 	}
 
-	fmt.Printf("session %s\nrunning: codex exec --cd %s %q\n", sessionID, dir, *task)
+	fmt.Fprintf(stdout, "session %s\nrunning: codex exec --cd %s %q\n", sessionID, dir, *task)
 	codexArgs := []string{"exec"}
 	if *model != "" {
 		codexArgs = append(codexArgs, "--model", *model)
@@ -364,9 +367,13 @@ func cmdRun(args []string) error {
 	if runErr != nil {
 		status = "error"
 	}
+	payload := map[string]any{}
+	if runErr != nil {
+		payload["error"] = runErr.Error()
+	}
 	var bookkeepingErr error
-	if err := store.AppendEvent(ctx, control.Event{SessionID: sessionID, Type: "agent_output", Status: status, Payload: map[string]any{"error": fmt.Sprint(runErr)}}); err != nil {
-		fmt.Fprintln(os.Stderr, "agent_output event not stored:", err)
+	if err := store.AppendEvent(ctx, control.Event{SessionID: sessionID, Type: "agent_output", Status: status, Payload: payload}); err != nil {
+		fmt.Fprintln(stderr, "agent_output event not stored:", err)
 		status = "error"
 		bookkeepingErr = err
 	}

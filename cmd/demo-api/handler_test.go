@@ -337,7 +337,7 @@ func TestPlanEndpoints(t *testing.T) {
 
 func TestPlanDecisionApprovalWriteFailure(t *testing.T) {
 	root := t.TempDir()
-	h := testHandler(root, config.NewManager(root), metadata.Disabled{}, "")
+	h := testHandler(root, config.NewManager(root), metadata.Disabled{}, "s3cret")
 	if err := plans.Save(root, plans.Plan{Slug: "broken-plan", Stages: []plans.Stage{{ID: "S0", Status: "todo"}}}); err != nil {
 		t.Fatal(err)
 	}
@@ -345,7 +345,7 @@ func TestPlanDecisionApprovalWriteFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 	writeTestFile(t, filepath.Join(approvalPath(root, "broken-plan"), "keep"), "x")
-	rec := doRequest(t, h, http.MethodPost, "/plan/decision", `{"decision":"approve"}`, map[string]string{"Origin": "http://127.0.0.1:8787"})
+	rec := doRequest(t, h, http.MethodPost, "/plan/decision", `{"decision":"approve"}`, map[string]string{"X-HackathonKit-Token": "s3cret"})
 	if rec.Code != http.StatusInternalServerError {
 		t.Fatalf("decision with blocked approval path = %d, want 500: %s", rec.Code, rec.Body.String())
 	}
@@ -667,7 +667,8 @@ func TestMutationWithoutTokenRequiresOrigin(t *testing.T) {
 	if rec := doRequest(t, h, http.MethodPost, "/plan/decision", `{"decision":"approve"}`, nil); rec.Code != http.StatusUnauthorized {
 		t.Fatalf("header-less POST = %d, want 401", rec.Code)
 	}
-	if rec := doRequest(t, h, http.MethodPost, "/plan/decision", `{"decision":"approve"}`, map[string]string{"Origin": "http://127.0.0.1:8787"}); rec.Code != http.StatusOK {
-		t.Fatalf("loopback-origin POST = %d, want 200: %s", rec.Code, rec.Body.String())
+	// Origin alone is spoofable, so a token-less mutation stays unauthorized.
+	if rec := doRequest(t, h, http.MethodPost, "/plan/decision", `{"decision":"approve"}`, map[string]string{"Origin": "http://127.0.0.1:8787"}); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("loopback-origin POST without token = %d, want 401: %s", rec.Code, rec.Body.String())
 	}
 }

@@ -232,6 +232,8 @@ func readPID(root string) (int, bool) {
 func processLooksLikeDaemon(pid int) bool {
 	cmdline, err := os.ReadFile(filepath.Join("/proc", strconv.Itoa(pid), "cmdline"))
 	if err != nil {
+		// Non-Linux / restricted /proc: identity cannot be verified, so fall
+		// back to the caller's liveness check (documented residual risk).
 		return true
 	}
 	return strings.Contains(strings.ReplaceAll(string(cmdline), "\x00", " "), "hackathonkit-ctl")
@@ -274,7 +276,14 @@ func controlHandler(store *control.Store, token string) http.Handler {
 		outputs, outputsErr := store.Outputs(r.Context(), id, 10)
 		payload := map[string]any{"session": sess, "events": events, "outputs": outputs}
 		if eventsErr != nil || outputsErr != nil {
-			payload["errors"] = strings.TrimSpace(fmt.Sprintf("%v %v", eventsErr, outputsErr))
+			parts := []string{}
+			if eventsErr != nil {
+				parts = append(parts, "events: "+eventsErr.Error())
+			}
+			if outputsErr != nil {
+				parts = append(parts, "outputs: "+outputsErr.Error())
+			}
+			payload["errors"] = strings.Join(parts, "; ")
 		}
 		writeControlJSON(w, http.StatusOK, payload)
 	})

@@ -81,13 +81,16 @@ func TestRunKeywordOnlyWithHashFallback(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("code=%d stderr=%q", code, stderr)
 	}
-	for _, want := range []string{"fly-bench: 3 tasks", "baseline recall@k", "evidence: evals/fly-ab/unknown.json"} {
+	for _, want := range []string{"fly-bench: 3 tasks", "baseline recall@k", "evidence: evals/fly-ab/unknown-"} {
 		if !strings.Contains(stdout, want) {
 			t.Fatalf("stdout missing %q:\n%s", want, stdout)
 		}
 	}
-	evidencePath := filepath.Join(root, "evals", "fly-ab", "unknown.json")
-	data, err := os.ReadFile(evidencePath)
+	matches, gerr := filepath.Glob(filepath.Join(root, "evals", "fly-ab", "unknown-*.json"))
+	if gerr != nil || len(matches) != 1 {
+		t.Fatalf("evidence files = %v err=%v", matches, gerr)
+	}
+	data, err := os.ReadFile(matches[0])
 	if err != nil {
 		t.Fatalf("evidence file: %v", err)
 	}
@@ -140,10 +143,10 @@ func TestSave(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if rel != "evals/fly-ab/abc123.json" {
+	if !strings.HasPrefix(rel, "evals/fly-ab/abc123-") {
 		t.Fatalf("rel = %q", rel)
 	}
-	data, err := os.ReadFile(filepath.Join(root, "evals", "fly-ab", "abc123.json"))
+	data, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(rel)))
 	if err != nil {
 		t.Fatal(err)
 	}

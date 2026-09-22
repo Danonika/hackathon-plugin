@@ -268,22 +268,26 @@ function animate() {
   requestAnimationFrame(animate);
   const delta = clock.getDelta();
   const t = clock.getElapsedTime();
+  // Frame-rate independent smoothing: normalize the per-frame factor to 60 Hz.
+  const frame = Math.min(0.1, delta) * 60;
+  const smooth = (base) => 1 - Math.pow(1 - base, frame);
   if (window.__flyMixer) window.__flyMixer.update(Math.min(0.1, delta));
   wings.forEach((w, i) => { w.rotation.z = Math.sin(t * 40) * .5 * (i ? 1 : -1); });
   const hover = Math.sin(t * 2.2) * .18;
   if (state.mode === 'reward' || state.mode === 'punish') {
-    fly.position.lerp(state.target, .03);
+    fly.position.lerp(state.target, smooth(.03));
     if (state.mode === 'punish') { fly.position.x += Math.sin(t * 60) * .02; fly.position.y += Math.cos(t * 70) * .015; }
     if (fly.position.distanceTo(state.target) < .6) { state.mode = 'idle'; }
   } else {
     state.target.set(-4.5, 1.6 + hover, 0);
-    fly.position.lerp(state.target, .02);
+    fly.position.lerp(state.target, smooth(.02));
   }
-  bodyMat.color.lerp(state.mode === 'punish' ? COLOR_PUNISH : state.mode === 'reward' ? COLOR_REWARD : COLOR_IDLE, .05);
+  bodyMat.color.lerp(state.mode === 'punish' ? COLOR_PUNISH : state.mode === 'reward' ? COLOR_REWARD : COLOR_IDLE, smooth(.05));
   sugar.scale.setScalar(state.mode === 'reward' && fly.position.distanceTo(sugar.position) < 1.6 ? .55 : 1);
   pam.scale.setScalar(1 + .25 * Math.sin(t * 3) + (state.mode === 'reward' ? .8 : 0));
   ppl1.scale.setScalar(1 + .25 * Math.sin(t * 3.4) + (state.mode === 'punish' ? .9 : 0));
-  brainLight.intensity *= .96;
+  brainLight.intensity *= Math.pow(.96, frame);
+  if (brainLight.intensity < 0.01) brainLight.intensity = 0;
   brain.rotation.y += .0016;
   renderer.render(scene, camera);
 }

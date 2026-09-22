@@ -56,6 +56,17 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 
+	if *model != "mb" && *model != "knn" {
+		fmt.Fprintf(stderr, "fly-train: --model must be mb or knn, got %q\n", *model)
+		return 2
+	}
+	if *model == "knn" && *dataset != "" {
+		fmt.Fprintln(stderr, "fly-train: --model knn ignores --dataset (feedback memory rebuild)")
+	}
+	if *epochs <= 0 {
+		fmt.Fprintf(stderr, "fly-train: --epochs must be > 0, got %d\n", *epochs)
+		return 2
+	}
 	if *dataset == "" && *model == "knn" {
 		if err := rebuildFromFeedback(root, cfg, client, stdout); err != nil {
 			fmt.Fprintln(stderr, "fly-train:", err)

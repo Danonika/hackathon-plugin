@@ -163,6 +163,8 @@ function renderFly(events, feedback) {
     recs.innerHTML = '';
     signals.innerHTML = '';
     verdict.innerHTML = '<span class="muted">ожидание события routing.fly_recommend…</span>';
+    document.getElementById('fly-meta').textContent = '';
+    lastFlyTrace = null;
     return;
   }
   const ev = events[events.length - 1];
@@ -238,6 +240,7 @@ function renderFly(events, feedback) {
 
 function renderCalls(calls) {
   const el = document.getElementById('calls');
+  calls = Array.isArray(calls) ? calls : [];
   if (!calls.length) { el.innerHTML = '<li class="muted">ожидание вызовов…</li>'; return; }
   el.innerHTML = calls.slice().reverse().map(c =>
     '<li><span class="tool">' + esc(c.tool) + '</span>' +
@@ -247,6 +250,7 @@ function renderCalls(calls) {
 
 function renderFiles(id, files) {
   const el = document.getElementById(id);
+  files = Array.isArray(files) ? files : [];
   if (!files.length) { el.innerHTML = '<li class="muted">пусто</li>'; return; }
   el.innerHTML = files.map(f =>
     '<li><span>' + esc(f.path) + '</span><span class="size">' + esc(fmtSize(f.size_bytes)) + '</span></li>').join('');
@@ -257,19 +261,35 @@ async function refresh() {
   if (refreshing) return;
   refreshing = true;
   try {
-    const [routing, calls, fly, feedback, inputs, artifacts] = await Promise.allSettled([
-      j('/routing'), j('/calls?limit=40'), j('/fly-events?limit=10'), j('/fly-feedback?limit=20'),
-      j('/inputs'), j('/artifacts')
-    ]);
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 8000);
+    const opts = { signal: controller.signal };
+    let results;
+    try {
+      results = await Promise.allSettled([
+        j('/routing', opts), j('/calls?limit=40', opts), j('/fly-events?limit=10', opts), j('/fly-feedback?limit=20', opts),
+        j('/inputs', opts), j('/artifacts', opts)
+      ]);
+    } finally {
+      clearTimeout(timer);
+    }
+    const [routing, calls, fly, feedback, inputs, artifacts] = results;
+    const panel = (r) => (r && r.status === 'fulfilled');
     // One failing panel must not blank the whole dashboard.
-    if (routing.status === 'fulfilled') renderRouting(routing.value);
-    if (calls.status === 'fulfilled') renderCalls(calls.value.calls);
-    if (fly.status === 'fulfilled') renderFly(fly.value.events, feedback.status === 'fulfilled' ? feedback.value.events : []);
-    if (inputs.status === 'fulfilled') renderFiles('inputs', inputs.value.files);
-    if (artifacts.status === 'fulfilled') renderFiles('artifacts', artifacts.value.files);
-    document.getElementById('status').textContent = 'updated ' + new Date().toLocaleTimeString();
+    if (panel(routing)) renderRouting(routing.value);
+    if (panel(calls)) renderCalls((calls.value || {}).calls);
+    if (panel(fly)) renderFly((fly.value || {}).events || [], panel(feedback) ? (feedback.value || {}).events || [] : []);
+    if (panel(inputs)) renderFiles('inputs', (inputs.value || {}).files);
+    if (panel(artifacts)) renderFiles('artifacts', (artifacts.value || {}).files);
+    const failed = [routing, calls, fly, feedback, inputs, artifacts].filter(r => r && r.status === 'rejected').length;
+    const statusEl = document.getElementById('status');
+    if (failed === 0) {
+      statusEl.textContent = 'updated ' + new Date().toLocaleTimeString();
+    } else {
+      statusEl.textContent = failed + ' panel(s) degraded · updated ' + new Date().toLocaleTimeString();
+    }
   } catch (e) {
-    document.getElementById('status').textContent = 'offline: ' + e.message;
+    document.getElementById('status').textContent = 'render error: ' + e.message;
   } finally {
     refreshing = false;
   }

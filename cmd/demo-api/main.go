@@ -13,10 +13,13 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
+	"syscall"
 	"time"
 
 	"hackathonkit.local/agentkit/internal/atomicfile"
@@ -61,16 +64,37 @@ func main() {
 		Addr:              addr,
 		Handler:           newHandler(root, mgr, meta, token, logger),
 		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		WriteTimeout:      60 * time.Second,
+		IdleTimeout:       120 * time.Second,
 	}
 	observability.Log(logger, "info", "demo_api_start", map[string]any{"addr": addr, "root": root})
-	if err := server.ListenAndServe(); err != nil {
-		fmt.Fprintln(os.Stderr, "demo-api error:", err)
-		meta.Close()
-		os.Exit(1)
+
+	errCh := make(chan error, 1)
+	go func() { errCh <- server.ListenAndServe() }()
+
+	stop := make(chan os.Signal, 1)
+	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
+	select {
+	case err := <-errCh:
+		if err != nil && err != http.ErrServerClosed {
+			fmt.Fprintln(os.Stderr, "demo-api error:", err)
+			meta.Close()
+			os.Exit(1)
+		}
+	case <-stop:
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if err := server.Shutdown(ctx); err != nil {
+			fmt.Fprintln(os.Stderr, "demo-api shutdown error:", err)
+		}
 	}
+	meta.Close()
 }
 
 func newHandler(root string, mgr *config.Manager, meta metadata.Recorder, token string, logger *log.Logger) http.Handler {
+	// Serializes the read-compare-write of a plan decision.
+	var decisionMu sync.Mutex
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/" {
@@ -210,6 +234,8 @@ func newHandler(root string, mgr *config.Manager, meta metadata.Recorder, token 
 		if !authorizeMutation(w, r, token) {
 			return
 		}
+		decisionMu.Lock()
+		defer decisionMu.Unlock()
 		var body struct {
 			Slug     string `json:"slug"`
 			Revision int    `json:"revision"`
@@ -439,11 +465,10 @@ func authorizeMutation(w http.ResponseWriter, r *http.Request, token string) boo
 		return false
 	}
 	if token == "" {
-		if r.Header.Get("Origin") == "" {
-			writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "set HACKATHONKIT_DEMO_TOKEN or send a loopback Origin header"})
-			return false
-		}
-		return true
+		// Origin is client-controlled and spoofable by any local process, so it
+		// is not sufficient authorization for a mutation.
+		writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "mutations require HACKATHONKIT_DEMO_TOKEN to be set (and sent as X-HackathonKit-Token)"})
+		return false
 	}
 	if subtle.ConstantTimeCompare([]byte(r.Header.Get("X-HackathonKit-Token")), []byte(token)) != 1 {
 		writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "missing or invalid X-HackathonKit-Token"})

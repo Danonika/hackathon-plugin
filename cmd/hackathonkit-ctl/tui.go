@@ -20,10 +20,12 @@ type loadedMsg struct {
 	events   []control.Event
 	err      error
 	selected int
+	gen      int
 }
 
 type tuiModel struct {
 	store     *control.Store
+	gen       int
 	sessions  []control.Session
 	events    []control.Event
 	selected  int
@@ -55,7 +57,7 @@ func newTUIModel(store *control.Store, ingestErr error) tuiModel {
 }
 
 // loadCmd runs the store queries off the update goroutine with a deadline.
-func loadCmd(store *control.Store, selected int) tea.Cmd {
+func loadCmd(store *control.Store, selected, gen int) tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
@@ -73,11 +75,15 @@ func loadCmd(store *control.Store, selected int) tea.Cmd {
 		if len(sessions) > 0 {
 			events, err = store.Events(ctx, sessions[selected].ID, 20)
 		}
-		return loadedMsg{sessions: sessions, events: events, err: err, selected: selected}
+		return loadedMsg{sessions: sessions, events: events, err: err, selected: selected, gen: gen}
 	}
 }
 
 func (m *tuiModel) applyLoaded(msg loadedMsg) {
+	if msg.gen != 0 && msg.gen < m.gen {
+		// A newer load has superseded this response.
+		return
+	}
 	if msg.sessions == nil {
 		// The sessions query itself failed: keep the previous view.
 		m.err = msg.err
@@ -91,7 +97,7 @@ func (m *tuiModel) applyLoaded(msg loadedMsg) {
 }
 
 func (m tuiModel) Init() tea.Cmd {
-	return tea.Batch(tickCmd(), loadCmd(m.store, m.selected))
+	return tea.Batch(tickCmd(), loadCmd(m.store, m.selected, m.gen))
 }
 
 func tickCmd() tea.Cmd {
@@ -107,15 +113,18 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "up", "k":
 			if m.selected > 0 {
 				m.selected--
-				return m, loadCmd(m.store, m.selected)
+				m.gen++
+				return m, loadCmd(m.store, m.selected, m.gen)
 			}
 		case "down", "j":
 			if m.selected < len(m.sessions)-1 {
 				m.selected++
-				return m, loadCmd(m.store, m.selected)
+				m.gen++
+				return m, loadCmd(m.store, m.selected, m.gen)
 			}
 		case "r":
-			return m, loadCmd(m.store, m.selected)
+			m.gen++
+			return m, loadCmd(m.store, m.selected, m.gen)
 		}
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
@@ -123,7 +132,8 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case loadedMsg:
 		m.applyLoaded(msg)
 	case refreshMsg:
-		return m, tea.Batch(tickCmd(), loadCmd(m.store, m.selected))
+		m.gen++
+		return m, tea.Batch(tickCmd(), loadCmd(m.store, m.selected, m.gen))
 	}
 	return m, nil
 }

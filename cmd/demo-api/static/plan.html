@@ -51,12 +51,14 @@
 <script>
 let TOKEN = sessionStorage.getItem("hackathonkitToken") || "";
 let current = null;
+let reviewed = null;
 
 function esc(v) { return String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])); }
 
 let planLoading = false;
+let planPending = false;
 async function load() {
-  if (planLoading) return;
+  if (planLoading) { planPending = true; return; }
   planLoading = true;
   try {
   const res = await fetch("/plan/api/latest");
@@ -69,9 +71,13 @@ async function load() {
     meta.textContent = "No plan yet. Create one with the plan.create MCP tool.";
     document.getElementById("approval").textContent = "";
     current = null;
+    reviewed = null;
     return;
   }
   current = data.plan;
+  // Snapshot the exact revision being reviewed; decide() sends this, not
+  // whatever a later poll may have swapped in.
+  reviewed = { slug: data.plan.slug, revision: data.plan.revision };
   meta.textContent = "plan " + data.plan.slug + " r" + data.plan.revision + (data.plan.task ? " - " + data.plan.task : "");
   for (const s of data.plan.stages || []) {
     const tr = document.createElement("tr");
@@ -88,11 +94,12 @@ async function load() {
     banner.textContent = "plan load failed: " + err.message;
   } finally {
     planLoading = false;
+    if (planPending) { planPending = false; load(); }
   }
 }
 
 async function decide(decision) {
-  if (!current) return;
+  if (!reviewed) return;
   const banner = document.getElementById("banner");
   const field = document.getElementById("token");
   TOKEN = (field && field.value.trim()) || TOKEN;
@@ -105,7 +112,7 @@ async function decide(decision) {
     const res = await fetch("/plan/decision", {
       method: "POST",
       headers,
-      body: JSON.stringify({ slug: current.slug, revision: current.revision, decision, note: document.getElementById("note").value })
+      body: JSON.stringify({ slug: reviewed.slug, revision: reviewed.revision, decision, note: document.getElementById("note").value })
     });
     let data = {};
     try {

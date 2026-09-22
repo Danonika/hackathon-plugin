@@ -50,18 +50,26 @@
 <script>
 let selected = null;
 
-function riskClass(score) {
-  if (score >= 50) return "risk-high";
-  if (score >= 20) return "risk-mid";
-  return "risk-low";
+function riskValue(score) {
+  const n = Number(score);
+  return Number.isFinite(n) ? n : 0;
 }
 
-function esc(value) {
-  return String(value ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+function riskClass(score) {
+  const n = riskValue(score);
+  if (n >= 50) return "risk-high";
+  if (n >= 20) return "risk-mid";
+  return "risk-low";
 }
 
 let sessionsLoading = false;
 const sessionRows = new Map();
+
+function highlightSelected() {
+  for (const [id, row] of sessionRows) {
+    row.className = "session" + (id === selected ? " selected" : "");
+  }
+}
 
 function cell(tr, index) {
   return tr.children[index];
@@ -88,14 +96,14 @@ async function loadSessions() {
       if (!tr) {
         tr = document.createElement("tr");
         for (let i = 0; i < 5; i++) tr.appendChild(document.createElement("td"));
-        tr.addEventListener("click", () => { selected = s.id; loadSessions(); });
+        tr.addEventListener("click", () => { selected = s.id; highlightSelected(); loadSessions(); });
         tbody.appendChild(tr);
         sessionRows.set(s.id, tr);
       }
       tr.className = "session" + (s.id === selected ? " selected" : "");
       cell(tr, 0).textContent = s.id;
       cell(tr, 1).textContent = s.status;
-      cell(tr, 2).textContent = (Number(s.risk_score) || 0).toFixed(1);
+      cell(tr, 2).textContent = riskValue(s.risk_score).toFixed(1);
       cell(tr, 2).className = riskClass(s.risk_score);
       cell(tr, 3).textContent = (s.updated_at || "").replace("T", " ").slice(0, 19);
       cell(tr, 4).textContent = (s.task || "").slice(0, 60);

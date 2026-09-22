@@ -275,7 +275,7 @@ func save(root string, rep report) (string, error) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return "", err
 	}
-	path := filepath.Join(dir, rep.SHA+".json")
+	path := filepath.Join(dir, fmt.Sprintf("%s-%s.json", rep.SHA, rep.GeneratedAt.UTC().Format("20060102T150405.000000000")))
 	data, err := json.MarshalIndent(rep, "", "  ")
 	if err != nil {
 		return "", err

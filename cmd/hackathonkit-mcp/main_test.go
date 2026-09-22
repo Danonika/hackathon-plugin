@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -216,11 +217,11 @@ func TestCountFiles(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(dir, "d.json"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if got := countFiles(dir); got != 2 {
+	if got := countFiles(dir, io.Discard); got != 2 {
 		t.Fatalf("countFiles = %d, want 2", got)
 	}
-	if got := countFiles(filepath.Join(dir, "missing")); got != 0 {
-		t.Fatalf("countFiles(missing) = %d", got)
+	if got := countFiles(filepath.Join(dir, "missing"), io.Discard); got != 0 {
+		t.Fatalf("countFiles(missing, io.Discard) = %d", got)
 	}
 }
 
