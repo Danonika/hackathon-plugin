@@ -17,7 +17,6 @@ type refreshMsg struct{}
 
 type tuiModel struct {
 	store    *control.Store
-	root     string
 	sessions []control.Session
 	events   []control.Event
 	selected int
@@ -37,13 +36,13 @@ func cmdTUI(args []string) error {
 	if _, err := store.Ingest(context.Background(), root); err != nil {
 		fmt.Fprintln(os.Stderr, "ingest:", err)
 	}
-	program := tea.NewProgram(newTUIModel(store, root), tea.WithAltScreen())
+	program := tea.NewProgram(newTUIModel(store), tea.WithAltScreen())
 	_, err = program.Run()
 	return err
 }
 
-func newTUIModel(store *control.Store, root string) tuiModel {
-	model := tuiModel{store: store, root: root}
+func newTUIModel(store *control.Store) tuiModel {
+	model := tuiModel{store: store}
 	model.load()
 	return model
 }

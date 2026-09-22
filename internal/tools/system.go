@@ -3,7 +3,6 @@ package tools
 import (
 	"context"
 	"path/filepath"
-	"strings"
 	"time"
 
 	"hackathonkit.local/agentkit/internal/mcp"
@@ -218,8 +217,4 @@ func registerSystem(reg *mcp.Registry, d Deps) {
 			}).WithMetrics(map[string]any{"memory_size": size}), nil
 		},
 	))
-}
-
-func toolNameIsExperimental(name string) bool {
-	return strings.HasPrefix(name, "routing.")
 }

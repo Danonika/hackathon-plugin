@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -43,6 +44,15 @@ func TestSetRoutingMode(t *testing.T) {
 	}
 	if got := mgr.Routing().Mode; got != "fly" {
 		t.Fatalf("expected cached state fly, got %s", got)
+	}
+	if runtime.GOOS != "windows" {
+		info, err := os.Stat(mgr.RoutingPath())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if info.Mode().Perm() != 0o644 {
+			t.Fatalf("routing.yaml mode = %v, want 0644", info.Mode().Perm())
+		}
 	}
 	if _, err := mgr.SetRoutingMode("turbo"); err == nil {
 		t.Fatal("expected error for invalid mode")

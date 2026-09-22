@@ -8,18 +8,6 @@ import (
 	"testing"
 )
 
-func TestSortStages(t *testing.T) {
-	stages := []Stage{{ID: "S3"}, {ID: "S0"}, {ID: "S2"}, {ID: "S1"}}
-	SortStages(stages)
-	got := []string{stages[0].ID, stages[1].ID, stages[2].ID, stages[3].ID}
-	want := []string{"S0", "S1", "S2", "S3"}
-	for i := range want {
-		if got[i] != want[i] {
-			t.Fatalf("SortStages = %v", got)
-		}
-	}
-}
-
 func TestSaveDefaults(t *testing.T) {
 	root := t.TempDir()
 	if err := Save(root, Plan{Slug: "defaults", Revision: -3}); err != nil {
@@ -136,9 +124,6 @@ func TestLoadParseErrorAndSlugFallback(t *testing.T) {
 	}
 	if loaded.Slug != "no-slug" {
 		t.Fatalf("slug fallback = %q", loaded.Slug)
-	}
-	if loaded.Path == "" {
-		t.Fatal("Path must be set")
 	}
 }
 

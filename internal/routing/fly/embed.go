@@ -9,8 +9,9 @@ import (
 	"log"
 	"math"
 	"os"
-	"path/filepath"
 	"sort"
+
+	"hackathonkit.local/agentkit/internal/atomicfile"
 )
 
 type Embedder interface {
@@ -278,34 +279,10 @@ func (r *Router) buildCentroids(ctx context.Context) (map[string][]float64, bool
 }
 
 // writeFileAtomic writes data via a unique temp file + rename so concurrent
-// writers cannot leave a truncated or interleaved cache behind.
+// writers cannot leave a truncated or interleaved cache behind. Cache writes
+// are best-effort: a failed write is retried on the next save.
 func writeFileAtomic(path string, data []byte) {
-	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return
-	}
-	tmp, err := os.CreateTemp(dir, "fly-embeddings-*.tmp")
-	if err != nil {
-		return
-	}
-	tmpName := tmp.Name()
-	if _, err := tmp.Write(data); err != nil {
-		tmp.Close()
-		os.Remove(tmpName)
-		return
-	}
-	if err := tmp.Chmod(0o644); err != nil {
-		tmp.Close()
-		os.Remove(tmpName)
-		return
-	}
-	if err := tmp.Close(); err != nil {
-		os.Remove(tmpName)
-		return
-	}
-	if err := os.Rename(tmpName, path); err != nil {
-		os.Remove(tmpName)
-	}
+	_ = atomicfile.Write(path, data, atomicfile.ModeContent)
 }
 
 func normalizeVector(v []float64) []float64 {

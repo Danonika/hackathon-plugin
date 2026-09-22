@@ -36,22 +36,13 @@ var JudgeCriteria = []Criterion{
 	{Key: "presentation_demo_qa", Max: 20},
 }
 
-// TechnicalCriteria are the internal project-cost weights.
-var TechnicalCriteria = []Criterion{
-	{Key: "case_and_functionality", Max: 20},
-	{Key: "technical_implementation", Max: 25},
-	{Key: "readme_and_docs", Max: 20},
-	{Key: "reproducibility", Max: 20},
-	{Key: "reliability_and_security", Max: 15},
-}
-
-func criterionMax(criteria []Criterion, key string) (float64, bool) {
+func criterionKnown(criteria []Criterion, key string) bool {
 	for _, c := range criteria {
 		if c.Key == key {
-			return c.Max, true
+			return true
 		}
 	}
-	return 0, false
+	return false
 }
 
 type Evidence struct {
@@ -148,7 +139,7 @@ func ValidateJudgeReport(r JudgeReport, snapshotSHA string) []string {
 	}
 	unknown := make([]string, 0, len(r.Scores))
 	for key := range r.Scores {
-		if _, ok := criterionMax(JudgeCriteria, key); !ok {
+		if !criterionKnown(JudgeCriteria, key) {
 			unknown = append(unknown, key)
 		}
 	}
@@ -163,7 +154,7 @@ func ValidateJudgeReport(r JudgeReport, snapshotSHA string) []string {
 		problems = append(problems, "no evidence entries")
 	}
 	for _, d := range r.Deductions {
-		if _, ok := criterionMax(JudgeCriteria, d.Criterion); !ok {
+		if !criterionKnown(JudgeCriteria, d.Criterion) {
 			problems = append(problems, "deduction for unknown criterion "+d.Criterion)
 		}
 		if strings.TrimSpace(d.Reason) == "" {

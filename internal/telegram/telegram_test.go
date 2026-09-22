@@ -218,13 +218,10 @@ func TestUnconfiguredClient(t *testing.T) {
 	}
 }
 
-func TestChunkTextAndEscapeHTML(t *testing.T) {
+func TestChunkText(t *testing.T) {
 	chunks := ChunkText(strings.Repeat("x", 10)+"\n"+strings.Repeat("y", 10), 12)
 	if len(chunks) != 2 || chunks[0] != strings.Repeat("x", 10)+"\n" {
 		t.Fatalf("chunks = %#v", chunks)
-	}
-	if got := EscapeHTML("<b>&</b>"); got != "&lt;b&gt;&amp;&lt;/b&gt;" {
-		t.Fatalf("EscapeHTML = %q", got)
 	}
 }
 

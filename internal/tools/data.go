@@ -151,23 +151,23 @@ func profileColumns(t *table, selected []string) []columnProfile {
 	return out
 }
 
-func (d Deps) loadTable(ctx context.Context, args map[string]any) (string, *table, []string, *mcp.Envelope) {
+func (d Deps) loadTable(ctx context.Context, args map[string]any) (*table, []string, *mcp.Envelope) {
 	path := argString(args, "path")
 	if path == "" {
 		env := mcp.Fail(trace(ctx), "path is required")
-		return "", nil, nil, &env
+		return nil, nil, &env
 	}
 	full, err := d.Store.InputPath(path)
 	if err != nil {
 		env := mcp.Fail(trace(ctx), err.Error())
-		return "", nil, nil, &env
+		return nil, nil, &env
 	}
 	t, warnings, err := readAnyTable(full, argString(args, "sheet"))
 	if err != nil {
 		env := mcp.Fail(trace(ctx), err.Error())
-		return "", nil, nil, &env
+		return nil, nil, &env
 	}
-	return full, t, warnings, nil
+	return t, warnings, nil
 }
 
 func registerData(reg *mcp.Registry, d Deps) {
@@ -181,7 +181,7 @@ func registerData(reg *mcp.Registry, d Deps) {
 		},
 		[]string{"path"},
 		func(ctx context.Context, args map[string]any) (any, error) {
-			_, t, warnings, fail := d.loadTable(ctx, args)
+			t, warnings, fail := d.loadTable(ctx, args)
 			if fail != nil {
 				return *fail, nil
 			}
@@ -214,7 +214,7 @@ func registerData(reg *mcp.Registry, d Deps) {
 		},
 		[]string{"path"},
 		func(ctx context.Context, args map[string]any) (any, error) {
-			_, t, warnings, fail := d.loadTable(ctx, args)
+			t, warnings, fail := d.loadTable(ctx, args)
 			if fail != nil {
 				return *fail, nil
 			}
@@ -282,7 +282,7 @@ func registerData(reg *mcp.Registry, d Deps) {
 		},
 		[]string{"path"},
 		func(ctx context.Context, args map[string]any) (any, error) {
-			_, t, warnings, fail := d.loadTable(ctx, args)
+			t, warnings, fail := d.loadTable(ctx, args)
 			if fail != nil {
 				return *fail, nil
 			}

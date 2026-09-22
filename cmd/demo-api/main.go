@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"hackathonkit.local/agentkit/internal/atomicfile"
 	"hackathonkit.local/agentkit/internal/config"
 	"hackathonkit.local/agentkit/internal/control"
 	"hackathonkit.local/agentkit/internal/metadata"
@@ -61,6 +62,7 @@ func main() {
 	observability.Log(logger, "info", "demo_api_start", map[string]any{"addr": addr, "root": root})
 	if err := server.ListenAndServe(); err != nil {
 		fmt.Fprintln(os.Stderr, "demo-api error:", err)
+		meta.Close()
 		os.Exit(1)
 	}
 }
@@ -358,26 +360,8 @@ func writeApproval(root, slug string, revision int, decision, note string) (plan
 	if err != nil {
 		return record, err
 	}
-	if err := os.MkdirAll(plans.Dir(root), 0o755); err != nil {
-		return record, err
-	}
 	path := approvalPath(root, slug)
-	tmp, err := os.CreateTemp(plans.Dir(root), "approval-*.tmp")
-	if err != nil {
-		return record, err
-	}
-	tmpName := tmp.Name()
-	if _, err := tmp.Write(append(data, '\n')); err != nil {
-		tmp.Close()
-		os.Remove(tmpName)
-		return record, err
-	}
-	if err := tmp.Close(); err != nil {
-		os.Remove(tmpName)
-		return record, err
-	}
-	if err := os.Rename(tmpName, path); err != nil {
-		os.Remove(tmpName)
+	if err := atomicfile.Write(path, append(data, '\n'), atomicfile.ModeState); err != nil {
 		return record, err
 	}
 	return record, nil

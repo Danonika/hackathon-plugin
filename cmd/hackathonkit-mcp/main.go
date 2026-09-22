@@ -29,7 +29,7 @@ import (
 	"hackathonkit.local/agentkit/internal/tools"
 )
 
-const version = "0.13.1"
+const version = "0.13.2"
 
 func main() {
 	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
@@ -163,7 +163,6 @@ func run(args []string, stdout, stderr io.Writer) int {
 		Learning: learn,
 		Telegram: tg,
 		Meta:     meta,
-		Version:  version,
 	})
 
 	srv := mcp.NewServer(reg, mcp.ServerOptions{

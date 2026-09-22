@@ -3,6 +3,7 @@ package quality
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 )
@@ -25,6 +26,15 @@ func TestSaveAndLatest(t *testing.T) {
 	}
 	if path != "evals/quality/abc123/gate.json" {
 		t.Fatalf("path = %q", path)
+	}
+	if runtime.GOOS != "windows" {
+		info, err := os.Stat(filepath.Join(root, path))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if info.Mode().Perm() != 0o600 {
+			t.Fatalf("gate report mode = %v, want 0600", info.Mode().Perm())
+		}
 	}
 	latest, ok := Latest(root)
 	if !ok || latest.SHA != "abc123" || !latest.OK {

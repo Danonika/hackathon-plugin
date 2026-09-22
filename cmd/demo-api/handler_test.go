@@ -612,6 +612,15 @@ func TestApprovalHelpers(t *testing.T) {
 	if loaded == nil || loaded.Decision != "approve" || loaded.Note != "note" {
 		t.Fatalf("loaded = %+v", loaded)
 	}
+	if runtime.GOOS != "windows" {
+		info, err := os.Stat(approvalPath(root, "p"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if info.Mode().Perm() != 0o600 {
+			t.Fatalf("approval mode = %v, want 0600", info.Mode().Perm())
+		}
+	}
 
 	writeTestFile(t, approvalPath(root, "corrupt"), "{not json")
 	if got := readApproval(root, "corrupt"); got != nil {

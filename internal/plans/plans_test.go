@@ -3,6 +3,7 @@ package plans
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -17,6 +18,15 @@ func TestSaveLoadLatest(t *testing.T) {
 	}
 	if err := Save(root, plan); err != nil {
 		t.Fatal(err)
+	}
+	if runtime.GOOS != "windows" {
+		info, err := os.Stat(Path(root, "telemetry-anomalies"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if info.Mode().Perm() != 0o600 {
+			t.Fatalf("plan mode = %v, want 0600", info.Mode().Perm())
+		}
 	}
 	loaded, err := Load(root, "telemetry-anomalies")
 	if err != nil {

@@ -7,9 +7,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 	"time"
+
+	"hackathonkit.local/agentkit/internal/atomicfile"
 )
 
 type Stage struct {
@@ -27,8 +28,6 @@ type Plan struct {
 	MandatoryScenario map[string]any `json:"mandatory_scenario,omitempty"`
 	Stages            []Stage        `json:"stages"`
 	UpdatedAt         time.Time      `json:"updated_at"`
-
-	Path string `json:"-"`
 }
 
 var DefaultStages = []Stage{
@@ -97,7 +96,6 @@ func Load(root, slug string) (Plan, error) {
 	if plan.Slug == "" {
 		plan.Slug = Slug(slug)
 	}
-	plan.Path = path
 	return plan, nil
 }
 
@@ -125,7 +123,6 @@ func Latest(root string) (Plan, bool) {
 		if json.Unmarshal(data, &plan) != nil {
 			continue
 		}
-		plan.Path = filepath.Join(Dir(root), entry.Name())
 		best, bestTime = plan, info.ModTime()
 	}
 	if bestTime.IsZero() {
@@ -151,26 +148,8 @@ func Save(root string, plan Plan) error {
 	if err != nil {
 		return err
 	}
-	dir := Dir(root)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return err
-	}
 	path := Path(root, plan.Slug)
-	tmp, err := os.CreateTemp(dir, "plan-*.tmp")
-	if err != nil {
-		return err
-	}
-	tmpName := tmp.Name()
-	if _, err := tmp.Write(append(data, '\n')); err != nil {
-		tmp.Close()
-		os.Remove(tmpName)
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		os.Remove(tmpName)
-		return err
-	}
-	return os.Rename(tmpName, path)
+	return atomicfile.Write(path, append(data, '\n'), atomicfile.ModeState)
 }
 
 func CurrentStage(plan Plan) (Stage, bool) {
@@ -189,8 +168,4 @@ func Summary(plan Plan) string {
 		return fmt.Sprintf("plan: %s r%d all stages complete", plan.Slug, plan.Revision)
 	}
 	return fmt.Sprintf("plan: %s r%d stage %s (%s)", plan.Slug, plan.Revision, stage.ID, stage.Status)
-}
-
-func SortStages(stages []Stage) {
-	sort.SliceStable(stages, func(i, j int) bool { return stages[i].ID < stages[j].ID })
 }

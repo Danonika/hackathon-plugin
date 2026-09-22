@@ -144,7 +144,7 @@ func (r *Router) Recommend(ctx context.Context, task string, meta map[string]any
 					scores[category] *= 0.6
 				}
 				for category, vote := range knn {
-					scores[category] = scores[category] + 0.4*vote
+					scores[category] += 0.4 * vote
 					if scores[category] > 1.0 {
 						scores[category] = 1.0
 					}
@@ -161,7 +161,7 @@ func (r *Router) Recommend(ctx context.Context, task string, meta map[string]any
 			scores[category] *= 0.4
 		}
 		for category, mb := range mbScores {
-			scores[category] = scores[category] + 0.6*mb
+			scores[category] += 0.6 * mb
 			if scores[category] > 1.0 {
 				scores[category] = 1.0
 			}
@@ -173,7 +173,7 @@ func (r *Router) Recommend(ctx context.Context, task string, meta map[string]any
 			scores[category] *= 0.4
 		}
 		for category, v := range llmScores {
-			scores[category] = scores[category] + 0.6*v
+			scores[category] += 0.6 * v
 			if scores[category] > 1.0 {
 				scores[category] = 1.0
 			}

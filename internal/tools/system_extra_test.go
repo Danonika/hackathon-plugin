@@ -81,12 +81,3 @@ func TestFlyRecommendCustomCapabilities(t *testing.T) {
 		t.Fatalf("data = %+v", data)
 	}
 }
-
-func TestToolNameIsExperimental(t *testing.T) {
-	if !toolNameIsExperimental("routing.fly_recommend") {
-		t.Fatal("routing.* must be experimental")
-	}
-	if toolNameIsExperimental("data.inspect") {
-		t.Fatal("data.* must not be experimental")
-	}
-}

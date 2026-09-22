@@ -115,7 +115,7 @@ func registerTimeSeries(reg *mcp.Registry, d Deps) {
 		},
 		[]string{"path"},
 		func(ctx context.Context, args map[string]any) (any, error) {
-			_, t, warnings, fail := d.loadTable(ctx, args)
+			t, warnings, fail := d.loadTable(ctx, args)
 			if fail != nil {
 				return *fail, nil
 			}
@@ -175,7 +175,7 @@ func registerTimeSeries(reg *mcp.Registry, d Deps) {
 		},
 		[]string{"path"},
 		func(ctx context.Context, args map[string]any) (any, error) {
-			_, t, warnings, fail := d.loadTable(ctx, args)
+			t, warnings, fail := d.loadTable(ctx, args)
 			if fail != nil {
 				return *fail, nil
 			}

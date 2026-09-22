@@ -606,9 +606,3 @@ func cutOutsideTag(runes []rune, start, cut int) int {
 	}
 	return cut
 }
-
-// EscapeHTML escapes text for parse_mode=HTML.
-func EscapeHTML(text string) string {
-	replacer := strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;")
-	return replacer.Replace(text)
-}

@@ -109,7 +109,7 @@ func splitMix64(state *uint64) float64 {
 	z := *state
 	z = (z ^ (z >> 30)) * 0xbf58476d1ce4e5b9
 	z = (z ^ (z >> 27)) * 0x94d049bb133111eb
-	z = z ^ (z >> 31)
+	z ^= z >> 31
 	return float64(z>>11)/float64(1<<53)*2 - 1
 }
 

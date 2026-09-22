@@ -259,7 +259,6 @@ type mcpClient struct {
 	cmd     *exec.Cmd
 	stdin   io.WriteCloser
 	stdout  *bufio.Reader
-	stderr  *bytes.Buffer
 	nextID  int
 	timeout time.Duration
 }
@@ -283,7 +282,6 @@ func startMCP(binary, root string) (*mcpClient, error) {
 		cmd:     cmd,
 		stdin:   stdin,
 		stdout:  bufio.NewReaderSize(stdoutPipe, 1<<20),
-		stderr:  stderr,
 		timeout: 60 * time.Second,
 	}
 	if _, err := client.request("initialize", map[string]any{
@@ -438,7 +436,7 @@ func (r *rehearsal) run() {
 		}
 		return m
 	}
-	fail := func(format string, args ...any) error { return fmt.Errorf(format, args...) }
+	fail := fmt.Errorf
 
 	ok := true
 	ok = r.step("system.context", "system.context", map[string]any{}, false, func(env map[string]any) (string, error) {

@@ -12,6 +12,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"hackathonkit.local/agentkit/internal/atomicfile"
 )
 
 type Check struct {
@@ -136,29 +138,11 @@ func Path(root, sha string) string {
 // Save writes the report atomically and returns the repository-relative path.
 func Save(root string, report Report) (string, error) {
 	path := Path(root, report.SHA)
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return "", err
-	}
 	data, err := json.MarshalIndent(report, "", "  ")
 	if err != nil {
 		return "", err
 	}
-	tmp, err := os.CreateTemp(filepath.Dir(path), "gate-*.tmp")
-	if err != nil {
-		return "", err
-	}
-	tmpName := tmp.Name()
-	if _, err := tmp.Write(append(data, '\n')); err != nil {
-		tmp.Close()
-		os.Remove(tmpName)
-		return "", err
-	}
-	if err := tmp.Close(); err != nil {
-		os.Remove(tmpName)
-		return "", err
-	}
-	if err := os.Rename(tmpName, path); err != nil {
-		os.Remove(tmpName)
+	if err := atomicfile.Write(path, append(data, '\n'), atomicfile.ModeState); err != nil {
 		return "", err
 	}
 	if rel, err := filepath.Rel(root, path); err == nil {

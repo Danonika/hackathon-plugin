@@ -25,7 +25,6 @@ type Deps struct {
 	Learning *learning.Store
 	Telegram *telegram.Client
 	Meta     metadata.Recorder
-	Version  string
 }
 
 func RegisterAll(reg *mcp.Registry, d Deps) {

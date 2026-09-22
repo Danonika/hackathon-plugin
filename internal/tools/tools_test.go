@@ -41,7 +41,6 @@ func testRegistry(t *testing.T) (*mcp.Registry, string) {
 		Router:   fly.NewRouter(mgr.Config().Routing),
 		Learning: learning.NewStore(filepath.Join(root, "data", "index", "learnings.json"), learning.ProjectKey(root)),
 		Telegram: telegram.New(telegram.Settings{}),
-		Version:  "test",
 	})
 	return reg, root
 }

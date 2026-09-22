@@ -594,7 +594,7 @@ func TestTUIModelLoadViewAndUpdate(t *testing.T) {
 	}
 	defer store.Close()
 
-	model := newTUIModel(store, root)
+	model := newTUIModel(store)
 	if len(model.sessions) != 2 {
 		t.Fatalf("model sessions = %+v", model.sessions)
 	}
@@ -662,7 +662,7 @@ func TestTUIModelEmptyAndErrorStates(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	empty := newTUIModel(store, root)
+	empty := newTUIModel(store)
 	if view := empty.View(); !strings.Contains(view, "No sessions recorded yet.") {
 		t.Fatalf("empty view = %q", view)
 	}
@@ -670,7 +670,7 @@ func TestTUIModelEmptyAndErrorStates(t *testing.T) {
 	if err := store.Close(); err != nil {
 		t.Fatal(err)
 	}
-	broken := newTUIModel(store, root)
+	broken := newTUIModel(store)
 	broken.load()
 	if view := broken.View(); !strings.Contains(view, "error:") {
 		t.Fatalf("broken view = %q", view)

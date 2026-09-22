@@ -119,9 +119,7 @@ func registerPlans(reg *mcp.Registry, d Deps) {
 				if goal := argString(args, "goal"); goal != "" {
 					plan.Stages[i].Goal = goal
 				}
-				for _, evidence := range argStringSlice(args, "evidence") {
-					plan.Stages[i].Evidence = append(plan.Stages[i].Evidence, evidence)
-				}
+				plan.Stages[i].Evidence = append(plan.Stages[i].Evidence, argStringSlice(args, "evidence")...)
 				found = true
 				break
 			}

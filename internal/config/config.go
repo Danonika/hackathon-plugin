@@ -9,6 +9,8 @@ import (
 	"sync"
 
 	"gopkg.in/yaml.v3"
+
+	"hackathonkit.local/agentkit/internal/atomicfile"
 )
 
 type OpenAISettings struct {
@@ -374,33 +376,7 @@ func (m *Manager) SetRoutingMode(mode string) (RoutingState, error) {
 	if err != nil {
 		return RoutingState{}, err
 	}
-	dir := filepath.Dir(m.RoutingPath())
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return RoutingState{}, err
-	}
-	tmp, err := os.CreateTemp(dir, "routing-*.tmp")
-	if err != nil {
-		return RoutingState{}, err
-	}
-	tmpName := tmp.Name()
-	cleanup := func() {
-		tmp.Close()
-		os.Remove(tmpName)
-	}
-	if _, err := tmp.Write(data); err != nil {
-		cleanup()
-		return RoutingState{}, err
-	}
-	if err := tmp.Chmod(0o644); err != nil {
-		cleanup()
-		return RoutingState{}, err
-	}
-	if err := tmp.Close(); err != nil {
-		os.Remove(tmpName)
-		return RoutingState{}, err
-	}
-	if err := os.Rename(tmpName, m.RoutingPath()); err != nil {
-		os.Remove(tmpName)
+	if err := atomicfile.Write(m.RoutingPath(), data, atomicfile.ModeContent); err != nil {
 		return RoutingState{}, err
 	}
 	m.routingCache = next
