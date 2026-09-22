@@ -116,7 +116,7 @@ func (r *Router) loadMemory() (memoryFile, error) {
 	}
 	data, err := os.ReadFile(r.memoryPath)
 	if err != nil {
-		if os.IsNotExist(err) {
+		if os.IsNotExist(err) && missingPathIsUsable(r.memoryPath) {
 			return memoryFile{}, nil
 		}
 		// A transient/permission error must be surfaced to the caller so a
@@ -134,6 +134,28 @@ func (r *Router) loadMemory() (memoryFile, error) {
 		return memoryFile{}, nil
 	}
 	return mem, nil
+}
+
+// missingPathIsUsable reports whether a path that reads as missing can still be
+// created later. Windows maps ERROR_PATH_NOT_FOUND to IsNotExist when a path
+// component is a file, so such an unreadable path must not be treated as an
+// absent memory file.
+func missingPathIsUsable(path string) bool {
+	dir := filepath.Dir(path)
+	for {
+		info, err := os.Stat(dir)
+		if err == nil {
+			return info.IsDir()
+		}
+		if !os.IsNotExist(err) {
+			return false
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return true
+		}
+		dir = parent
+	}
 }
 
 func (r *Router) saveMemory(mem memoryFile) error {
