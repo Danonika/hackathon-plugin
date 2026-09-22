@@ -109,13 +109,13 @@ func argFloat(args map[string]any, key string, def float64) float64 {
 
 func argInt(args map[string]any, key string, def int) int {
 	value := argFloat(args, key, float64(def))
-	switch {
-	case math.IsNaN(value):
+	if math.IsNaN(value) || math.IsInf(value, 0) {
 		return def
-	case value > math.MaxInt32:
-		return math.MaxInt32
-	case value < math.MinInt32:
-		return math.MinInt32
+	}
+	// Out-of-range values fall back to the default so callers can tell that
+	// the supplied value was not usable.
+	if value > float64(math.MaxInt32) || value < float64(math.MinInt32) {
+		return def
 	}
 	return int(value)
 }
@@ -136,6 +136,9 @@ func argStringSlice(args map[string]any, key string) []string {
 				out = append(out, item)
 			}
 		}
+		if len(out) == 0 {
+			return nil
+		}
 		return out
 	case []any:
 		out := []string{}
@@ -145,6 +148,9 @@ func argStringSlice(args map[string]any, key string) []string {
 					out = append(out, s)
 				}
 			}
+		}
+		if len(out) == 0 {
+			return nil
 		}
 		return out
 	case string:

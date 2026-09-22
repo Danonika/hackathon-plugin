@@ -225,7 +225,10 @@ func parseFrontmatter(text string) (frontmatter, error) {
 func validateOpenAIYAML(dir string) (openaiInterface, error) {
 	data, err := os.ReadFile(filepath.Join(dir, "agents", "openai.yaml"))
 	if err != nil {
-		return openaiInterface{}, fmt.Errorf("missing agents/openai.yaml")
+		if os.IsNotExist(err) {
+			return openaiInterface{}, fmt.Errorf("missing agents/openai.yaml")
+		}
+		return openaiInterface{}, fmt.Errorf("cannot read agents/openai.yaml: %v", err)
 	}
 	var doc openaiInterface
 	if err := yaml.Unmarshal(data, &doc); err != nil {

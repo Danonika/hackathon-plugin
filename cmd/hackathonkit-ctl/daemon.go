@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -153,7 +154,10 @@ func daemonForeground(root string) error {
 	if _, err := store.Ingest(ctx, root); err != nil {
 		fmt.Fprintln(os.Stderr, "ingest:", err)
 	}
+	var ingestWG sync.WaitGroup
+	ingestWG.Add(1)
 	go func() {
+		defer ingestWG.Done()
 		ticker := time.NewTicker(ingestInterval)
 		defer ticker.Stop()
 		for {
@@ -167,6 +171,8 @@ func daemonForeground(root string) error {
 			}
 		}
 	}()
+	// Wait for the ticker goroutine before the deferred store.Close() runs.
+	defer ingestWG.Wait()
 
 	port := os.Getenv("HACKATHONKIT_CONTROL_PORT")
 	if port == "" {

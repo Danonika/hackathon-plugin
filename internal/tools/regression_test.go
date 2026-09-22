@@ -183,8 +183,14 @@ func TestXLSXFormatClassification(t *testing.T) {
 	if got := builtinFormatKind(18); got != (fmtKind{time: true}) {
 		t.Fatalf("builtin 18 (h:mm) must be time-only, got %+v", got)
 	}
-	if got := builtinFormatKind(45); got != (fmtKind{elapsed: true}) {
-		t.Fatalf("builtin 45 (mm:ss) must be elapsed, got %+v", got)
+	if got := builtinFormatKind(45); got != (fmtKind{time: true}) {
+		t.Fatalf("builtin 45 (mm:ss) is a clock time, got %+v", got)
+	}
+	if got := builtinFormatKind(46); got != (fmtKind{elapsed: true}) {
+		t.Fatalf("builtin 46 ([h]:mm:ss) must be elapsed, got %+v", got)
+	}
+	if got := builtinFormatKind(47); got != (fmtKind{time: true}) {
+		t.Fatalf("builtin 47 (mmss.0) is a clock time, got %+v", got)
 	}
 	if got := builtinFormatKind(14); got != (fmtKind{date: true}) {
 		t.Fatalf("builtin 14 must be a date, got %+v", got)

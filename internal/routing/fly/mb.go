@@ -58,8 +58,33 @@ func (r *Router) WithBrain(path string) *Router {
 
 func (r *Router) loadBrain() *MBrain {
 	brainMu.Lock()
-	defer brainMu.Unlock()
-	return r.loadBrainLocked()
+	if r.brain != nil {
+		cached := r.brain
+		brainMu.Unlock()
+		return cached
+	}
+	path := r.brainPath
+	brainMu.Unlock()
+	if path == "" {
+		return nil
+	}
+	// Read and parse outside the lock: a slow disk must not serialize every
+	// Router in the process.
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	var brain MBrain
+	if json.Unmarshal(data, &brain) != nil || brain.KC == 0 || len(brain.Readout) == 0 {
+		return nil
+	}
+	brainMu.Lock()
+	if r.brain == nil {
+		r.brain = &brain
+	}
+	cached := r.brain
+	brainMu.Unlock()
+	return cached
 }
 
 // loadBrainLocked is the lock-free body of loadBrain for callers that already

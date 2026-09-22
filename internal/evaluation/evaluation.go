@@ -28,8 +28,9 @@ type Criterion struct {
 	Max float64 `json:"max"`
 }
 
-// JudgeCriteria are the fixed Demo Day weights from the official rubric.
-var JudgeCriteria = []Criterion{
+// judgeCriteria are the fixed Demo Day weights from the official rubric.
+// Unexported: callers must not mutate the rubric in place.
+var judgeCriteria = []Criterion{
 	{Key: "value", Max: 25},
 	{Key: "result_quality", Max: 20},
 	{Key: "innovation", Max: 15},
@@ -146,7 +147,7 @@ func ValidateJudgeReport(r JudgeReport, snapshotSHA string) []string {
 		problems = append(problems, fmt.Sprintf("snapshot_sha %q does not match bundle %q", r.SnapshotSHA, snapshotSHA))
 	}
 	sum := 0.0
-	for _, c := range JudgeCriteria {
+	for _, c := range judgeCriteria {
 		v, ok := r.Scores[c.Key]
 		if !ok {
 			problems = append(problems, "missing score for "+c.Key)
@@ -160,7 +161,7 @@ func ValidateJudgeReport(r JudgeReport, snapshotSHA string) []string {
 	}
 	unknown := make([]string, 0, len(r.Scores))
 	for key := range r.Scores {
-		if !criterionKnown(JudgeCriteria, key) {
+		if !criterionKnown(judgeCriteria, key) {
 			unknown = append(unknown, key)
 		}
 	}
@@ -175,7 +176,7 @@ func ValidateJudgeReport(r JudgeReport, snapshotSHA string) []string {
 		problems = append(problems, "no evidence entries")
 	}
 	for _, d := range r.Deductions {
-		if !criterionKnown(JudgeCriteria, d.Criterion) {
+		if !criterionKnown(judgeCriteria, d.Criterion) {
 			problems = append(problems, "deduction for unknown criterion "+d.Criterion)
 		}
 		if strings.TrimSpace(d.Reason) == "" {
@@ -241,7 +242,7 @@ func AggregateReports(reports []JudgeReport, snapshotSHA string, minValid int) A
 	agg.MeanTotal = round6(average(totals))
 	agg.MeanTotalRounded = round2(agg.MeanTotal)
 	agg.ScoreVariance = round4(sampleVariance(totals))
-	for _, c := range JudgeCriteria {
+	for _, c := range judgeCriteria {
 		values := make([]float64, len(valid))
 		for i, r := range valid {
 			values[i] = r.Scores[c.Key]
@@ -262,7 +263,7 @@ func reportTotal(r JudgeReport) float64 {
 		return r.Total
 	}
 	sum := 0.0
-	for _, c := range JudgeCriteria {
+	for _, c := range judgeCriteria {
 		sum += r.Scores[c.Key]
 	}
 	return sum
@@ -276,8 +277,8 @@ func highDisagreement(valid []JudgeReport) []string {
 		key      string
 		variance float64
 	}
-	list := make([]ranked, 0, len(JudgeCriteria))
-	for _, c := range JudgeCriteria {
+	list := make([]ranked, 0, len(judgeCriteria))
+	for _, c := range judgeCriteria {
 		values := make([]float64, len(valid))
 		for i, r := range valid {
 			values[i] = r.Scores[c.Key]
@@ -542,9 +543,9 @@ func Compare(in CompareInput) Comparison {
 	return out
 }
 
-// TieBreakOrder is the regulation 9.6 order applied when total scores are
+// tieBreakOrder is the regulation 9.6 order applied when total scores are
 // equal: result quality, then value, then presentation/demo/Q&A.
-var TieBreakOrder = []string{"result_quality", "value", "presentation_demo_qa"}
+var tieBreakOrder = []string{"result_quality", "value", "presentation_demo_qa"}
 
 type RankEntry struct {
 	SnapshotSHA        string             `json:"snapshot_sha"`
@@ -572,7 +573,7 @@ type Ranking struct {
 }
 
 // Rank orders aggregates by the regulation 9.6 rules: the unrounded mean total
-// first, then the criterion averages in TieBreakOrder; a remaining tie is
+// first, then the criterion averages in tieBreakOrder; a remaining tie is
 // flagged as unresolved until ApplyCommission records the jury vote.
 func Rank(aggregates []Aggregate) (Ranking, error) {
 	if len(aggregates) == 0 {
@@ -613,7 +614,7 @@ func Rank(aggregates []Aggregate) (Ranking, error) {
 		return entries[i].SnapshotSHA < entries[j].SnapshotSHA
 	})
 
-	ranking := Ranking{Entries: entries, TieBreakOrder: append([]string{}, TieBreakOrder...)}
+	ranking := Ranking{Entries: entries, TieBreakOrder: append([]string{}, tieBreakOrder...)}
 	for i := 1; i < len(entries); i++ {
 		order, level := compareEntries(entries[i-1], entries[i])
 		if order == 0 {
@@ -736,7 +737,7 @@ func compareEntries(a, b RankEntry) (int, string) {
 		}
 		return 1, ""
 	}
-	for _, key := range TieBreakOrder {
+	for _, key := range tieBreakOrder {
 		av, bv := a.CriterionMeans[key], b.CriterionMeans[key]
 		if math.Abs(av-bv) > epsilon {
 			if av > bv {

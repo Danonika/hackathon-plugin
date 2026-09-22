@@ -145,6 +145,12 @@ func (s *Store) Record(ctx context.Context, in RecordInput) (RecordResult, error
 		}
 	}
 
+	unlock, err := s.lockFile()
+	if err != nil {
+		return RecordResult{}, err
+	}
+	defer unlock()
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -375,6 +381,26 @@ func (s *Store) embed(ctx context.Context, text string) ([]float64, error) {
 		return nil, fmt.Errorf("empty embedding")
 	}
 	return normalize(vectors[0]), nil
+}
+
+// lockFile serializes load-modify-save across processes sharing this path.
+func (s *Store) lockFile() (func(), error) {
+	lockPath := s.path + ".lock"
+	if err := os.MkdirAll(filepath.Dir(lockPath), 0o755); err != nil {
+		return nil, err
+	}
+	for i := 0; i < 50; i++ {
+		f, err := os.OpenFile(lockPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+		if err == nil {
+			f.Close()
+			return func() { _ = os.Remove(lockPath) }, nil
+		}
+		if !os.IsExist(err) {
+			return nil, err
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	return nil, fmt.Errorf("learning store is locked by another process")
 }
 
 func (s *Store) load() (fileFormat, error) {

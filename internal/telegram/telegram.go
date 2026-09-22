@@ -457,9 +457,12 @@ func (c *Client) call(ctx context.Context, method string, payload any) (json.Raw
 		return nil, fmt.Errorf("telegram %s: request failed", method)
 	}
 	defer response.Body.Close()
-	data, err := io.ReadAll(io.LimitReader(response.Body, maxResponseSize))
+	data, err := io.ReadAll(io.LimitReader(response.Body, maxResponseSize+1))
 	if err != nil {
 		return nil, fmt.Errorf("telegram %s: response read failed", method)
+	}
+	if int64(len(data)) > maxResponseSize {
+		return nil, fmt.Errorf("telegram %s: response exceeds %d bytes", method, maxResponseSize)
 	}
 	var parsed apiResponse
 	if err := json.Unmarshal(data, &parsed); err != nil {

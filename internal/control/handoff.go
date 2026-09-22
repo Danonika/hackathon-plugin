@@ -43,12 +43,12 @@ func BuildHandoff(ctx context.Context, store *Store, learn *learning.Store, root
 	}
 	events, err := store.Events(ctx, sessionID, 10)
 	if err != nil {
-		return handoff, err
+		return handoff, fmt.Errorf("session %s events: %w", sessionID, err)
 	}
 	handoff.RecentEvents = events
 	outputs, err := store.Outputs(ctx, sessionID, 5)
 	if err != nil {
-		return handoff, err
+		return handoff, fmt.Errorf("session %s outputs: %w", sessionID, err)
 	}
 	handoff.Outputs = outputs
 	// Count decisions from a wider window than the 10 shown, so older pending

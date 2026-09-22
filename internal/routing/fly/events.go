@@ -19,7 +19,12 @@ func (r *Router) ActivationSnapshot(ctx context.Context, task string, topN int) 
 	if brain != nil && brain.KC > 0 {
 		empty["kc_total"] = brain.KC
 	}
-	if brain == nil || r.embedder == nil {
+	if brain == nil {
+		empty["reason"] = "brain not loaded"
+		return empty
+	}
+	if r.embedder == nil {
+		empty["reason"] = "no embedder configured"
 		return empty
 	}
 	vec, ok := r.embedTask(ctx, task)

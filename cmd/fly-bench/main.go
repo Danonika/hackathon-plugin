@@ -87,7 +87,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	mgr := config.NewManager(root)
 	cfg := mgr.Config()
 
-	rows, err := loadSuite(filepath.Join(root, filepath.FromSlash(*suite)))
+	rows, skipped, err := loadSuiteWithSkips(filepath.Join(root, filepath.FromSlash(*suite)))
 	if err != nil {
 		fmt.Fprintln(stderr, "error:", err)
 		return 1
@@ -95,6 +95,9 @@ func run(args []string, stdout, stderr io.Writer) int {
 	if len(rows) == 0 {
 		fmt.Fprintln(stderr, "error: suite has no tasks")
 		return 1
+	}
+	if len(skipped) > 0 {
+		fmt.Fprintf(stderr, "fly-bench: %d suite line(s) skipped: %s\n", len(skipped), strings.Join(skipped, "; "))
 	}
 
 	ctx := context.Background()
@@ -168,29 +171,40 @@ func run(args []string, stdout, stderr io.Writer) int {
 }
 
 func loadSuite(path string) ([]taskRow, error) {
+	rows, _, err := loadSuiteWithSkips(path)
+	return rows, err
+}
+
+// loadSuiteWithSkips also reports lines that parsed but lacked a task, so a
+// renamed field cannot silently shrink the suite.
+func loadSuiteWithSkips(path string) ([]taskRow, []string, error) {
 	file, err := os.Open(path)
 	if err != nil {
-		return nil, fmt.Errorf("suite %s: %w", path, err)
+		return nil, nil, fmt.Errorf("suite %s: %w", path, err)
 	}
 	defer file.Close()
 	rows := []taskRow{}
+	skipped := []string{}
 	scanner := bufio.NewScanner(file)
 	scanner.Buffer(make([]byte, 64*1024), 1024*1024)
+	lineNumber := 0
 	for scanner.Scan() {
+		lineNumber++
 		line := strings.TrimSpace(scanner.Text())
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
 		var row taskRow
 		if err := json.Unmarshal([]byte(line), &row); err != nil {
-			return nil, fmt.Errorf("suite line: %w", err)
+			return nil, skipped, fmt.Errorf("suite line %d: %w", lineNumber, err)
 		}
 		if row.Task == "" {
+			skipped = append(skipped, fmt.Sprintf("line %d: missing task field", lineNumber))
 			continue
 		}
 		rows = append(rows, row)
 	}
-	return rows, scanner.Err()
+	return rows, skipped, scanner.Err()
 }
 
 func top1(recs []fly.Recommendation) string {

@@ -85,7 +85,7 @@ func Slug(value string) string {
 	if runes := []rune(out); len(runes) > 60 {
 		out = strings.Trim(string(runes[:60]), "-")
 	}
-	return out
+	return strings.Trim(out, "-")
 }
 
 func Load(root, slug string) (Plan, error) {
@@ -105,6 +105,56 @@ func Load(root, slug string) (Plan, error) {
 }
 
 // Latest returns the most recently updated plan, if any.
+// LatestErr also reports read/parse failures so callers can distinguish "no
+// plan" from "the newest plan is unreadable".
+func LatestErr(root string) (Plan, bool, error) {
+	dir := Dir(root)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return Plan{}, false, nil
+		}
+		return Plan{}, false, err
+	}
+	var best Plan
+	var bestTime time.Time
+	var firstErr error
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
+			continue
+		}
+		info, infoErr := entry.Info()
+		if infoErr != nil {
+			if firstErr == nil {
+				firstErr = infoErr
+			}
+			continue
+		}
+		if info.ModTime().Before(bestTime) {
+			continue
+		}
+		data, readErr := os.ReadFile(filepath.Join(dir, entry.Name()))
+		if readErr != nil {
+			if firstErr == nil {
+				firstErr = readErr
+			}
+			continue
+		}
+		var plan Plan
+		if json.Unmarshal(data, &plan) != nil {
+			if firstErr == nil {
+				firstErr = fmt.Errorf("plan %s is corrupt", entry.Name())
+			}
+			continue
+		}
+		best, bestTime = plan, info.ModTime()
+	}
+	if bestTime.IsZero() {
+		return Plan{}, false, firstErr
+	}
+	return best, true, firstErr
+}
+
 func Latest(root string) (Plan, bool) {
 	entries, err := os.ReadDir(Dir(root))
 	if err != nil {

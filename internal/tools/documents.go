@@ -209,7 +209,7 @@ func registerDocuments(reg *mcp.Registry, d Deps) {
 				return mcp.Fail(trace(ctx), err.Error()), nil
 			}
 			base := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
-			stamp := time.Now().UTC().Format("20060102-150405")
+			stamp := time.Now().UTC().Format("20060102-150405.000")
 			artifact, werr := d.Store.WriteArtifact(
 				fmt.Sprintf("extracted/%s-%s-%s.txt", slugify(base), shortHash(path), stamp),
 				[]byte(text),

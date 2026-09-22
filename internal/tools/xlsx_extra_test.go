@@ -160,7 +160,7 @@ func TestXLSXInlineStringsAndRefFallbacks(t *testing.T) {
 func TestXLSXStylesAdvanced(t *testing.T) {
 	const stylesXML = `<?xml version="1.0" encoding="UTF-8"?><styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">` +
 		`<numFmts count="2"><numFmt numFmtId="164" formatCode="yyyy-mm-dd"/><numFmt numFmtId="165" formatCode="[h]:mm"/></numFmts>` +
-		`<cellXfs count="5"><xf numFmtId="14"/><xf numFmtId="18"/><xf numFmtId="45"/><xf numFmtId="164"/><xf numFmtId="165"/></cellXfs>` +
+		`<cellXfs count="5"><xf numFmtId="14"/><xf numFmtId="18"/><xf numFmtId="46"/><xf numFmtId="164"/><xf numFmtId="165"/></cellXfs>` +
 		`</styleSheet>`
 	const wbXML = `<?xml version="1.0" encoding="UTF-8"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><workbookPr date1904="true"/><sheets><sheet name="Dated" sheetId="1" r:id="rId1"/></sheets></workbook>`
 	const relsXML = `<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/></Relationships>`

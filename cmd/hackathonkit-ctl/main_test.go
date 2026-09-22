@@ -256,11 +256,7 @@ func TestCmdIngestUsesRepoRoot(t *testing.T) {
 func TestCmdSessionsList(t *testing.T) {
 	root := tempRoot(t)
 	seedSessionStore(t, root)
-	out := captureStdout(t, func() {
-		if err := cmdSessions([]string{"list", "--limit", "5"}); err != nil {
-			t.Fatalf("cmdSessions list: %v", err)
-		}
-	})
+	out := runSessionsOut(t, "list", "--limit", "5")
 	if !strings.Contains(out, "ID") || !strings.Contains(out, "s-1") || !strings.Contains(out, "s-2") {
 		t.Fatalf("list output = %q", out)
 	}
@@ -271,11 +267,7 @@ func TestCmdSessionsList(t *testing.T) {
 
 func TestCmdSessionsListEmpty(t *testing.T) {
 	tempRoot(t)
-	out := captureStdout(t, func() {
-		if err := cmdSessions([]string{"list"}); err != nil {
-			t.Fatalf("cmdSessions list: %v", err)
-		}
-	})
+	out := runSessionsOut(t, "list")
 	if !strings.Contains(out, "no sessions recorded") {
 		t.Fatalf("empty list output = %q", out)
 	}
@@ -301,11 +293,7 @@ func TestCmdSessionsShowAndResume(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	show := captureStdout(t, func() {
-		if err := cmdSessions([]string{"show", "s-1"}); err != nil {
-			t.Fatalf("cmdSessions show: %v", err)
-		}
-	})
+	show := runSessionsOut(t, "show", "s-1")
 	var payload struct {
 		Session control.Session  `json:"session"`
 		Events  []control.Event  `json:"events"`
@@ -318,22 +306,14 @@ func TestCmdSessionsShowAndResume(t *testing.T) {
 		t.Fatalf("show payload = %+v", payload)
 	}
 
-	resume := captureStdout(t, func() {
-		if err := cmdSessions([]string{"resume", "s-1"}); err != nil {
-			t.Fatalf("cmdSessions resume: %v", err)
-		}
-	})
+	resume := runSessionsOut(t, "resume", "s-1")
 	for _, want := range []string{"Session handoff", "s-1", "plan: demo-plan", "learnings to reuse", "pending eval decisions: 1"} {
 		if !strings.Contains(resume, want) {
 			t.Fatalf("resume output missing %q:\n%s", want, resume)
 		}
 	}
 
-	detail := captureStdout(t, func() {
-		if err := cmdSessions([]string{"show", "s-2"}); err != nil {
-			t.Fatalf("cmdSessions show s-2: %v", err)
-		}
-	})
+	detail := runSessionsOut(t, "show", "s-2")
 	if !strings.Contains(detail, "s-2") {
 		t.Fatalf("detail output = %q", detail)
 	}
@@ -350,7 +330,7 @@ func TestCmdSessionsErrors(t *testing.T) {
 		{"resume", "missing"},
 	}
 	for _, args := range cases {
-		if err := cmdSessions(args); err == nil {
+		if err := cmdSessions(args, io.Discard); err == nil {
 			t.Fatalf("cmdSessions(%v) must fail", args)
 		}
 	}
@@ -592,7 +572,11 @@ func TestTUIModelLoadViewAndUpdate(t *testing.T) {
 	}
 	defer store.Close()
 
-	model := newTUIModel(store)
+	model := newTUIModel(store, nil)
+	// Loading is asynchronous in the TUI; apply the load command's result.
+	if msg, ok := loadCmd(store, 0)().(loadedMsg); ok {
+		model.applyLoaded(msg)
+	}
 	if len(model.sessions) != 2 {
 		t.Fatalf("model sessions = %+v", model.sessions)
 	}
@@ -615,36 +599,46 @@ func TestTUIModelLoadViewAndUpdate(t *testing.T) {
 		t.Fatalf("window size not applied: %+v", model)
 	}
 
-	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
-	model = updated.(tuiModel)
+	applyCmd := func(m tuiModel, cmd tea.Cmd) tuiModel {
+		if cmd == nil {
+			return m
+		}
+		if msg, ok := cmd().(loadedMsg); ok {
+			m.applyLoaded(msg)
+		}
+		return m
+	}
+
+	updated, cmd := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
+	model = applyCmd(updated.(tuiModel), cmd)
 	if model.selected != 1 {
 		t.Fatalf("j selection = %d", model.selected)
 	}
 	if view := model.View(); !strings.Contains(view, "system.context") || !strings.Contains(view, "error") {
 		t.Fatalf("selected view = %q", view)
 	}
-	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("k")})
-	model = updated.(tuiModel)
+	updated, cmd = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("k")})
+	model = applyCmd(updated.(tuiModel), cmd)
 	if model.selected != 0 {
 		t.Fatalf("k selection = %d", model.selected)
 	}
-	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyDown})
-	model = updated.(tuiModel)
+	updated, cmd = model.Update(tea.KeyMsg{Type: tea.KeyDown})
+	model = applyCmd(updated.(tuiModel), cmd)
 	if model.selected != 1 {
 		t.Fatalf("down selection = %d", model.selected)
 	}
-	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyUp})
-	model = updated.(tuiModel)
+	updated, cmd = model.Update(tea.KeyMsg{Type: tea.KeyUp})
+	model = applyCmd(updated.(tuiModel), cmd)
 	if model.selected != 0 {
 		t.Fatalf("up selection = %d", model.selected)
 	}
-	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("r")})
-	model = updated.(tuiModel)
+	updated, cmd = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("r")})
+	model = applyCmd(updated.(tuiModel), cmd)
 	if len(model.sessions) != 2 {
 		t.Fatalf("refresh sessions = %+v", model.sessions)
 	}
-	updated, _ = model.Update(refreshMsg{})
-	model = updated.(tuiModel)
+	updated, cmd = model.Update(refreshMsg{})
+	model = applyCmd(updated.(tuiModel), cmd)
 	if len(model.sessions) != 2 {
 		t.Fatalf("tick refresh sessions = %+v", model.sessions)
 	}
@@ -660,7 +654,7 @@ func TestTUIModelEmptyAndErrorStates(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	empty := newTUIModel(store)
+	empty := newTUIModel(store, nil)
 	if view := empty.View(); !strings.Contains(view, "No sessions recorded yet.") {
 		t.Fatalf("empty view = %q", view)
 	}
@@ -668,8 +662,10 @@ func TestTUIModelEmptyAndErrorStates(t *testing.T) {
 	if err := store.Close(); err != nil {
 		t.Fatal(err)
 	}
-	broken := newTUIModel(store)
-	broken.load()
+	broken := newTUIModel(store, nil)
+	if msg, ok := loadCmd(store, 0)().(loadedMsg); ok {
+		broken.applyLoaded(msg)
+	}
 	if view := broken.View(); !strings.Contains(view, "error:") {
 		t.Fatalf("broken view = %q", view)
 	}
@@ -714,4 +710,13 @@ func sessionStartLine(t *testing.T, root string) string {
 		t.Fatal(err)
 	}
 	return string(line) + "\n"
+}
+
+func runSessionsOut(t *testing.T, args ...string) string {
+	t.Helper()
+	var buf bytes.Buffer
+	if err := cmdSessions(args, &buf); err != nil {
+		t.Fatalf("cmdSessions(%v): %v", args, err)
+	}
+	return buf.String()
 }

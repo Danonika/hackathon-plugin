@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -95,8 +96,10 @@ func runCheck(ctx context.Context, root string, spec checkSpec) Check {
 	check.DurationMS = time.Since(start).Milliseconds()
 	check.Output = tail(captured.String(), 2000)
 	switch {
-	case runCtx.Err() == context.DeadlineExceeded:
+	case errors.Is(runCtx.Err(), context.DeadlineExceeded):
 		check.Status = "timeout"
+	case errors.Is(runCtx.Err(), context.Canceled):
+		check.Status = "canceled"
 	case err != nil:
 		check.Status = "failed"
 	case spec.name == "gofmt" && strings.TrimSpace(captured.String()) != "":

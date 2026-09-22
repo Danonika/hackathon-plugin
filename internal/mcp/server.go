@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -24,6 +25,9 @@ type ServerOptions struct {
 	CallTimeoutSec int
 	CallLogPath    string
 }
+
+// oversizeFrame marks a discarded over-long input line in the line channel.
+var oversizeFrame = []byte{0x00}
 
 type Server struct {
 	registry *Registry
@@ -64,22 +68,49 @@ func (s *Server) ServeStreams(ctx context.Context, in io.Reader, out io.Writer) 
 	scanErr := make(chan error, 1)
 	go func() {
 		defer close(lines)
-		scanner := bufio.NewScanner(in)
-		scanner.Buffer(make([]byte, 0, 64*1024), 32*1024*1024)
-		for scanner.Scan() {
-			line := bytes.TrimSpace(scanner.Bytes())
-			if len(line) == 0 {
+		reader := bufio.NewReaderSize(in, 64*1024)
+		for {
+			scanner := bufio.NewScanner(reader)
+			scanner.Buffer(make([]byte, 0, 64*1024), 32*1024*1024)
+			for scanner.Scan() {
+				line := bytes.TrimSpace(scanner.Bytes())
+				if len(line) == 0 {
+					continue
+				}
+				buf := append([]byte(nil), line...)
+				select {
+				case lines <- buf:
+				case <-ctx.Done():
+					scanErr <- ctx.Err()
+					return
+				}
+			}
+			err := scanner.Err()
+			if errors.Is(err, bufio.ErrTooLong) {
+				// Discard the remainder of the oversized frame in bounded
+				// chunks and keep serving the session.
+				for {
+					_, derr := reader.ReadSlice('\n')
+					if derr == nil {
+						break
+					}
+					if errors.Is(derr, bufio.ErrBufferFull) {
+						continue
+					}
+					scanErr <- nil
+					return
+				}
+				select {
+				case lines <- oversizeFrame:
+				case <-ctx.Done():
+					scanErr <- ctx.Err()
+					return
+				}
 				continue
 			}
-			buf := append([]byte(nil), line...)
-			select {
-			case lines <- buf:
-			case <-ctx.Done():
-				scanErr <- ctx.Err()
-				return
-			}
+			scanErr <- err
+			return
 		}
-		scanErr <- scanner.Err()
 	}()
 	enc := json.NewEncoder(out)
 	for {
@@ -89,6 +120,14 @@ func (s *Server) ServeStreams(ctx context.Context, in io.Reader, out io.Writer) 
 		case line, ok := <-lines:
 			if !ok {
 				return <-scanErr
+			}
+			if bytes.Equal(line, oversizeFrame) {
+				_ = enc.Encode(Response{
+					JSONRPC: "2.0",
+					ID:      json.RawMessage("null"),
+					Error:   &RPCError{Code: CodeInvalidParams, Message: "request exceeds the maximum frame size"},
+				})
+				continue
 			}
 			var req Request
 			if err := json.Unmarshal(line, &req); err != nil {

@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"hackathonkit.local/agentkit/internal/config"
 	"hackathonkit.local/agentkit/internal/openai"
@@ -94,7 +95,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	for _, row := range rows {
 		texts = append(texts, row.Task)
 	}
-	vectors, err := client.Embed(context.Background(), texts)
+	vectors, err := embedBatched(context.Background(), client, texts)
 	if err != nil {
 		fmt.Fprintln(stderr, "fly-train: embeddings failed:", err)
 		return 1
@@ -108,9 +109,6 @@ func run(args []string, stdout, stderr io.Writer) int {
 	const learningRate = 0.15
 	for epoch := 0; epoch < *epochs; epoch++ {
 		for i, row := range rows {
-			if !seen[row.Category] {
-				continue
-			}
 			brain.Train(vectorNorm(vectors[i]), row.Category, learningRate)
 		}
 	}
@@ -184,7 +182,7 @@ func runEval(client *openai.Client, brain *fly.MBrain, rows []datasetRow, stdout
 	for _, row := range rows {
 		texts = append(texts, row.Task)
 	}
-	vectors, err := client.Embed(context.Background(), texts)
+	vectors, err := embedBatched(context.Background(), client, texts)
 	if err != nil {
 		return fmt.Errorf("eval embeddings failed: %w", err)
 	}
@@ -261,6 +259,30 @@ func readDatasetWithWarnings(path string, onSkip func(line int, reason string)) 
 		rows = append(rows, row)
 	}
 	return rows, scanner.Err()
+}
+
+// embedBatched embeds in bounded batches with a per-batch deadline so large
+// datasets neither exceed provider input limits nor hang forever.
+func embedBatched(ctx context.Context, client *openai.Client, texts []string) ([][]float64, error) {
+	const batchSize = 64
+	out := make([][]float64, 0, len(texts))
+	for start := 0; start < len(texts); start += batchSize {
+		end := start + batchSize
+		if end > len(texts) {
+			end = len(texts)
+		}
+		batchCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+		vectors, err := client.Embed(batchCtx, texts[start:end])
+		cancel()
+		if err != nil {
+			return nil, fmt.Errorf("batch %d-%d: %w", start, end, err)
+		}
+		if len(vectors) != end-start {
+			return nil, fmt.Errorf("batch %d-%d returned %d vectors", start, end, len(vectors))
+		}
+		out = append(out, vectors...)
+	}
+	return out, nil
 }
 
 func vectorNorm(v []float64) []float64 {

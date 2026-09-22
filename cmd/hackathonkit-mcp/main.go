@@ -31,7 +31,7 @@ import (
 	"hackathonkit.local/agentkit/internal/tools"
 )
 
-const version = "0.16.9"
+const version = "0.16.10"
 
 // redactBackendError strips credentials from driver/connection errors before
 // they are logged (DSNs can appear in Postgres and MinIO errors).
@@ -178,21 +178,25 @@ func run(args []string, stdout, stderr io.Writer) int {
 	}
 
 	var meta metadata.Recorder = metadata.Disabled{}
-	if dsn := os.Getenv("POSTGRES_DSN"); dsn != "" {
-		if pg, err := metadata.OpenPostgres(context.Background(), dsn); err != nil {
-			observability.Log(logger, "warn", "metadata_disabled", map[string]any{"error": redactBackendError(err)})
-		} else {
-			meta = pg
-			observability.Log(logger, "info", "metadata_postgres_enabled", nil)
+	if !*listTools && !*selftest {
+		if dsn := os.Getenv("POSTGRES_DSN"); dsn != "" {
+			if pg, err := metadata.OpenPostgres(context.Background(), dsn); err != nil {
+				observability.Log(logger, "warn", "metadata_disabled", map[string]any{"error": redactBackendError(err)})
+			} else {
+				meta = pg
+				observability.Log(logger, "info", "metadata_postgres_enabled", nil)
+			}
 		}
 	}
 	var objects storage.ObjectStore
-	if settings := objectstore.SettingsFromEnv(); settings.Endpoint != "" {
-		if cli, err := objectstore.Open(context.Background(), settings); err != nil {
-			observability.Log(logger, "warn", "objectstore_disabled", map[string]any{"error": err.Error()})
-		} else {
-			objects = cli
-			observability.Log(logger, "info", "objectstore_minio_enabled", map[string]any{"bucket": settings.Bucket})
+	if !*listTools && !*selftest {
+		if settings := objectstore.SettingsFromEnv(); settings.Endpoint != "" {
+			if cli, err := objectstore.Open(context.Background(), settings); err != nil {
+				observability.Log(logger, "warn", "objectstore_disabled", map[string]any{"error": err.Error()})
+			} else {
+				objects = cli
+				observability.Log(logger, "info", "objectstore_minio_enabled", map[string]any{"bucket": settings.Bucket})
+			}
 		}
 	}
 	store.Attach(meta, objects, func(err error) {

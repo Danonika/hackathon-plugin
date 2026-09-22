@@ -283,6 +283,8 @@ func readSharedStrings(f *zip.File) ([]string, error) {
 			switch t.Name.Local {
 			case "t":
 				inT = false
+			case "is":
+				inT = false
 			case "si":
 				out = append(out, cur.String())
 				inSI = false
@@ -562,7 +564,10 @@ func builtinFormatKind(id int) fmtKind {
 		return fmtKind{date: true}
 	case id >= 18 && id <= 21:
 		return fmtKind{time: true}
-	case id >= 45 && id <= 47:
+	case id == 45 || id == 47:
+		// mm:ss and mmss.0 are clock times; only 46 ([h]:mm:ss) is elapsed.
+		return fmtKind{time: true}
+	case id == 46:
 		return fmtKind{elapsed: true}
 	}
 	return fmtKind{}

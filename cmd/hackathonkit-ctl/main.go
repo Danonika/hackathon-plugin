@@ -33,7 +33,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	case "ingest":
 		err = cmdIngest(args[1:], stdout)
 	case "sessions":
-		err = cmdSessions(args[1:])
+		err = cmdSessions(args[1:], stdout)
 	case "daemon":
 		err = cmdDaemon(args[1:])
 	case "worktree":
@@ -113,7 +113,7 @@ func cmdIngest(args []string, stdout io.Writer) error {
 	return enc.Encode(result)
 }
 
-func cmdSessions(args []string) error {
+func cmdSessions(args []string, stdout io.Writer) error {
 	if len(args) == 0 {
 		return fmt.Errorf("usage: hackathonkit-ctl sessions list|show|resume")
 	}
@@ -137,16 +137,16 @@ func cmdSessions(args []string) error {
 			return err
 		}
 		if len(sessions) == 0 {
-			fmt.Println("no sessions recorded; run a Codex session with the plugin or: hackathonkit-ctl ingest")
+			fmt.Fprintln(stdout, "no sessions recorded; run a Codex session with the plugin or: hackathonkit-ctl ingest")
 			return nil
 		}
-		fmt.Printf("%-28s %-8s %-6s %-20s %s\n", "ID", "STATUS", "RISK", "UPDATED", "TASK")
+		fmt.Fprintf(stdout, "%-28s %-8s %-6s %-20s %s\n", "ID", "STATUS", "RISK", "UPDATED", "TASK")
 		for _, sess := range sessions {
 			task := sess.Task
 			if len(task) > 40 {
 				task = truncate(task, 40) + "..."
 			}
-			fmt.Printf("%-28s %-8s %-6.1f %-20s %s\n", sess.ID, sess.Status, sess.RiskScore, sess.UpdatedAt.Format("2006-01-02 15:04:05"), task)
+			fmt.Fprintf(stdout, "%-28s %-8s %-6.1f %-20s %s\n", sess.ID, sess.Status, sess.RiskScore, sess.UpdatedAt.Format("2006-01-02 15:04:05"), task)
 		}
 		return nil
 	case "show":
@@ -165,7 +165,7 @@ func cmdSessions(args []string) error {
 		if err != nil {
 			return err
 		}
-		enc := json.NewEncoder(os.Stdout)
+		enc := json.NewEncoder(stdout)
 		enc.SetIndent("", "  ")
 		return enc.Encode(map[string]any{"session": sess, "events": events, "outputs": outputs})
 	case "resume":
@@ -176,7 +176,7 @@ func cmdSessions(args []string) error {
 		if err != nil {
 			return err
 		}
-		fmt.Print(control.RenderHandoff(handoff))
+		fmt.Fprint(stdout, control.RenderHandoff(handoff))
 		return nil
 	default:
 		return fmt.Errorf("unknown sessions subcommand %q", args[0])

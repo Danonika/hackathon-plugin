@@ -52,7 +52,7 @@ func registerEvaluation(reg *mcp.Registry, d Deps) {
 			}
 			if argBool(args, "persist", true) && d.Store != nil {
 				rel := filepath.ToSlash(filepath.Join("evals", pathSegment(kind), pathSegment(agg.SnapshotSHA), "aggregate.json"))
-				if path, werr := writeRepoJSON(d.Store.Root(), rel, agg); werr != nil {
+				if path, werr := writeRepoJSON(d.Cfg.Root(), rel, agg); werr != nil {
 					data["persist_error"] = werr.Error()
 				} else {
 					data["aggregate_path"] = path
@@ -232,10 +232,10 @@ func registerEvaluation(reg *mcp.Registry, d Deps) {
 				"mandatory_scenario_failed": comparison.MandatoryFailed,
 			}
 			if argBool(args, "persist", false) && d.Store != nil {
-				stamp := time.Now().UTC().Format("20060102-150405")
+				stamp := time.Now().UTC().Format("20060102-150405.000")
 				rel := filepath.ToSlash(filepath.Join("evals", "decisions", pathSegment(argString(args, "snapshot_sha")),
 					fmt.Sprintf("%s-%s.json", mode, stamp)))
-				if path, werr := writeRepoJSON(d.Store.Root(), rel, comparison); werr != nil {
+				if path, werr := writeRepoJSON(d.Cfg.Root(), rel, comparison); werr != nil {
 					data["persist_error"] = werr.Error()
 				} else {
 					data["decision_path"] = path
@@ -382,9 +382,9 @@ func registerEvaluation(reg *mcp.Registry, d Deps) {
 				"rubric_version": evaluation.RubricVersion,
 			}
 			if argBool(args, "persist", true) && d.Store != nil {
-				stamp := time.Now().UTC().Format("20060102-150405")
+				stamp := time.Now().UTC().Format("20060102-150405.000")
 				rel := filepath.ToSlash(filepath.Join("evals", "rankings", "ranking-"+stamp+".json"))
-				if path, werr := writeRepoJSON(d.Store.Root(), rel, ranking); werr != nil {
+				if path, werr := writeRepoJSON(d.Cfg.Root(), rel, ranking); werr != nil {
 					data["persist_error"] = werr.Error()
 				} else {
 					data["ranking_path"] = path

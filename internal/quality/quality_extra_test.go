@@ -53,7 +53,8 @@ func TestRunCanceledContext(t *testing.T) {
 	if len(report.Checks) != len(defaultChecks) {
 		t.Fatalf("checks = %d, want %d", len(report.Checks), len(defaultChecks))
 	}
-	if report.Summary["failed"] != len(defaultChecks) {
+	// A canceled parent context is reported as "canceled", not "failed".
+	if report.Summary["canceled"] != len(defaultChecks) {
 		t.Fatalf("summary = %v", report.Summary)
 	}
 	if report.StartedAt.IsZero() || report.FinishedAt.IsZero() {

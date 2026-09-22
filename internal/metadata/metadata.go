@@ -72,6 +72,9 @@ func (Disabled) RecordFlyPrediction(context.Context, FlyPrediction) error { retu
 func (Disabled) RecordEvalRun(context.Context, EvalRun) error             { return nil }
 func (Disabled) Close()                                                   {}
 
+// The schema is applied idempotently on every startup. Column additions are
+// expressed as ADD COLUMN IF NOT EXISTS statements below so existing
+// deployments pick them up instead of keeping a stale table definition.
 const schema = `
 CREATE TABLE IF NOT EXISTS artifacts (
 	id BIGSERIAL PRIMARY KEY,
@@ -112,6 +115,14 @@ CREATE TABLE IF NOT EXISTS eval_runs (
 );
 `
 
+// migrations are additive and safe to run repeatedly.
+const migrations = `
+ALTER TABLE artifacts ADD COLUMN IF NOT EXISTS sha256 TEXT;
+ALTER TABLE artifacts ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT now();
+ALTER TABLE fly_predictions ADD COLUMN IF NOT EXISTS category_scores JSONB;
+ALTER TABLE fly_predictions ADD COLUMN IF NOT EXISTS recommendations JSONB;
+`
+
 type Postgres struct {
 	pool pgExecutor
 }
@@ -143,6 +154,10 @@ func openPostgres(ctx context.Context, dsn string, newPool func(context.Context,
 	ddlCtx, ddlCancel := context.WithTimeout(ctx, 15*time.Second)
 	defer ddlCancel()
 	if _, err := pool.Exec(ddlCtx, schema); err != nil {
+		pool.Close()
+		return nil, err
+	}
+	if _, err := pool.Exec(ddlCtx, migrations); err != nil {
 		pool.Close()
 		return nil, err
 	}

@@ -61,6 +61,12 @@ function esc(value) {
 }
 
 let sessionsLoading = false;
+const sessionRows = new Map();
+
+function cell(tr, index) {
+  return tr.children[index];
+}
+
 async function loadSessions() {
   if (sessionsLoading) return;
   sessionsLoading = true;
@@ -71,18 +77,32 @@ async function loadSessions() {
     if (!res.ok) throw new Error(data.error || res.statusText);
     banner.style.display = "none";
     const tbody = document.getElementById("sessions");
-    tbody.innerHTML = "";
+    // Update rows in place: rebuilding the tbody on every poll discards
+    // scroll/hover state and can drop a click that lands on a poll tick.
+    const seen = new Set();
     for (const s of data.sessions || []) {
-      const tr = document.createElement("tr");
+      seen.add(s.id);
+      let tr = sessionRows.get(s.id);
+      if (!tr) {
+        tr = document.createElement("tr");
+        for (let i = 0; i < 5; i++) tr.appendChild(document.createElement("td"));
+        tr.addEventListener("click", () => { selected = s.id; loadSessions(); });
+        tbody.appendChild(tr);
+        sessionRows.set(s.id, tr);
+      }
       tr.className = "session" + (s.id === selected ? " selected" : "");
-      tr.innerHTML =
-        "<td>" + esc(s.id) + "</td>" +
-        "<td>" + esc(s.status) + "</td>" +
-        '<td class="' + esc(riskClass(s.risk_score)) + '">' + esc((Number(s.risk_score) || 0).toFixed(1)) + "</td>" +
-        "<td>" + esc((s.updated_at || "").replace("T", " ").slice(0, 19)) + "</td>" +
-        "<td>" + esc((s.task || "").slice(0, 60)) + "</td>";
-      tr.addEventListener("click", () => { selected = s.id; loadSessions(); });
-      tbody.appendChild(tr);
+      cell(tr, 0).textContent = s.id;
+      cell(tr, 1).textContent = s.status;
+      cell(tr, 2).textContent = (Number(s.risk_score) || 0).toFixed(1);
+      cell(tr, 2).className = riskClass(s.risk_score);
+      cell(tr, 3).textContent = (s.updated_at || "").replace("T", " ").slice(0, 19);
+      cell(tr, 4).textContent = (s.task || "").slice(0, 60);
+    }
+    for (const [id, tr] of sessionRows) {
+      if (!seen.has(id)) {
+        tr.remove();
+        sessionRows.delete(id);
+      }
     }
     document.getElementById("counts").textContent = (data.sessions || []).length + " sessions";
     document.getElementById("status").textContent = "refreshed " + new Date().toLocaleTimeString();

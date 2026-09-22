@@ -129,8 +129,10 @@ func TestOpenPostgresPoolFactory(t *testing.T) {
 		if !pg.Enabled() {
 			t.Fatal("expected enabled recorder")
 		}
-		if len(pool.calls) != 1 || !strings.Contains(pool.calls[0].sql, "CREATE TABLE IF NOT EXISTS artifacts") {
-			t.Fatalf("unexpected ddl call: %+v", pool.calls)
+		if len(pool.calls) != 2 ||
+			!strings.Contains(pool.calls[0].sql, "CREATE TABLE IF NOT EXISTS artifacts") ||
+			!strings.Contains(pool.calls[1].sql, "ADD COLUMN IF NOT EXISTS") {
+			t.Fatalf("unexpected ddl calls: %+v", pool.calls)
 		}
 	})
 }

@@ -3,8 +3,10 @@ package main
 import (
 	"context"
 	"crypto/subtle"
+	"database/sql"
 	"embed"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net"
@@ -165,12 +167,20 @@ func newHandler(root string, mgr *config.Manager, meta metadata.Recorder, token 
 		defer store.Close()
 		session, err := store.Session(r.Context(), id)
 		if err != nil {
-			writeJSON(w, http.StatusNotFound, map[string]any{"error": "session not found"})
+			if errors.Is(err, sql.ErrNoRows) {
+				writeJSON(w, http.StatusNotFound, map[string]any{"error": "session not found"})
+			} else {
+				writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "session lookup failed"})
+			}
 			return
 		}
-		events, _ := store.Events(r.Context(), id, queryLimit(r, 50))
-		outputs, _ := store.Outputs(r.Context(), id, 10)
-		writeJSON(w, http.StatusOK, map[string]any{"session": session, "events": events, "outputs": outputs})
+		events, eventsErr := store.Events(r.Context(), id, queryLimit(r, 50))
+		outputs, outputsErr := store.Outputs(r.Context(), id, 10)
+		payload := map[string]any{"session": session, "events": events, "outputs": outputs}
+		if eventsErr != nil || outputsErr != nil {
+			payload["errors"] = strings.TrimSpace(fmt.Sprintf("%v %v", eventsErr, outputsErr))
+		}
+		writeJSON(w, http.StatusOK, payload)
 	})
 	mux.HandleFunc("/plan", func(w http.ResponseWriter, r *http.Request) {
 		page, err := staticFS.ReadFile("static/plan.html")

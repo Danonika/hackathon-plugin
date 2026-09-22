@@ -152,7 +152,7 @@ func registerCharts(reg *mcp.Registry, d Deps) {
 			if kind == "bar" {
 				drawn = 1
 			}
-			stamp := time.Now().UTC().Format("20060102-150405")
+			stamp := time.Now().UTC().Format("20060102-150405.000")
 			artifact, werr := d.Store.WriteArtifact(
 				fmt.Sprintf("charts/%s-%s.svg", slugify(title), stamp),
 				[]byte(svg),
@@ -494,7 +494,7 @@ func registerReports(reg *mcp.Registry, d Deps) {
 				}
 				content = b.String()
 			}
-			stamp := time.Now().UTC().Format("20060102-150405")
+			stamp := time.Now().UTC().Format("20060102-150405.000")
 			artifact, werr := d.Store.WriteArtifact(
 				fmt.Sprintf("reports/%s-%s%s", slugify(title), stamp, ext),
 				[]byte(content),
@@ -538,7 +538,7 @@ func registerMedia(reg *mcp.Registry, d Deps) {
 				return mcp.Fail(trace(ctx), terr.Error()), nil
 			}
 			base := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
-			stamp := time.Now().UTC().Format("20060102-150405")
+			stamp := time.Now().UTC().Format("20060102-150405.000")
 			artifact, werr := d.Store.WriteArtifact(
 				fmt.Sprintf("audio/%s-%s.txt", slugify(base), stamp),
 				[]byte(text),
@@ -595,7 +595,7 @@ func registerMedia(reg *mcp.Registry, d Deps) {
 				return mcp.Fail(trace(ctx), aerr.Error()), nil
 			}
 			base := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
-			stamp := time.Now().UTC().Format("20060102-150405")
+			stamp := time.Now().UTC().Format("20060102-150405.000")
 			artifact, werr := d.Store.WriteArtifact(
 				fmt.Sprintf("vision/%s-%s.md", slugify(base), stamp),
 				[]byte(result),

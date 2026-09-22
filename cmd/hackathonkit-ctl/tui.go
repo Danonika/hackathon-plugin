@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"os"
 	"strings"
 	"time"
 
@@ -15,15 +14,24 @@ import (
 
 type refreshMsg struct{}
 
-type tuiModel struct {
-	store    *control.Store
+// loadedMsg carries query results back to the update loop.
+type loadedMsg struct {
 	sessions []control.Session
 	events   []control.Event
-	selected int
-	width    int
-	height   int
 	err      error
-	status   string
+	selected int
+}
+
+type tuiModel struct {
+	store     *control.Store
+	sessions  []control.Session
+	events    []control.Event
+	selected  int
+	width     int
+	height    int
+	err       error
+	ingestErr error
+	status    string
 }
 
 func cmdTUI(args []string) error {
@@ -33,50 +41,56 @@ func cmdTUI(args []string) error {
 		return err
 	}
 	defer store.Close()
+	var ingestErr error
 	if _, err := store.Ingest(context.Background(), root); err != nil {
-		fmt.Fprintln(os.Stderr, "ingest:", err)
+		ingestErr = err
 	}
-	program := tea.NewProgram(newTUIModel(store), tea.WithAltScreen())
+	program := tea.NewProgram(newTUIModel(store, ingestErr), tea.WithAltScreen())
 	_, err = program.Run()
 	return err
 }
 
-func newTUIModel(store *control.Store) tuiModel {
-	model := tuiModel{store: store}
-	model.load()
-	return model
+func newTUIModel(store *control.Store, ingestErr error) tuiModel {
+	return tuiModel{store: store, ingestErr: ingestErr}
 }
 
-func (m *tuiModel) load() {
-	ctx := context.Background()
-	sessions, err := m.store.Sessions(ctx, 50)
-	if err != nil {
-		m.err = err
+// loadCmd runs the store queries off the update goroutine with a deadline.
+func loadCmd(store *control.Store, selected int) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		sessions, err := store.Sessions(ctx, 50)
+		if err != nil {
+			return loadedMsg{err: err}
+		}
+		if selected >= len(sessions) {
+			selected = len(sessions) - 1
+		}
+		if selected < 0 {
+			selected = 0
+		}
+		events := []control.Event{}
+		if len(sessions) > 0 {
+			events, err = store.Events(ctx, sessions[selected].ID, 20)
+		}
+		return loadedMsg{sessions: sessions, events: events, err: err, selected: selected}
+	}
+}
+
+func (m *tuiModel) applyLoaded(msg loadedMsg) {
+	if msg.err != nil {
+		m.err = msg.err
 		return
 	}
 	m.err = nil
-	m.sessions = sessions
-	if m.selected >= len(sessions) {
-		m.selected = len(sessions) - 1
-	}
-	if m.selected < 0 {
-		m.selected = 0
-	}
-	m.events = nil
-	if len(sessions) > 0 {
-		events, err := m.store.Events(ctx, sessions[m.selected].ID, 20)
-		if err != nil {
-			m.err = err
-		} else {
-			m.events = events
-			m.err = nil
-		}
-	}
-	m.status = fmt.Sprintf("%d session(s) - refreshed %s", len(sessions), time.Now().Format("15:04:05"))
+	m.sessions = msg.sessions
+	m.selected = msg.selected
+	m.events = msg.events
+	m.status = fmt.Sprintf("%d session(s) - refreshed %s", len(m.sessions), time.Now().Format("15:04:05"))
 }
 
 func (m tuiModel) Init() tea.Cmd {
-	return tickCmd()
+	return tea.Batch(tickCmd(), loadCmd(m.store, m.selected))
 }
 
 func tickCmd() tea.Cmd {
@@ -92,22 +106,23 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "up", "k":
 			if m.selected > 0 {
 				m.selected--
-				m.load()
+				return m, loadCmd(m.store, m.selected)
 			}
 		case "down", "j":
 			if m.selected < len(m.sessions)-1 {
 				m.selected++
-				m.load()
+				return m, loadCmd(m.store, m.selected)
 			}
 		case "r":
-			m.load()
+			return m, loadCmd(m.store, m.selected)
 		}
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
+	case loadedMsg:
+		m.applyLoaded(msg)
 	case refreshMsg:
-		m.load()
-		return m, tickCmd()
+		return m, tea.Batch(tickCmd(), loadCmd(m.store, m.selected))
 	}
 	return m, nil
 }
@@ -127,6 +142,9 @@ func (m tuiModel) View() string {
 	b.WriteString(dimStyle.Render("   q quit · j/k move · r refresh"))
 	b.WriteString("\n\n")
 
+	if m.ingestErr != nil {
+		b.WriteString(warnStyle.Render("ingest failed: "+m.ingestErr.Error()) + "\n")
+	}
 	if m.err != nil {
 		b.WriteString(badStyle.Render("error: "+m.err.Error()) + "\n")
 		return b.String()
@@ -142,13 +160,21 @@ func (m tuiModel) View() string {
 	if width <= 0 {
 		width = 100
 	}
+	// Keep the panes inside the terminal: apply the minimum widths only when
+	// the terminal is wide enough for them.
 	leftWidth := width / 2
-	if leftWidth < 30 {
-		leftWidth = 30
-	}
 	rightWidth := width - leftWidth - 4
-	if rightWidth < 20 {
-		rightWidth = 20
+	if width >= 54 {
+		if leftWidth < 30 {
+			leftWidth = 30
+		}
+		rightWidth = width - leftWidth - 4
+		if rightWidth < 20 {
+			rightWidth = 20
+		}
+		leftWidth = width - rightWidth - 4
+	} else {
+		rightWidth = 0
 	}
 
 	var left strings.Builder
@@ -197,10 +223,13 @@ func (m tuiModel) View() string {
 		right.WriteString(style.Render(fmt.Sprintf("%s %s", ev.TS.Format("15:04:05"), truncate(label, rightWidth-10))) + "\n")
 	}
 
-	body := lipgloss.JoinHorizontal(lipgloss.Top,
-		lipgloss.NewStyle().Width(leftWidth).Render(left.String()),
-		lipgloss.NewStyle().Width(rightWidth).Render(right.String()),
-	)
+	body := lipgloss.NewStyle().Width(leftWidth).Render(left.String())
+	if rightWidth > 0 {
+		body = lipgloss.JoinHorizontal(lipgloss.Top,
+			lipgloss.NewStyle().Width(leftWidth).Render(left.String()),
+			lipgloss.NewStyle().Width(rightWidth).Render(right.String()),
+		)
+	}
 	b.WriteString(body)
 	b.WriteString("\n" + dimStyle.Render(m.status))
 	return b.String()

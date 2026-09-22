@@ -44,7 +44,7 @@ func registerContextBudget(reg *mcp.Registry, d Deps) {
 		func(ctx context.Context, args map[string]any) (any, error) {
 			items := []contextItem{}
 			items = append(items, toolContextItems(reg)...)
-			items = append(items, skillContextItems(d.Cfg.Root())...)
+			items = append(items, skillContextItems(ctx, d.Cfg.Root())...)
 			items = append(items, manifestContextItems(d.Cfg.Root())...)
 			sort.SliceStable(items, func(i, j int) bool {
 				if items[i].Tokens != items[j].Tokens {
@@ -64,12 +64,14 @@ func registerContextBudget(reg *mcp.Registry, d Deps) {
 				}
 			}
 			recommendations := contextRecommendations(items, byKind)
+			truncated := len(recommendations) < flagged
 			data := map[string]any{
-				"total_tokens":    total,
-				"by_kind":         byKind,
-				"tool_count":      len(reg.Names()),
-				"items":           items,
-				"recommendations": recommendations,
+				"recommendations_truncated": truncated,
+				"total_tokens":              total,
+				"by_kind":                   byKind,
+				"tool_count":                len(reg.Names()),
+				"items":                     items,
+				"recommendations":           recommendations,
 				"limits": map[string]any{
 					"tool_tokens_warn":     toolTokenWarn,
 					"skill_lines_warn":     skillLinesWarn,
@@ -124,10 +126,13 @@ func toolContextItems(reg *mcp.Registry) []contextItem {
 	return items
 }
 
-func skillContextItems(root string) []contextItem {
+func skillContextItems(ctx context.Context, root string) []contextItem {
 	base := filepath.Join(root, "plugins", "hackathonkit", "skills")
 	items := []contextItem{}
 	walkErr := filepath.WalkDir(base, func(path string, entry os.DirEntry, err error) error {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
 		if err != nil || entry.IsDir() {
 			return nil
 		}
