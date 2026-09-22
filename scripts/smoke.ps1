@@ -20,8 +20,18 @@ if (Test-Path -LiteralPath $binary) {
   $outFile = [System.IO.Path]::GetTempFileName()
   try {
     Set-Content -LiteralPath $inFile -Value $requests -NoNewline
-    $proc = Start-Process -FilePath $binary -ArgumentList @("--repo-root", $root) `
-      -RedirectStandardInput $inFile -RedirectStandardOutput $outFile -PassThru -NoNewWindow
+    $proc = $null
+    try {
+      $proc = Start-Process -FilePath $binary -ArgumentList @("--repo-root", $root) `
+        -RedirectStandardInput $inFile -RedirectStandardOutput $outFile -PassThru -NoNewWindow
+    } catch {
+      if (-not $Quiet) { Write-Host "[smoke] failed to start the MCP binary: $($_.Exception.Message)" }
+      exit 1
+    }
+    if (-not $proc) {
+      if (-not $Quiet) { Write-Host "[smoke] failed to start the MCP binary" }
+      exit 1
+    }
     if (-not $proc.WaitForExit(60000)) {
       $proc.Kill()
       $proc.WaitForExit()
@@ -46,11 +56,23 @@ if (Test-Path -LiteralPath $binary) {
   $outFile = [System.IO.Path]::GetTempFileName()
   try {
     Set-Content -LiteralPath $inFile -Value $requests -NoNewline
-    $proc = Start-Process -FilePath "docker" -ArgumentList @("compose", "-f", (Join-Path $root "docker-compose.yml"), "run", "--rm", "-T", "hackathonkit-mcp") `
-      -WorkingDirectory $root -RedirectStandardInput $inFile -RedirectStandardOutput $outFile -PassThru -NoNewWindow
+    $proc = $null
+    try {
+      $proc = Start-Process -FilePath "docker" -ArgumentList @("compose", "-f", (Join-Path $root "docker-compose.yml"), "run", "--rm", "-T", "hackathonkit-mcp") `
+        -WorkingDirectory $root -RedirectStandardInput $inFile -RedirectStandardOutput $outFile -PassThru -NoNewWindow
+    } catch {
+      if (-not $Quiet) { Write-Host "[smoke] failed to start docker compose: $($_.Exception.Message)" }
+      exit 1
+    }
+    if (-not $proc) {
+      if (-not $Quiet) { Write-Host "[smoke] failed to start docker compose" }
+      exit 1
+    }
     if (-not $proc.WaitForExit(120000)) {
       $proc.Kill()
       $proc.WaitForExit()
+      # --rm only removes the container after it exits; kill the hung server too.
+      & docker compose -f (Join-Path $root "docker-compose.yml") kill hackathonkit-mcp *> $null
       if (-not $Quiet) { Write-Host "[smoke] docker compose timed out after 120s" }
       exit 1
     }
@@ -67,12 +89,12 @@ if (Test-Path -LiteralPath $binary) {
 $lines = @($output | Where-Object { $_ -and $_.Trim() -ne "" })
 $ok = $true
 $ids = @()
-$parsedCount = 0
+$byId = @{}
 foreach ($line in $lines) {
   try {
     $obj = $line | ConvertFrom-Json
-    $parsedCount++
     $ids += [string]$obj.id
+    $byId[[string]$obj.id] = $obj
     if ($obj.error) {
       $ok = $false
       if (-not $Quiet) { Write-Host "[smoke] JSON-RPC error for id=$($obj.id): $($obj.error.message)" }
@@ -95,6 +117,23 @@ foreach ($line in $lines) {
 }
 if ($lines.Count -ne 3) { $ok = $false }
 if ($ok -and (($ids -join ",") -ne "1,2,3")) { $ok = $false }
+if ($ok) {
+  $init = $byId["1"].result
+  if (-not $init -or -not $init.protocolVersion) {
+    $ok = $false
+    if (-not $Quiet) { Write-Host "[smoke] initialize result is missing protocolVersion" }
+  }
+  $tools = $byId["2"].result.tools
+  if (-not $tools -or @($tools).Count -eq 0) {
+    $ok = $false
+    if (-not $Quiet) { Write-Host "[smoke] tools/list returned no tools" }
+  }
+  $ctx = $byId["3"].result
+  if (-not $ctx -or -not $ctx.content -or @($ctx.content).Count -eq 0) {
+    $ok = $false
+    if (-not $Quiet) { Write-Host "[smoke] system.context returned no content" }
+  }
+}
 
 if (-not $Quiet) {
   if ($ok) {

@@ -1,29 +1,47 @@
 $ErrorActionPreference = "Stop"
-if (-not $PSCommandPath) {
-  Write-Error "[sync-harness] PSCommandPath is empty; run this script as a file, not dot-sourced"
-  exit 1
-}
-$Root = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
-if (-not (Test-Path -LiteralPath (Join-Path $Root "docker-compose.yml"))) {
-  Write-Error "[sync-harness] refusing: '$Root' does not look like the hackathonkit repository root"
+
+function Fail([string]$Message) {
+  Write-Host $Message -ForegroundColor Red
   exit 1
 }
 
+function Copy-NoReparse([string]$From, [string]$To) {
+  New-Item -ItemType Directory -Force -Path $To | Out-Null
+  Get-ChildItem -LiteralPath $From -Force | ForEach-Object {
+    if ($_.Attributes -band [System.IO.FileAttributes]::ReparsePoint) { return }
+    $dest = Join-Path $To $_.Name
+    if ($_.PSIsContainer) { Copy-NoReparse $_.FullName $dest }
+    else { Copy-Item -LiteralPath $_.FullName -Destination $dest -Force }
+  }
+}
+
+if (-not $PSCommandPath) {
+  Fail "[sync-harness] PSCommandPath is empty; run this script as a file, not dot-sourced"
+}
+$Root = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
+if (-not (Test-Path -LiteralPath (Join-Path $Root "docker-compose.yml"))) {
+  Fail "[sync-harness] refusing: '$Root' does not look like the hackathonkit repository root"
+}
+
+$global:LASTEXITCODE = 0
 $global:LASTEXITCODE = 0
 & (Join-Path $PSScriptRoot "sync-skills.ps1")
 if ($LASTEXITCODE -ne 0) {
-  Write-Error "[sync-harness] sync-skills failed with exit code $LASTEXITCODE"
-  exit 1
+  Fail "[sync-harness] sync-skills failed with exit code $LASTEXITCODE"
 }
 
 $SkillsSrc = Join-Path $Root "plugins\hackathonkit\skills"
 if (-not (Test-Path -LiteralPath $SkillsSrc)) {
-  Write-Error "[sync-harness] skills source not found: $SkillsSrc"
-  exit 1
+  Fail "[sync-harness] skills source not found: $SkillsSrc"
 }
 if ((Get-ChildItem -LiteralPath $SkillsSrc -Directory | Measure-Object).Count -eq 0) {
-  Write-Error "[sync-harness] skills source is empty: $SkillsSrc"
-  exit 1
+  Fail "[sync-harness] skills source is empty: $SkillsSrc"
+}
+$missingPayload = @(Get-ChildItem -LiteralPath $SkillsSrc -Directory | Where-Object {
+  -not (Test-Path -LiteralPath (Join-Path $_.FullName "SKILL.md"))
+})
+if ($missingPayload.Count -gt 0) {
+  Fail "[sync-harness] skill directories without SKILL.md: $($missingPayload.Name -join ', ')"
 }
 
 # Claude Code reads project skills from .claude/skills. Mirror atomically so a
@@ -33,13 +51,11 @@ $ClaudeTmp = "$ClaudeSkills.tmp.$PID"
 if (Test-Path -LiteralPath $ClaudeTmp) { Remove-Item -LiteralPath $ClaudeTmp -Recurse -Force }
 New-Item -ItemType Directory -Force -Path $ClaudeTmp | Out-Null
 try {
-  Get-ChildItem -LiteralPath $SkillsSrc -Force |
-    Copy-Item -Destination $ClaudeTmp -Recurse -Force
+  Copy-NoReparse $SkillsSrc $ClaudeTmp
   $srcSkillCount = (Get-ChildItem -LiteralPath $SkillsSrc -Directory).Count
   $dstSkillCount = (Get-ChildItem -LiteralPath $ClaudeTmp -Directory).Count
   if ($srcSkillCount -ne $dstSkillCount) {
-    Write-Error "[sync-harness] claude mirror mismatch: $srcSkillCount source, $dstSkillCount copied"
-    exit 1
+    Fail "[sync-harness] claude mirror mismatch: $srcSkillCount source, $dstSkillCount copied"
   }
   # Move the live mirror aside before the swap so a failure cannot leave it
   # missing or half-populated.
@@ -54,6 +70,7 @@ try {
   if (Test-Path -LiteralPath $ClaudeOld) { Remove-Item -LiteralPath $ClaudeOld -Recurse -Force }
 } finally {
   if (Test-Path -LiteralPath $ClaudeTmp) { Remove-Item -LiteralPath $ClaudeTmp -Recurse -Force -ErrorAction SilentlyContinue }
+  if ($ClaudeOld -and (Test-Path -LiteralPath $ClaudeOld)) { Remove-Item -LiteralPath $ClaudeOld -Recurse -Force -ErrorAction SilentlyContinue }
 }
 
 $Required = @(
@@ -84,7 +101,7 @@ foreach ($f in @(".claude-plugin\plugin.json", ".claude-plugin\marketplace.json"
   try {
     $null = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json
   } catch {
-    Write-Error "[sync-harness] invalid JSON manifest: $f ($($_.Exception.Message))"
+    Write-Warning "[sync-harness] invalid JSON manifest: $f ($($_.Exception.Message))"
     $Missing++
   }
 }
@@ -92,3 +109,4 @@ if ($Missing -ne 0) { exit 1 }
 
 $Count = (Get-ChildItem -Directory $ClaudeSkills | Measure-Object).Count
 Write-Host "[sync-harness] adapters ready: codex, opencode, claude, cursor ($Count skills mirrored to .claude/skills)"
+exit 0

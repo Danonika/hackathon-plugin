@@ -2,18 +2,29 @@ $ErrorActionPreference = "Continue"
 
 # A bounded TCP connect is far faster than Test-NetConnection's ICMP+TCP probe.
 function Test-TcpPort([string]$HostName, [int]$Port) {
+  $client = $null
+  $async = $null
   try {
     $client = New-Object System.Net.Sockets.TcpClient
     $async = $client.BeginConnect($HostName, $Port, $null, $null)
-    if (-not $async.AsyncWaitHandle.WaitOne(1000)) { $client.Close(); return $false }
+    if (-not $async.AsyncWaitHandle.WaitOne(1000)) { return $false }
     $client.EndConnect($async)
-    $client.Close()
     return $true
   } catch {
     return $false
+  } finally {
+    if ($async) { $async.AsyncWaitHandle.Close() }
+    if ($client) { $client.Close() }
   }
 }
-$root = Split-Path -Parent (Split-Path -Parent $PSCommandPath)
+$scriptPath = $PSCommandPath
+if (-not $scriptPath) { $scriptPath = $MyInvocation.MyCommand.Path }
+if (-not $scriptPath -and $PSScriptRoot) { $scriptPath = Join-Path $PSScriptRoot "doctor.ps1" }
+if (-not $scriptPath) {
+  Write-Host "[doctor] cannot resolve the script path; run this file, not dot-sourced" -ForegroundColor Red
+  exit 1
+}
+$root = Split-Path -Parent (Split-Path -Parent $scriptPath)
 $script:fail = 0
 
 function Check([string]$name, [bool]$ok, [string]$detail) {
@@ -52,13 +63,23 @@ if ($engine) {
 }
 Check "mcp runtime" ($binary -or $image) $(if ($binary) { "local binary" } elseif ($image) { "docker image" } else { "run scripts/setup.ps1" })
 
-$srcSkills = (Get-ChildItem -LiteralPath (Join-Path $root "plugins\hackathonkit\skills") -Directory -ErrorAction SilentlyContinue).Count
-$dstPath = Join-Path $root ".agents\skills"
-$dstSkills = 0
-if (Test-Path -LiteralPath $dstPath) {
-  $dstSkills = (Get-ChildItem -LiteralPath $dstPath -Directory).Count
+$srcSkillsPath = Join-Path $root "plugins\hackathonkit\skills"
+$srcFiles = @()
+if (Test-Path -LiteralPath $srcSkillsPath) {
+  $srcFiles = @(Get-ChildItem -LiteralPath $srcSkillsPath -Recurse -File -Force |
+    Where-Object { -not ($_.Attributes -band [System.IO.FileAttributes]::ReparsePoint) } |
+    ForEach-Object { $_.FullName.Substring($srcSkillsPath.Length).TrimStart('\') } | Sort-Object)
 }
-Check "skills mirror" ($srcSkills -gt 0 -and $srcSkills -eq $dstSkills) "plugin=$srcSkills fallback=$dstSkills"
+$dstPath = Join-Path $root ".agents\skills"
+$dstFiles = @()
+if (Test-Path -LiteralPath $dstPath) {
+  $dstFiles = @(Get-ChildItem -LiteralPath $dstPath -Recurse -File -Force |
+    Where-Object { -not ($_.Attributes -band [System.IO.FileAttributes]::ReparsePoint) } |
+    ForEach-Object { $_.FullName.Substring($dstPath.Length).TrimStart('\') } | Sort-Object)
+}
+$mirrorDiff = @(Compare-Object -ReferenceObject $srcFiles -DifferenceObject $dstFiles)
+$mirrorOk = ($srcFiles.Count -gt 0) -and ($mirrorDiff.Count -eq 0)
+Check "skills mirror" $mirrorOk "plugin=$($srcFiles.Count) files fallback=$($dstFiles.Count)"
 
 $hooksFile = Join-Path $root "plugins\hackathonkit\hooks\codex-hooks.json"
 Check "session hooks" (Test-Path -LiteralPath $hooksFile) $(if (Test-Path -LiteralPath $hooksFile) { "codex-hooks.json" } else { "missing plugins/hackathonkit/hooks/codex-hooks.json" })
@@ -80,10 +101,14 @@ Check "harness adapters" ($adapterMissing -eq 0) $(if ($adapterMissing -eq 0) { 
 $statePath = Join-Path $root "configs\install-state.json"
 $stateVersion = ""
 if (Test-Path -LiteralPath $statePath) {
-  $stateMatch = Select-String -Path $statePath -Pattern '"version"\s*:\s*"([^"]+)"' | Select-Object -First 1
-  if ($stateMatch) { $stateVersion = $stateMatch.Matches[0].Groups[1].Value }
+  try {
+    $state = Get-Content -LiteralPath $statePath -Raw | ConvertFrom-Json
+    if ($state.version) { $stateVersion = [string]$state.version }
+  } catch {
+    $stateVersion = "unreadable"
+  }
 }
-Check "install state" (Test-Path -LiteralPath $statePath) $(if ($stateVersion) { "version $stateVersion" } else { "missing configs/install-state.json; run scripts/setup.ps1" })
+Check "install state" ($stateVersion -ne "" -and $stateVersion -ne "unknown" -and $stateVersion -ne "unreadable") $(if ($stateVersion) { "version $stateVersion" } else { "missing configs/install-state.json; run scripts/setup.ps1" })
 
 $telegramSet = $false
 if ($env:TELEGRAM_BOT_TOKEN) { $telegramSet = $true }
@@ -108,17 +133,24 @@ if (Test-Path -LiteralPath $mcpExe) {
 }
 
 if ($codex) {
-  $json = (cmd /c "codex plugin list --json 2>nul") -join "`n"
+  $json = (& codex plugin list --json 2>$null) -join "`n"
+  $codexExit = $LASTEXITCODE
   $pluginInstalled = $false
   $pluginEnabled = $false
   $pluginDetail = "install: scripts/setup.ps1 or codex plugin add hackathonkit@hackathonkit-local"
-  if ($json) {
+  if ($codexExit -ne 0) {
+    $pluginDetail = "codex plugin list failed (exit $codexExit)"
+  } elseif ($json) {
     try {
       $parsed = $json | ConvertFrom-Json
-      foreach ($p in $parsed.installed) {
-        if ($p.name -eq "hackathonkit") {
-          $pluginInstalled = $true
-          $pluginEnabled = [bool]$p.enabled
+      if ($null -eq $parsed.installed) {
+        $pluginDetail = "unexpected codex plugin list shape (no installed array)"
+      } else {
+        foreach ($p in $parsed.installed) {
+          if ($p.name -eq "hackathonkit") {
+            $pluginInstalled = $true
+            $pluginEnabled = [bool]$p.enabled
+          }
         }
       }
     } catch {
@@ -155,8 +187,16 @@ if ($engine) {
   Write-Host ("[info] {0,-22} {1}" -f "minio", $(if ($minio) { "localhost:9000 (optional artifact backend)" } else { "not running (optional artifact backend)" }))
 }
 
-& (Join-Path $root "scripts\smoke.ps1") -Quiet
-Check "mcp handshake" ($LASTEXITCODE -eq 0) "initialize / tools/list / system.context"
+$smokePath = Join-Path $root "scripts\smoke.ps1"
+if (-not (Test-Path -LiteralPath $smokePath)) {
+  Check "mcp handshake" $false "scripts/smoke.ps1 is missing"
+} else {
+  $global:LASTEXITCODE = 0
+  & $smokePath -Quiet
+  $smokeExit = $LASTEXITCODE
+  if ($null -eq $smokeExit) { $smokeExit = if ($?) { 0 } else { 1 } }
+  Check "mcp handshake" ($smokeExit -eq 0) "initialize / tools/list / system.context"
+}
 
 Write-Host ""
 if ($script:fail -eq 0) {

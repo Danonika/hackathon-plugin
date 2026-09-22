@@ -2,27 +2,31 @@ param(
   [string]$Root
 )
 $ErrorActionPreference = "Stop"
+
+# Write-Error would terminate before the following exit under Stop, so report
+# and exit explicitly.
+function Fail([string]$Message) {
+  Write-Host $Message -ForegroundColor Red
+  exit 1
+}
+
 if (-not $Root) {
   if (-not $PSScriptRoot) {
-    Write-Error "[mcp-manifest] cannot resolve the repository root (empty PSScriptRoot)"
-    exit 1
+    Fail "[mcp-manifest] cannot resolve the repository root (empty PSScriptRoot)"
   }
   $Root = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 }
 if (-not (Test-Path -LiteralPath $Root -PathType Container)) {
-  Write-Error "[mcp-manifest] repository root not found: $Root"
-  exit 1
+  Fail "[mcp-manifest] repository root not found: $Root"
 }
 
 $templatePath = Join-Path $Root "plugins\hackathonkit\.mcp.json.template"
 if (-not (Test-Path -LiteralPath $templatePath)) {
-  Write-Error "[mcp-manifest] template not found: $templatePath"
-  exit 1
+  Fail "[mcp-manifest] template not found: $templatePath"
 }
 $template = Get-Content -LiteralPath $templatePath -Raw
 if ($null -eq $template) {
-  Write-Error "[mcp-manifest] template is empty: $templatePath"
-  exit 1
+  Fail "[mcp-manifest] template is empty: $templatePath"
 }
 
 # ConvertTo-Json produces a correctly escaped JSON string literal; strip the
@@ -34,20 +38,25 @@ $manifest = $template.Replace("{{REPO_ROOT}}", $rootJson).Replace("{{MCP_LAUNCHE
 $manifestPath = Join-Path $Root "plugins\hackathonkit\.mcp.json"
 $manifestTmp = "$manifestPath.tmp.$PID"
 try {
-  [System.IO.File]::WriteAllText($manifestTmp, $manifest, (New-Object System.Text.UTF8Encoding($false)))
-  $rendered = Get-Content -LiteralPath $manifestTmp -Raw
-  if ($rendered -match "\{\{(REPO_ROOT|MCP_LAUNCHER)\}\}") {
-    Write-Error "[mcp-manifest] unexpanded placeholder remains; keeping the previous manifest"
-    exit 1
+  # Validate the string we are about to write (not a re-read that could decode
+  # differently from the UTF-8 no-BOM bytes on disk).
+  if ($manifest -match "\{\{(REPO_ROOT|MCP_LAUNCHER)\}\}") {
+    Fail "[mcp-manifest] unexpanded placeholder remains; keeping the previous manifest"
   }
   try {
-    $null = $rendered | ConvertFrom-Json
+    $null = $manifest | ConvertFrom-Json
   } catch {
-    Write-Error "[mcp-manifest] rendered manifest is not valid JSON: $($_.Exception.Message)"
-    exit 1
+    Fail "[mcp-manifest] rendered manifest is not valid JSON: $($_.Exception.Message)"
   }
-  Move-Item -LiteralPath $manifestTmp -Destination $manifestPath -Force
+  [System.IO.File]::WriteAllText($manifestTmp, $manifest, (New-Object System.Text.UTF8Encoding($false)))
+  if (Test-Path -LiteralPath $manifestPath) {
+    # Atomic replace: never leave the destination deleted if the rename fails.
+    [System.IO.File]::Replace($manifestTmp, $manifestPath, $null)
+  } else {
+    [System.IO.File]::Move($manifestTmp, $manifestPath)
+  }
 } finally {
   if (Test-Path -LiteralPath $manifestTmp) { Remove-Item -LiteralPath $manifestTmp -Force -ErrorAction SilentlyContinue }
 }
 Write-Host "[mcp-manifest] wrote plugins/hackathonkit/.mcp.json for $Root"
+exit 0

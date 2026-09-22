@@ -2,25 +2,46 @@ param(
   [switch]$Yes
 )
 $ErrorActionPreference = "Stop"
-if (-not $PSCommandPath) {
-  Write-Error "[uninstall] PSCommandPath is empty; run this script as a file, not dot-sourced"
-  exit 1
-}
-$root = Split-Path -Parent (Split-Path -Parent $PSCommandPath)
-if (-not $root -or -not (Test-Path -LiteralPath (Join-Path $root "docker-compose.yml")) -or -not (Test-Path -LiteralPath (Join-Path $root "go.mod"))) {
-  Write-Error "[uninstall] refusing: '$root' does not look like the hackathonkit repository root"
+
+function Fail([string]$Message) {
+  Write-Host $Message -ForegroundColor Red
   exit 1
 }
 
+# Compare two trees by relative file path and size so a user-authored skill that
+# merely shares a folder name with a shipped skill is not deleted.
+function Test-SameTree([string]$A, [string]$B) {
+  if (-not (Test-Path -LiteralPath $A) -or -not (Test-Path -LiteralPath $B)) { return $false }
+  $aFiles = @(Get-ChildItem -LiteralPath $A -Recurse -File -Force |
+    Where-Object { -not ($_.Attributes -band [System.IO.FileAttributes]::ReparsePoint) } |
+    ForEach-Object { "$($_.FullName.Substring($A.Length).TrimStart('\'))|$($_.Length)" } | Sort-Object)
+  $bFiles = @(Get-ChildItem -LiteralPath $B -Recurse -File -Force |
+    Where-Object { -not ($_.Attributes -band [System.IO.FileAttributes]::ReparsePoint) } |
+    ForEach-Object { "$($_.FullName.Substring($B.Length).TrimStart('\'))|$($_.Length)" } | Sort-Object)
+  return @(Compare-Object -ReferenceObject $aFiles -DifferenceObject $bFiles).Count -eq 0
+}
+
+if (-not $PSCommandPath) {
+  Fail "[uninstall] PSCommandPath is empty; run this script as a file, not dot-sourced"
+}
+$root = Split-Path -Parent (Split-Path -Parent $PSCommandPath)
+$markers = @("docker-compose.yml", "go.mod", "plugins\hackathonkit\.codex-plugin\plugin.json", "plugins\hackathonkit\skills")
+$missingMarkers = @($markers | Where-Object { -not (Test-Path -LiteralPath (Join-Path $root $_)) })
+if (-not $root -or $missingMarkers.Count -gt 0) {
+  Fail "[uninstall] refusing: '$root' does not look like the hackathonkit repository root (missing: $($missingMarkers -join ', '))"
+}
+
 $codexFail = 0
-if (Get-Command codex -ErrorAction SilentlyContinue) {
+if (Get-Command codex -CommandType Application -ErrorAction SilentlyContinue) {
   if ($Yes) {
     $global:LASTEXITCODE = 0
     & codex plugin remove hackathonkit *> $null
-    if ($LASTEXITCODE -ne 0) { Write-Warning "[uninstall] codex plugin remove failed"; $codexFail = 1 }
+    $removeExit = $LASTEXITCODE
+    if ($removeExit -ne 0) { Write-Warning "[uninstall] codex plugin remove failed (exit $removeExit)"; $codexFail = 1 }
     $global:LASTEXITCODE = 0
     & codex plugin marketplace remove hackathonkit-local *> $null
-    if ($LASTEXITCODE -ne 0) { Write-Warning "[uninstall] codex marketplace remove failed"; $codexFail = 1 }
+    $marketExit = $LASTEXITCODE
+    if ($marketExit -ne 0) { Write-Warning "[uninstall] codex marketplace remove failed (exit $marketExit)"; $codexFail = 1 }
     Write-Host "[uninstall] removed hackathonkit plugin and marketplace"
   } else {
     Write-Host "would run: codex plugin remove hackathonkit"
@@ -52,8 +73,18 @@ foreach ($rel in $targets) {
     if (-not (Test-Path -LiteralPath $src)) { continue }
     foreach ($skill in Get-ChildItem -LiteralPath $src -Directory) {
       $skillTarget = Join-Path $target $skill.Name
+      if (-not (Test-Path -LiteralPath $skillTarget)) { continue }
+      $item = Get-Item -LiteralPath $skillTarget -Force
+      if ($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) {
+        Write-Warning "[uninstall] skipping reparse point: $rel\$($skill.Name)"
+        continue
+      }
+      if (-not (Test-SameTree $skill.FullName $skillTarget)) {
+        Write-Warning "[uninstall] keeping $rel\$($skill.Name): it differs from the shipped skill (user-authored?)"
+        continue
+      }
       if ($Yes) {
-        try { if (Test-Path -LiteralPath $skillTarget) { Remove-Item -LiteralPath $skillTarget -Recurse -Force -ErrorAction Stop } }
+        try { Remove-Item -LiteralPath $skillTarget -Recurse -Force -ErrorAction Stop }
         catch { Write-Warning "[uninstall] failed to remove ${rel}\$($skill.Name): $($_.Exception.Message)"; $Failures++ }
       } else {
         Write-Host "would remove: $rel\$($skill.Name)"
@@ -78,7 +109,6 @@ if (-not $Yes) {
   exit 0
 }
 if ($Failures -gt 0 -or $codexFail -ne 0) {
-  Write-Error "[uninstall] finished with warnings ($Failures path failure(s))"
-  exit 1
+  Fail "[uninstall] finished with warnings ($Failures path failure(s))"
 }
 Write-Host "[uninstall] done. data/input, data/artifacts, logs/ and committed files were kept (data/control was removed)."

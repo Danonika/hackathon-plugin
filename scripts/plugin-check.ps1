@@ -1,9 +1,14 @@
 $ErrorActionPreference = "Continue"
 
-$global:LASTEXITCODE = 0
+$codexCmd = Get-Command codex -CommandType Application -ErrorAction SilentlyContinue
+if (-not $codexCmd) {
+  Write-Host "[plugin-check] codex executable not found on PATH"
+  exit 1
+}
 $json = (& codex plugin list --json 2>$null) -join "`n"
-if ($LASTEXITCODE -ne 0 -or -not $json) {
-  Write-Host "[plugin-check] codex plugin list is unavailable"
+$codexExit = $LASTEXITCODE
+if ($codexExit -ne 0 -or -not $json) {
+  Write-Host "[plugin-check] codex plugin list is unavailable (exit $codexExit)"
   exit 1
 }
 try {
@@ -44,6 +49,20 @@ if (-not $server -or -not $server.command) {
 }
 $cmd = [string]$server.command
 $argList = @($server.args | ForEach-Object { [string]$_ })
+if (-not [System.IO.Path]::IsPathRooted($cmd)) {
+  $cmd = Join-Path $sourcePath $cmd
+}
+$cmdFull = [System.IO.Path]::GetFullPath($cmd)
+$sourceFull = [System.IO.Path]::GetFullPath($sourcePath).TrimEnd([System.IO.Path]::DirectorySeparatorChar) + [System.IO.Path]::DirectorySeparatorChar
+if (-not $cmdFull.StartsWith($sourceFull, [System.StringComparison]::OrdinalIgnoreCase)) {
+  Write-Host "[plugin-check] refusing to execute a command outside the installed plugin: $cmdFull"
+  exit 1
+}
+if (-not (Test-Path -LiteralPath $cmdFull)) {
+  Write-Host "[plugin-check] MCP command does not exist: $cmdFull"
+  exit 1
+}
+$cmd = $cmdFull
 
 $temp = Join-Path $env:TEMP ("hackathonkit-plugin-check-" + [guid]::NewGuid().ToString("N"))
 New-Item -ItemType Directory -Path $temp | Out-Null
@@ -57,6 +76,7 @@ $requests = @(
 $stderrPath = Join-Path $temp "stderr.txt"
 $out = @()
 $exitCode = 0
+$stderrText = ""
 try {
   # Run in a job so a hung server cannot block the check forever.
   $job = Start-Job -ScriptBlock {
@@ -75,7 +95,6 @@ try {
   if ($job.State -ne "Completed") { $exitCode = 1 }
   Remove-Job $job -Force -ErrorAction SilentlyContinue
 } finally {
-  $stderrText = ""
   if (Test-Path -LiteralPath $stderrPath) {
     $stderrText = ((Get-Content -LiteralPath $stderrPath -Tail 5 -ErrorAction SilentlyContinue) -join "`n")
   }
@@ -89,12 +108,17 @@ if ($exitCode -ne 0) {
 }
 
 $responses = @{}
+$buffer = ""
 foreach ($line in @($out | Where-Object { $_ -and $_.Trim() -ne "" })) {
-  try {
-    $obj = $line | ConvertFrom-Json
-  } catch {
+  if ($buffer) { $buffer = $buffer + "`n" + $line } else { $buffer = $line }
+  $obj = $null
+  try { $obj = $buffer | ConvertFrom-Json } catch { $obj = $null }
+  if ($null -eq $obj) {
+    # Not yet a complete JSON value; keep buffering, but do not grow forever.
+    if ($buffer.Length -gt 1048576) { $buffer = "" }
     continue
   }
+  $buffer = ""
   if ($obj.id -in @(1, 2, 3)) {
     $responses[[string]$obj.id] = $obj
     if ($obj.error) {
