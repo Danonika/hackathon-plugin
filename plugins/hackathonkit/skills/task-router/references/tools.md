@@ -1,12 +1,12 @@
 # Hackathon Agent Kit MCP Tool Catalogue
 
-All 31 tools return the shared envelope:
+All 40 tools return the shared envelope:
 `status` (`ok` | `partial` | `error`), `data`, `sources`, `warnings`, `metrics`, `trace_id`.
 Read `warnings` before trusting `data`; keep `sources` for citations.
 
 ## Discovery Order
 
-`system.context` -> `learning.recall` -> `system.capabilities` -> `system.context_budget` ->
+`system.context` -> `system.resources` -> `learning.recall` -> `system.capabilities` -> `system.context_budget` ->
 `files.describe` -> domain tools -> `reports.create` -> `learning.record`.
 
 Call the smallest set that finishes the task. Do not list or call tools "just in case".
@@ -16,6 +16,9 @@ Call the smallest set that finishes the task. Do not list or call tools "just in
 | Tool | Arguments | Returns |
 |---|---|---|
 | `system.context` | - | `routing_mode`, `routing_config_version`, live `capabilities` |
+| `system.resources` | `task`, `track` (optional) | `profile` (booleans only), `providers[]` with `detected`/`claimed`/`ready`, `summary`, `missing[]`, `next_steps[]`, `tracks[]` |
+| `system.resources_set` | provider booleans (`openai_api`, `nvidia_api`, `telegram`, `postgres`, `minio`, `codex_pro`), `track`, `note` | saved `profile`, refreshed `providers`, `next_steps[]` (env-set.sh commands); never accepts raw keys |
+| `system.resources_probe` | `provider` (optional), `live` (false) | `results[]` with `configured`, `reachable`, `status_code`, `latency_ms`, `models`; live calls only when `live: true` |
 | `system.capabilities` | - | capability groups, experimental `fly_router`, tool list |
 | `routing.fly_recommend` | `task` (required), `input_metadata`, `available_capabilities` | `route`, ranked `recommendations`, metrics `max_score`, `threshold`, `encoder`, `category_scores` |
 | `routing.fly_feedback` | `task` (required), `chosen` (required), `recommended`, `source` (`accepted`/`codex-correction`/`normal-teacher`/`fallback`), `input_metadata` | `stored`, `learned`, `memory_size` |

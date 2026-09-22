@@ -12,6 +12,7 @@ data/judge-bundles/
 .agents/skills/
 .claude/skills/
 configs/install-state.json
+configs/resources.json
 evals/calibration/
 evals/decisions/
 evals/quality/

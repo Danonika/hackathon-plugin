@@ -29,6 +29,7 @@ type Deps struct {
 
 func RegisterAll(reg *mcp.Registry, d Deps) {
 	registerSystem(reg, d)
+	registerResources(reg, d)
 	registerEvaluation(reg, d)
 	registerLearning(reg, d)
 	registerPlans(reg, d)

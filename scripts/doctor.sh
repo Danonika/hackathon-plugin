@@ -133,6 +133,20 @@ else
   echo "[info] telegram             not configured (set TELEGRAM_BOT_TOKEN in .env)"
 fi
 
+if [ -x "$ROOT/bin/hackathonkit-mcp" ]; then
+  RESOURCES_JSON=$("$ROOT/bin/hackathonkit-mcp" --repo-root "$ROOT" --resources 2>/dev/null || true)
+  RESOURCES_SUMMARY=$(printf '%s' "$RESOURCES_JSON" | sed -n 's/.*"summary": *"\([^"]*\)".*/\1/p' | head -n 1)
+  if printf '%s' "$RESOURCES_JSON" | grep -q '"present": *true'; then
+    echo "[info] resources            $RESOURCES_SUMMARY"
+  else
+    echo "[info] resources            not configured (run scripts/setup-resources.sh)"
+  fi
+elif [ -f "$ROOT/configs/resources.json" ]; then
+  echo "[info] resources            profile present (configs/resources.json)"
+else
+  echo "[info] resources            not configured (run scripts/setup-resources.sh)"
+fi
+
 if command -v node >/dev/null 2>&1; then
   check "node (hooks)" 1 "$(node --version 2>/dev/null)"
   if node "$ROOT/plugins/hackathonkit/scripts/hooks.test.js" >/dev/null 2>&1; then

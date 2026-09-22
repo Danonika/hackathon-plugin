@@ -2,7 +2,7 @@
 
 Local Codex plugin backed by a typed MCP capability layer. Codex is the main reasoning engine, Skills define domain workflows, the local MCP server exposes deterministic and AI-powered capabilities, and the experimental Fly router recommends capability routes while Codex keeps the final decision.
 
-Status: v0.13.2. MCP runtime (37 tools), 29 standard-compliant skills (validator-enforced), 88% Go test coverage with an 80% gate, session hooks, durable learnings, Codex subagents, four harness adapters, a full control plane (SQLite store, daemon, TUI, worktrees, agent runs, risk scoring, session handoff), staged build plans, PDF/XLSX processing, Fly v2 (keyword + embeddings + kNN memory + mushroom-body learning + LLM classifier), Postgres/MinIO backends, demo dashboard, install profiles/repair, a quality gate with a Go-enabled Docker target, a Fly A/B benchmark, plan review, security review, a clean-checkout rehearsal command, a Telegram integration capability for built projects and the evaluation subsystem (deterministic aggregation, calibration, loop decisions and bundle freezing) are in place.
+Status: v0.14.0. MCP runtime (40 tools), 29 standard-compliant skills (validator-enforced), 88% Go test coverage with an 80% gate, session hooks, durable learnings, Codex subagents, four harness adapters, a full control plane (SQLite store, daemon, TUI, worktrees, agent runs, risk scoring, session handoff), staged build plans, PDF/XLSX processing, Fly v2 (keyword + embeddings + kNN memory + mushroom-body learning + LLM classifier), Postgres/MinIO backends, demo dashboard, install profiles/repair, a quality gate with a Go-enabled Docker target, a Fly A/B benchmark, plan review, security review, a clean-checkout rehearsal command, a resource-aware planner (API resource questionnaire, provider probes, per-track variants), a Telegram integration capability for built projects and the evaluation subsystem (deterministic aggregation, calibration, loop decisions and bundle freezing) are in place.
 
 ## Contents
 
@@ -37,14 +37,17 @@ Status: v0.13.2. MCP runtime (37 tools), 29 standard-compliant skills (validator
 ```text
 Codex (reasoning, final decisions)
   |
-  |-- Skills (16): workflow prompts, progressive disclosure, evidence contracts
+  |-- Skills (29): workflow prompts, progressive disclosure, evidence contracts
   |     task-router, build-planner, theme-research, rag-research, document-intelligence,
   |     data-analysis, time-series-analysis, government-services, kazakh-language,
   |     report-builder, judge, project-cost, roast-project, cp-expert-refactoring,
-  |     system-design-expert, self-improvement-controller
+  |     system-design-expert, self-improvement-controller, devops-expert, qa-expert,
+  |     telegram-integration, output-self-check, verification-loop, skill-authoring,
+  |     search-first, codebase-onboarding, context-management, git-workflow, tdd-workflow,
+  |     learning-loop, security-review
   |
-  |-- MCP server (stdio JSON-RPC, 31 tools, one shared envelope per call)
-        system.*            context, capabilities, context budget
+  |-- MCP server (stdio JSON-RPC, 40 tools, one shared envelope per call)
+        system.*            context, resources, capabilities, context budget
         routing.fly_*       capability recommendation + learning feedback
         learning.*          durable trigger/insight learnings with confidence
         eval.*              deterministic evaluation, calibration, decisions, bundles
@@ -216,6 +219,21 @@ go run ./cmd/fly-bench --json     # full report
 
 Metrics: recall@k against expected capabilities, top-1 agreement between baseline and full pipeline, determinism across two runs, and mean latency. With `OPENAI_API_KEY` the full pipeline uses real embeddings and the LLM classifier; without it, the hash encoder fallback is measured.
 
+## Resource-aware planning
+
+The harness asks once which external API resources exist, stores booleans (never secrets) in git-ignored `configs/resources.json` and picks the execution variant per task: deterministic tools when no keys are configured, provider-backed variants when they are.
+
+```sh
+go run ./cmd/hackathonkit-mcp --resources             # detected providers + saved profile as JSON
+go run ./cmd/hackathonkit-mcp --resources-set 'openai_api=true,codex_pro=true,track=08'
+sh scripts/setup-resources.sh                     # interactive questionnaire; keys go to .env via env-set.sh
+```
+
+- Providers: `openai_api`, `nvidia_api`, `telegram`, `postgres`, `minio` (detected from `.env`) and `codex_pro` (manual subscription flag). `system.resources` reports `detected`, `claimed` and `ready` per provider.
+- `system.resources` is the agent entry point: when the profile is missing it returns `partial` with an ask-the-user warning; `system.resources_set` records the answers; claimed-but-missing keys come back as `missing[]` plus exact `scripts/env-set.sh` commands. Keys never transit chat or the MCP layer.
+- `system.resources_probe` checks reachability: presence-only by default; `live: true` makes 5s `GET /models` calls (OpenAI, NVIDIA) and a Telegram `getMe`. Errors are redacted and keys never appear in the output.
+- `--session-context` and the SessionStart hook print a `resources:` line, so every session starts with the known profile or an explicit ask-the-user marker.
+
 ## MCP tools
 
 Every tool returns the shared envelope: `status` (`ok` | `partial` | `error`), `data`, `sources`, `warnings`, `metrics`, `trace_id`. Read `warnings` before trusting `data`; keep `sources` for citations. The JSON-RPC response wraps the envelope in `content[0].text` and mirrors `status == "error"` in `isError`.
@@ -225,6 +243,9 @@ Every tool returns the shared envelope: `status` (`ok` | `partial` | `error`), `
 | Tool | Arguments | Returns |
 |---|---|---|
 | `system.context` | - | `routing_mode`, `routing_config_version`, live `capabilities` |
+| `system.resources` | `task`, `track` (optional) | `profile` (booleans only), `providers[]` with `detected`/`claimed`/`ready`/`missing_keys`, `summary`, `missing[]`, `next_steps[]`, `tracks[]`; `partial` with an ask-the-user warning when the profile is missing |
+| `system.resources_set` | provider booleans (`openai_api`, `nvidia_api`, `telegram`, `postgres`, `minio`, `codex_pro`), `track`, `note` | saved `profile`, refreshed `providers`, `next_steps[]` (exact `scripts/env-set.sh` commands); never accepts raw keys |
+| `system.resources_probe` | `provider` (optional), `live` (false) | `results[]` with `configured`, `reachable`, `status_code`, `latency_ms`, `models`; live `GET /models` (OpenAI, NVIDIA) and `getMe` (Telegram) only when `live: true` |
 | `system.capabilities` | - | capability groups (documents, rag, speech, vision, data_analysis, timeseries, classification, charts, reports, evaluation), experimental `fly_router`, tool list |
 | `routing.fly_recommend` | `task` (required), `input_metadata`, `available_capabilities` | `route`, ranked `recommendations`, metrics `max_score`, `threshold`, `encoder`, `category_scores` |
 | `routing.fly_feedback` | `task`, `chosen` (both required), `recommended`, `source` (`accepted`/`codex-correction`/`normal-teacher`/`fallback`), `input_metadata` | `stored`, `learned`, `memory_size` |
@@ -457,7 +478,7 @@ The skill directory stays the single source of truth; `scripts/sync-harness.sh` 
 | Cursor | `.cursor/rules/hackathonkit.mdc` | conventions and MCP usage |
 | Any harness | `AGENTS.md` | portable instructions |
 
-Install profiles: `scripts/setup.sh --profile core` excludes the explicit-only evaluation skills from the generated mirrors (the plugin itself always ships all 16). `scripts/repair.sh` regenerates `.mcp.json`, mirrors and install state; `scripts/uninstall.sh [--yes]` removes generated artifacts (dry run without `--yes`). `configs/install-state.json` records version, profile, runtime and adapters.
+Install profiles: `scripts/setup.sh --profile core` excludes the explicit-only evaluation skills from the generated mirrors (the plugin itself always ships all 29). `scripts/repair.sh` regenerates `.mcp.json`, mirrors and install state; `scripts/uninstall.sh [--yes]` removes generated artifacts (dry run without `--yes`). `configs/install-state.json` records version, profile, runtime and adapters.
 
 ## Scripts
 
@@ -485,7 +506,7 @@ plugins/hackathonkit/          Codex plugin (single source of truth for skills)
   .mcp.json               generated by scripts/setup (absolute launcher path; prefers bin/, falls back to docker compose)
   .mcp.json.template      template with {{REPO_ROOT}} placeholder
   hooks/codex-hooks.json  SessionStart / PostToolUse / Stop hook registration
-  skills/                 28 skills, each with SKILL.md + agents/openai.yaml (+ references/)
+  skills/                 29 skills, each with SKILL.md + agents/openai.yaml (+ references/)
   scripts/                launchers and hooks.js (session lifecycle)
 .agents/plugins/           repo marketplace
 .agents/skills/            generated fallback mirror (scripts/sync-skills)
@@ -540,6 +561,8 @@ go run ./cmd/hackathonkit-ctl daemon start      # background ingest + loopback A
 go run ./cmd/hackathonkit-ctl tui               # live dashboard
 go run ./cmd/fly-bench                      # Normal-vs-Fly A/B evidence
 go run ./cmd/hackathonkit-rehearse              # clean-checkout end-to-end rehearsal -> evals/rehearsal/
+go run ./cmd/hackathonkit-mcp --resources       # detected API resources + saved profile as JSON
+sh scripts/setup-resources.sh               # interactive resource questionnaire -> configs/resources.json + .env
 sh scripts/quality-gate.sh                  # build/verify gate -> evals/quality/
 sh scripts/sync-harness.sh                  # regenerate mirrors, verify adapters
 sh scripts/repair.sh                        # regenerate missing generated artifacts
@@ -551,9 +574,9 @@ Sample dataset: `data/input/sample-telemetry.csv` (72 hourly readings with two p
 
 ## Testing
 
-`go test ./...` covers the JSON-RPC handshake, notification suppression, panic containment, live routing and evaluation config re-reads, path sanitization and backend fallback, observability append/tail, judge aggregation/calibration/decisions, the bundle freezer, the eval and plan tool handlers, learning confidence/recall/promotion, the context-budget estimator, control-plane ingest idempotency, deterministic risk scoring, handoff rendering, the daemon HTTP handlers, the quality-gate store/reader, the Fly benchmark metrics, the security scanner, the Telegram client and tools (fake Bot API; no live calls in CI), the rehearsal driver and the skill-standard validator (including a catalog-wide regression test). Total coverage is 88% of statements (enforced at 80% by `scripts/coverage-check.sh`; override with `HACKATHONKIT_COVERAGE_TARGET`). Run `go run ./cmd/hackathonkit-mcp --selftest` for the end-to-end handshake and `scripts/smoke.sh` for the process-level check.
+`go test ./...` covers the JSON-RPC handshake, notification suppression, panic containment, live routing and evaluation config re-reads, path sanitization and backend fallback, observability append/tail, judge aggregation/calibration/decisions, the bundle freezer, the eval and plan tool handlers, learning confidence/recall/promotion, the context-budget estimator, control-plane ingest idempotency, deterministic risk scoring, handoff rendering, the daemon HTTP handlers, the quality-gate store/reader, the Fly benchmark metrics, the security scanner, the Telegram client and tools (fake Bot API; no live calls in CI), the rehearsal driver, the resource profile/detection and provider probe tools, and the skill-standard validator (including a catalog-wide regression test). Total coverage is 88% of statements (enforced at 80% by `scripts/coverage-check.sh`; override with `HACKATHONKIT_COVERAGE_TARGET`). Run `go run ./cmd/hackathonkit-mcp --selftest` for the end-to-end handshake and `scripts/smoke.sh` for the process-level check.
 
-`go run ./cmd/hackathonkit-rehearse` is the clean-checkout rehearsal: it clones the repository into a temporary directory, builds the MCP server there, drives the mandatory telemetry scenario (describe, analyze, detect anomalies, chart, report, index/search, plan, learning, eval, security, context budget, gate and Telegram preconditions) over stdio JSON-RPC and stores a per-step report with durations at `evals/rehearsal/<sha>/rehearsal-<timestamp>.json`. It exits non-zero on the first failed step; `--keep` keeps the checkout, `--json` prints the report only.
+`go run ./cmd/hackathonkit-rehearse` is the clean-checkout rehearsal: it clones the repository into a temporary directory, builds the MCP server there, drives the mandatory telemetry scenario (describe, analyze, detect anomalies, chart, report, index/search, plan, learning, eval, security, context budget, resource profile/probe, gate and Telegram preconditions) over stdio JSON-RPC and stores a per-step report with durations at `evals/rehearsal/<sha>/rehearsal-<timestamp>.json`. It exits non-zero on the first failed step; `--keep` keeps the checkout, `--json` prints the report only.
 
 ## Continuous integration
 
@@ -577,7 +600,7 @@ This is the verification path for the Docker stack and native Windows hooks, whi
 - The MCP layer has no internet access: `theme-research` uses the host's web search when available and otherwise works from the provided corpus, marking external gaps explicitly.
 - Codex plugin install writes to `~/.codex`; after editing plugin files bump the plugin version and re-run setup. The `.codex/config.toml` fallback works without the plugin.
 - Session hooks require Node 18+ on the host (Codex CLI already needs Node). Every hook is best-effort and never blocks a session; without Node the hooks are skipped.
-- `--profile core` filters only the generated skill mirrors; the Codex plugin always ships all 28 skills.
+- `--profile core` filters only the generated skill mirrors; the Codex plugin always ships all 29 skills.
 - Learning recall uses embeddings when `OPENAI_API_KEY` is set and keyword overlap otherwise; learnings never leave the local repository.
 - The control plane is optional: hooks and MCP work without it. `demo-api /control` reads SQLite read-only and shows a hint until `hackathonkit-ctl ingest` or the daemon has run.
 - `hackathonkit-ctl run` requires the Codex CLI on `PATH` and `git` for `--worktree`; the daemon binds loopback only and never proxies to the network.

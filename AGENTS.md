@@ -21,9 +21,10 @@ evaluation subsystem owns the arithmetic.
 ## Session Handshake
 
 1. Call `system.context` (MCP tool `system.context`): live `routing_mode`, `routing_config_version`, capability list.
-2. In `fly` mode call `routing.fly_recommend` before selecting domain tools, then validate its recommendations; on failure or below-threshold continue in normal mode silently.
-3. Use `system.capabilities` for capability groups and `system.context_budget` before adding context-heavy components.
-4. Report the outcome with `routing.fly_feedback` after fly-mode tasks.
+2. Call `system.resources`. If the profile is missing, ask the user once which API resources they have (OpenAI API key, NVIDIA API key, Telegram bot, Codex Pro subscription) and which hackathon track they build, then record the answers with `system.resources_set`. Never ask for or echo raw keys: keys go into `.env` via `sh scripts/env-set.sh .env KEY <value>` and the tool response returns the exact commands.
+3. In `fly` mode call `routing.fly_recommend` before selecting domain tools, then validate its recommendations; on failure or below-threshold continue in normal mode silently.
+4. Use `system.capabilities` for capability groups and `system.context_budget` before adding context-heavy components.
+5. Report the outcome with `routing.fly_feedback` after fly-mode tasks.
 
 ## Skills
 

@@ -20,6 +20,11 @@ import (
 
 func testRegistry(t *testing.T) (*mcp.Registry, string) {
 	t.Helper()
+	return testRegistryWith(t, telegram.New(telegram.Settings{}))
+}
+
+func testRegistryWith(t *testing.T, telegramClient *telegram.Client) (*mcp.Registry, string) {
+	t.Helper()
 	root := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(root, "configs"), 0o755); err != nil {
 		t.Fatal(err)
@@ -40,7 +45,7 @@ func testRegistry(t *testing.T) (*mcp.Registry, string) {
 		Metrics:  observability.NewMetrics(),
 		Router:   fly.NewRouter(mgr.Config().Routing),
 		Learning: learning.NewStore(filepath.Join(root, "data", "index", "learnings.json"), learning.ProjectKey(root)),
-		Telegram: telegram.New(telegram.Settings{}),
+		Telegram: telegramClient,
 	})
 	return reg, root
 }

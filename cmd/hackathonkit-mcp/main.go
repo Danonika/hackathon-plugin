@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 
@@ -22,6 +23,7 @@ import (
 	"hackathonkit.local/agentkit/internal/openai"
 	"hackathonkit.local/agentkit/internal/plans"
 	"hackathonkit.local/agentkit/internal/quality"
+	"hackathonkit.local/agentkit/internal/resources"
 	"hackathonkit.local/agentkit/internal/routing/fly"
 	"hackathonkit.local/agentkit/internal/skills"
 	"hackathonkit.local/agentkit/internal/storage"
@@ -29,7 +31,7 @@ import (
 	"hackathonkit.local/agentkit/internal/tools"
 )
 
-const version = "0.13.2"
+const version = "0.14.0"
 
 func main() {
 	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
@@ -43,6 +45,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 	repoRoot := fs.String("repo-root", "", "repository root (defaults to auto-discovery)")
 	setMode := fs.String("set-routing-mode", "", "set routing mode (normal|fly) and exit")
 	sessionContext := fs.Bool("session-context", false, "print a compact session context block for hooks and exit")
+	resourcesJSON := fs.Bool("resources", false, "print detected API resources and the saved profile as JSON and exit")
+	resourcesSet := fs.String("resources-set", "", "record resource answers as comma-separated k=v pairs (provider booleans, track, note) and exit")
 	validateSkills := fs.Bool("validate-skills", false, "validate the skill catalog against docs/SKILL-STANDARD.md and exit")
 	qualityGate := fs.Bool("quality-gate", false, "run the build/verify gate, store evidence under evals/quality/ and exit")
 	if err := fs.Parse(args); err != nil {
@@ -71,6 +75,20 @@ func run(args []string, stdout, stderr io.Writer) int {
 
 	if *sessionContext {
 		printSessionContext(root, mgr, stdout)
+		return 0
+	}
+
+	if *resourcesSet != "" {
+		if err := applyResourcesSet(root, *resourcesSet); err != nil {
+			fmt.Fprintln(stderr, "error:", err)
+			return 1
+		}
+		printResources(root, stdout)
+		return 0
+	}
+
+	if *resourcesJSON {
+		printResources(root, stdout)
 		return 0
 	}
 
@@ -212,11 +230,26 @@ func run(args []string, stdout, stderr io.Writer) int {
 }
 
 // printSessionContext emits a compact context block for SessionStart hooks:
-// routing mode, top learnings, current plan stage and pending eval decisions.
+// routing mode, resource profile, top learnings, current plan stage and
+// pending eval decisions.
 func printSessionContext(root string, mgr *config.Manager, out io.Writer) {
 	state := mgr.Routing()
 	fmt.Fprintln(out, "Hackathon Agent Kit session context")
 	fmt.Fprintf(out, "routing: %s (config v%d)\n", state.Mode, state.Version)
+
+	profile, present, rerr := resources.Load(root)
+	switch {
+	case rerr != nil:
+		fmt.Fprintln(out, "resources: profile unreadable - call system.resources")
+	case !present:
+		fmt.Fprintln(out, "resources: not configured - ask the user (system.resources)")
+	default:
+		line := "resources: " + resources.Summary(resources.Statuses(profile))
+		if profile.Track != "" {
+			line += " track=" + profile.Track
+		}
+		fmt.Fprintf(out, "%s (profile v%d)\n", line, profile.Version)
+	}
 
 	settings := mgr.Config().Learning
 	if settings.Enabled {
@@ -234,6 +267,62 @@ func printSessionContext(root string, mgr *config.Manager, out io.Writer) {
 	if count := countFiles(filepath.Join(root, "evals", "decisions")); count > 0 {
 		fmt.Fprintf(out, "pending eval decisions: %d\n", count)
 	}
+}
+
+// applyResourcesSet records k=v answers from the --resources-set flag. Only
+// provider booleans, track and note are accepted; secrets stay in .env.
+func applyResourcesSet(root, spec string) error {
+	profile, _, err := resources.Load(root)
+	if err != nil {
+		return err
+	}
+	changed := false
+	for _, pair := range strings.Split(spec, ",") {
+		pair = strings.TrimSpace(pair)
+		if pair == "" {
+			continue
+		}
+		key, value, ok := strings.Cut(pair, "=")
+		if !ok {
+			return fmt.Errorf("expected key=value, got %q", pair)
+		}
+		key = strings.ToLower(strings.TrimSpace(key))
+		value = strings.TrimSpace(value)
+		switch key {
+		case "track":
+			track, ok := resources.LookupTrack(value)
+			if !ok {
+				return fmt.Errorf("unknown track %q", value)
+			}
+			profile.Track = track.ID
+		case "note":
+			profile.Note = value
+		default:
+			parsed, err := strconv.ParseBool(value)
+			if err != nil {
+				return fmt.Errorf("provider %q expects true or false, got %q", key, value)
+			}
+			if err := resources.SetAnswer(&profile, key, parsed); err != nil {
+				return err
+			}
+		}
+		changed = true
+	}
+	if !changed {
+		return errors.New("no answers provided")
+	}
+	return resources.Save(root, profile)
+}
+
+func printResources(root string, out io.Writer) {
+	profile, present, err := resources.Load(root)
+	if err != nil {
+		fmt.Fprintln(out, "resources: profile unreadable:", err)
+		return
+	}
+	enc := json.NewEncoder(out)
+	enc.SetIndent("", "  ")
+	_ = enc.Encode(resources.View(profile, present))
 }
 
 func countFiles(dir string) int {

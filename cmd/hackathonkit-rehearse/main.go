@@ -621,6 +621,42 @@ func (r *rehearsal) run() {
 		return fmt.Sprintf("total_tokens=%d", int(tokens)), nil
 	}) && ok
 
+	ok = r.step("system.resources (no profile)", "system.resources", map[string]any{}, true, func(env map[string]any) (string, error) {
+		d := data(env)
+		profile, _ := d["profile"].(map[string]any)
+		if profile["present"] != false {
+			return "", fail("profile.present=%v, want false in a clean checkout", profile["present"])
+		}
+		if providers := arr(d, "providers"); len(providers) != 6 {
+			return "", fail("providers=%d, want 6", len(providers))
+		}
+		return "profile=absent providers=6", nil
+	}) && ok
+
+	ok = r.step("system.resources_probe (presence-only)", "system.resources_probe", map[string]any{}, true, func(env map[string]any) (string, error) {
+		results := arr(data(env), "results")
+		if len(results) != 6 {
+			return "", fail("results=%d, want 6", len(results))
+		}
+		return "providers=6 live=false", nil
+	}) && ok
+
+	ok = r.step("system.resources_set", "system.resources_set", map[string]any{"codex_pro": true, "track": "08"}, false, func(env map[string]any) (string, error) {
+		profile, _ := data(env)["profile"].(map[string]any)
+		if profile["track"] != "08-innovation" {
+			return "", fail("track=%v, want 08-innovation", profile["track"])
+		}
+		return "track=08-innovation", nil
+	}) && ok
+
+	ok = r.step("system.resources (profile saved)", "system.resources", map[string]any{}, false, func(env map[string]any) (string, error) {
+		profile, _ := data(env)["profile"].(map[string]any)
+		if profile["present"] != true {
+			return "", fail("profile.present=%v, want true", profile["present"])
+		}
+		return "profile=present track=" + str(profile, "track"), nil
+	}) && ok
+
 	ok = r.step("quality.gate (no evidence yet)", "quality.gate", map[string]any{}, true, func(env map[string]any) (string, error) {
 		warnings, _ := env["warnings"].([]any)
 		return fmt.Sprintf("warnings=%d", len(warnings)), nil

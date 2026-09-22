@@ -10,6 +10,7 @@ import (
 
 	"hackathonkit.local/agentkit/internal/learning"
 	"hackathonkit.local/agentkit/internal/plans"
+	"hackathonkit.local/agentkit/internal/resources"
 )
 
 func mcpTestRoot(t *testing.T) string {
@@ -18,6 +19,8 @@ func mcpTestRoot(t *testing.T) string {
 	t.Setenv("POSTGRES_DSN", "")
 	t.Setenv("MINIO_ENDPOINT", "")
 	t.Setenv("TELEGRAM_BOT_TOKEN", "")
+	t.Setenv("OPENAI_API_KEY", "")
+	t.Setenv("NVIDIA_API_KEY", "")
 	return root
 }
 
@@ -123,6 +126,7 @@ func TestRunSessionContext(t *testing.T) {
 	for _, want := range []string{
 		"Hackathon Agent Kit session context",
 		"routing: normal",
+		"resources: not configured - ask the user (system.resources)",
 		"learnings:",
 		"when running session context tests",
 		"plan: context-plan r1 stage S0",
@@ -229,5 +233,60 @@ func TestClip(t *testing.T) {
 	}
 	if got := clip("abc", 3); got != "abc" {
 		t.Fatalf("clip exact = %q", got)
+	}
+}
+
+func TestRunSessionContextResourcesProfile(t *testing.T) {
+	root := mcpTestRoot(t)
+	t.Setenv("OPENAI_API_KEY", "sk-test")
+	if err := resources.Save(root, resources.Profile{
+		Track:   "08",
+		Claimed: map[string]bool{"openai_api": true},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	code, stdout, stderr := runMCP(t, "--repo-root", root, "--session-context")
+	if code != 0 {
+		t.Fatalf("session-context code = %d, stderr = %s", code, stderr)
+	}
+	for _, want := range []string{
+		"resources: openai_api=yes",
+		"track=08-innovation",
+		"(profile v1)",
+	} {
+		if !strings.Contains(stdout, want) {
+			t.Fatalf("session context missing %q:\n%s", want, stdout)
+		}
+	}
+}
+
+func TestRunResourcesFlags(t *testing.T) {
+	root := mcpTestRoot(t)
+	code, stdout, stderr := runMCP(t, "--repo-root", root, "--resources-set", "openai_api=true,codex_pro=true,track=08")
+	if code != 0 {
+		t.Fatalf("resources-set code = %d, stderr = %s", code, stderr)
+	}
+	var view map[string]any
+	if err := json.Unmarshal([]byte(stdout), &view); err != nil {
+		t.Fatalf("resources-set JSON: %v\n%s", err, stdout)
+	}
+	profile := view["profile"].(map[string]any)
+	if profile["present"] != true || profile["track"] != "08-innovation" || profile["codex_pro"] != true {
+		t.Fatalf("profile = %+v", profile)
+	}
+
+	code, stdout, stderr = runMCP(t, "--repo-root", root, "--resources")
+	if code != 0 || !strings.Contains(stdout, "08-innovation") {
+		t.Fatalf("resources code = %d, stdout = %s, stderr = %s", code, stdout, stderr)
+	}
+
+	if code, _, stderr := runMCP(t, "--repo-root", root, "--resources-set", "track=99-nope"); code != 1 || !strings.Contains(stderr, "unknown track") {
+		t.Fatalf("bad track: code = %d, stderr = %s", code, stderr)
+	}
+	if code, _, stderr := runMCP(t, "--repo-root", root, "--resources-set", "openai_api=maybe"); code != 1 || !strings.Contains(stderr, "true or false") {
+		t.Fatalf("bad value: code = %d, stderr = %s", code, stderr)
+	}
+	if code, _, _ := runMCP(t, "--repo-root", root, "--resources-set", "="); code != 1 {
+		t.Fatalf("empty key: code = %d", code)
 	}
 }
