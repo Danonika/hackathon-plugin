@@ -165,7 +165,7 @@ func TestDocumentsExtractTruncationAndWarnings(t *testing.T) {
 		t.Fatalf("status %s data %+v", short.Status, short.Data)
 	}
 	sd := short.Data.(map[string]any)
-	if sd["text"] != strings.Repeat("a", 10) || sd["truncated"] != true || sd["chars"].(int) != 100 {
+	if sd["text"] != strings.Repeat("a", 10) || sd["truncated"] != true || sd["chars"].(int) != 10 || sd["total_chars"].(int) != 100 {
 		t.Fatalf("unexpected truncation data %+v", sd)
 	}
 	if len(short.Warnings) == 0 {

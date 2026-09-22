@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 	"unicode"
+	"unicode/utf8"
 
 	"hackathonkit.local/agentkit/internal/mcp"
 )
@@ -39,7 +40,7 @@ func tokenize(text string) []string {
 	var out []string
 	var cur strings.Builder
 	flush := func() {
-		if cur.Len() >= 2 {
+		if utf8.RuneCountInString(cur.String()) >= 2 {
 			token := cur.String()
 			if !stopwords[token] {
 				out = append(out, token)
@@ -192,6 +193,7 @@ func registerKnowledge(reg *mcp.Registry, d Deps) {
 				textChars = 300
 			}
 			corpus := argString(args, "corpus")
+			warnings := []string{}
 			allowed := map[string]bool{}
 			for _, id := range argStringSlice(args, "index_ids") {
 				allowed[id] = true
@@ -218,15 +220,18 @@ func registerKnowledge(reg *mcp.Registry, d Deps) {
 				}
 				raw, err := d.Store.ReadIndex(name)
 				if err != nil {
+					warnings = append(warnings, "index "+name+" is unreadable and was skipped")
 					continue
 				}
 				var doc indexDoc
-				if json.Unmarshal(raw, &doc) == nil {
-					if corpus != "" && doc.Corpus != corpus {
-						continue
-					}
-					docs = append(docs, loadedDoc{ID: name, Doc: doc})
+				if json.Unmarshal(raw, &doc) != nil {
+					warnings = append(warnings, "index "+name+" is corrupt and was skipped")
+					continue
 				}
+				if corpus != "" && doc.Corpus != corpus {
+					continue
+				}
+				docs = append(docs, loadedDoc{ID: name, Doc: doc})
 			}
 			if len(docs) == 0 {
 				return mcp.Partial(trace(ctx), map[string]any{"hits": []any{}, "index_count": 0},
@@ -302,6 +307,9 @@ func registerKnowledge(reg *mcp.Registry, d Deps) {
 			}
 			if len(hits) == 0 {
 				env = env.WithWarnings("no matches for the query")
+			}
+			if len(warnings) > 0 {
+				env = env.WithWarnings(warnings...)
 			}
 			return env, nil
 		},

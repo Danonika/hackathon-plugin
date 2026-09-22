@@ -27,7 +27,7 @@ func LoadDotEnv(root string) {
 		}
 		value := strings.TrimSpace(line[eq+1:])
 		value = unquoteEnvValue(value)
-		if os.Getenv(key) == "" {
+		if _, set := os.LookupEnv(key); !set {
 			_ = os.Setenv(key, value)
 		}
 	}

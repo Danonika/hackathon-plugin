@@ -59,7 +59,7 @@
   <h1>Hackathon Agent Kit</h1>
   <span class="muted" id="mode-badge">mode: …</span>
   <a class="muted" href="/fly-viz" style="color:#93c5fd">Fly 3D</a>
-  <a class="muted" href="/fly-brain/" target="_blank" style="color:#93c5fd">реальный мозг 139k (flybrain, MIT)</a>
+  <a class="muted" href="/fly-brain/" target="_blank" rel="noopener noreferrer" style="color:#93c5fd">реальный мозг 139k (flybrain, MIT)</a>
   <span class="status" id="status">connecting…</span>
 </header>
 <div class="wrap">
@@ -161,7 +161,8 @@ function renderFly(events, feedback) {
   recs.innerHTML = (ev.recommendations || []).map(r =>
     '<div class="rec" data-cap="' + esc(r.capability) + '">' + esc(r.capability) + ' — ' + Math.round(r.score * 100) + '%</div>').join('');
 
-  const fb = (feedback || []).filter(f => f.task === ev.task).pop() || (feedback || [])[(feedback || []).length - 1];
+  const matches = (feedback || []).filter(f => f.task === ev.task);
+  const fb = matches.pop() || (ev.task ? null : (feedback || [])[(feedback || []).length - 1]);
   if (fb) {
     const chosen = fb.chosen || [];
     const recNames = (ev.recommendations || []).map(r => r.capability);

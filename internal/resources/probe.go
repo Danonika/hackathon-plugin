@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -67,7 +68,10 @@ func ProbeOpenAICompatible(ctx context.Context, providerID, baseURL, apiKey stri
 	return result
 }
 
+var urlCredentials = regexp.MustCompile(`://[^/@\s]+@`)
+
 func redact(text, secret string) string {
+	text = urlCredentials.ReplaceAllString(text, "://***@")
 	if secret == "" {
 		return text
 	}

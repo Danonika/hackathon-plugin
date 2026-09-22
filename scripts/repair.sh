@@ -21,7 +21,7 @@ if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
   RUNTIME="docker"
 fi
 
-if [ ! -x "$ROOT/bin/hackathonkit-mcp" ] && [ "$RUNTIME" = "binary" ]; then
+if { [ ! -x "$ROOT/bin/hackathonkit-mcp" ] || [ ! -x "$ROOT/bin/hackathonkit-demo-api" ] || [ ! -x "$ROOT/bin/hackathonkit-ctl" ]; } && [ "$RUNTIME" = "binary" ]; then
   if command -v go >/dev/null 2>&1; then
     mkdir -p "$ROOT/bin"
     (

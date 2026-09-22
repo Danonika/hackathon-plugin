@@ -41,9 +41,18 @@ if [ "$FROM_STDIN" = "1" ]; then
   IFS= read -r VALUE || true
 fi
 
+if [ -L "$FILE" ]; then
+  TARGET=$(readlink -f "$FILE" 2>/dev/null || true)
+  if [ -n "$TARGET" ]; then
+    FILE="$TARGET"
+  fi
+fi
+
 MODE="600"
+OWNER=""
 if [ -f "$FILE" ]; then
   MODE=$(stat -c '%a' "$FILE" 2>/dev/null || stat -f '%Lp' "$FILE" 2>/dev/null || echo 600)
+  OWNER=$(stat -c '%u:%g' "$FILE" 2>/dev/null || true)
 fi
 
 TMP="$FILE.tmp.$$"
@@ -64,3 +73,6 @@ fi
 
 mv "$TMP" "$FILE"
 chmod "$MODE" "$FILE" 2>/dev/null || true
+if [ -n "$OWNER" ]; then
+  chown "$OWNER" "$FILE" 2>/dev/null || true
+fi

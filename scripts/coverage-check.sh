@@ -27,13 +27,17 @@ case "${GOFLAGS:-}" in
 esac
 export GOFLAGS
 
-if ! go test ./... -count=1 -coverprofile="$PROFILE" >/dev/null 2>&1; then
+if ! TEST_OUT=$(go test ./... -count=1 -coverprofile="$PROFILE" 2>&1); then
   echo "[coverage] test suite failed" >&2
-  go test ./... -count=1 2>&1 | grep -E 'FAIL|--- FAIL' | head -20 >&2
+  printf '%s\n' "$TEST_OUT" | grep -E 'FAIL|--- FAIL' | head -20 >&2
   exit 1
 fi
 
 TOTAL=$(go tool cover -func="$PROFILE" | awk '/^total:/ {gsub(/%/, "", $3); print $3}')
+if [ -z "$TOTAL" ]; then
+  echo "[coverage] could not read a total from the coverage profile" >&2
+  exit 1
+fi
 echo "[coverage] total ${TOTAL}% (target ${TARGET}%)"
 
 if ! awk -v total="$TOTAL" -v target="$TARGET" 'BEGIN { exit (total + 0 >= target + 0) ? 0 : 1 }'; then

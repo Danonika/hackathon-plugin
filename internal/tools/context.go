@@ -156,12 +156,14 @@ func skillContextItems(root string) []contextItem {
 			Tokens: estimateTokens(int(info.Size())),
 		}
 		if kind == "skill" {
+			flags := []string{}
 			if item.Lines > skillLinesWarn {
-				item.Flag = fmt.Sprintf("SKILL.md > %d lines", skillLinesWarn)
+				flags = append(flags, fmt.Sprintf("SKILL.md > %d lines", skillLinesWarn))
 			}
 			if desc := frontmatterDescription(string(data)); len(desc) > descriptionWarn {
-				item.Flag = fmt.Sprintf("description > %d chars", descriptionWarn)
+				flags = append(flags, fmt.Sprintf("description > %d chars", descriptionWarn))
 			}
+			item.Flag = strings.Join(flags, "; ")
 		}
 		items = append(items, item)
 		return nil

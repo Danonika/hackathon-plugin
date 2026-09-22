@@ -86,13 +86,16 @@ fi
 
 SRC_COUNT=$(find "$ROOT/plugins/hackathonkit/skills" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | wc -l | tr -d ' ')
 DST_COUNT=0
+SRC_SKILLS=$(find "$ROOT/plugins/hackathonkit/skills" -name SKILL.md 2>/dev/null | wc -l | tr -d ' ')
+DST_SKILLS=0
 if [ -d "$ROOT/.agents/skills" ]; then
   DST_COUNT=$(find "$ROOT/.agents/skills" -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')
+  DST_SKILLS=$(find "$ROOT/.agents/skills" -name SKILL.md | wc -l | tr -d ' ')
 fi
-if [ "$SRC_COUNT" -gt 0 ] && [ "$SRC_COUNT" = "$DST_COUNT" ]; then
-  check "skills mirror" 1 "plugin=$SRC_COUNT fallback=$DST_COUNT"
+if [ "$SRC_COUNT" -gt 0 ] && [ "$SRC_COUNT" = "$DST_COUNT" ] && [ "$SRC_SKILLS" = "$DST_SKILLS" ]; then
+  check "skills mirror" 1 "plugin=$SRC_COUNT/$SRC_SKILLS fallback=$DST_COUNT/$DST_SKILLS"
 else
-  check "skills mirror" 0 "plugin=$SRC_COUNT fallback=$DST_COUNT"
+  check "skills mirror" 0 "plugin=$SRC_COUNT/$SRC_SKILLS fallback=$DST_COUNT/$DST_SKILLS; run scripts/sync-harness.sh"
 fi
 
 if [ -f "$ROOT/plugins/hackathonkit/hooks/codex-hooks.json" ]; then

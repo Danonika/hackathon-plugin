@@ -538,3 +538,11 @@ func boolToInt(v bool) int {
 func round2(v float64) float64 { return math.Round(v*100) / 100 }
 
 func round4(v float64) float64 { return math.Round(v*10000) / 10000 }
+
+// WithoutVector returns a copy safe to serialize to tool output: the internal
+// embedding vector is dropped so envelopes and logs stay small and do not leak
+// model state.
+func (l Learning) WithoutVector() Learning {
+	l.Vector = nil
+	return l
+}

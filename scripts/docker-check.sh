@@ -47,14 +47,18 @@ sh "$ROOT/scripts/env-set.sh" .env HACKATHONKIT_GID "$(id -g)"
 
 mkdir -p logs evals data/artifacts data/index data/control data/judge-bundles
 
+redact_logs() {
+  sed -E 's/(password|PASSWORD|token|TOKEN|secret|SECRET|dsn|DSN)([=: ]+)[^ "]+/\1\2[redacted]/g'
+}
+
 diagnostics() {
   status=$?
   if [ "$status" -ne 0 ]; then
-    echo "[docker-check] FAILED (exit $status); diagnostics:" >&2
-    docker compose ps -a >&2 || true
-    docker compose logs --no-color --tail=120 >&2 || true
+    echo "[docker-check] FAILED (exit $status); diagnostics (credentials redacted):" >&2
+    docker compose ps -a 2>&1 | redact_logs >&2 || true
+    docker compose logs --no-color --tail=120 2>&1 | redact_logs >&2 || true
     if [ "$MODE" = "full" ]; then
-      docker compose --profile quality logs --no-color --tail=80 >&2 || true
+      docker compose --profile quality logs --no-color --tail=80 2>&1 | redact_logs >&2 || true
     fi
   fi
   exit "$status"

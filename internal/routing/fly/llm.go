@@ -2,6 +2,7 @@ package fly
 
 import (
 	"context"
+	"math"
 	"sort"
 )
 
@@ -27,5 +28,25 @@ func (r *Router) llmCategoryScores(ctx context.Context, task string) (map[string
 	if err != nil || len(scores) == 0 {
 		return nil, false
 	}
-	return scores, true
+	known := map[string]bool{}
+	for _, category := range categories {
+		known[category] = true
+	}
+	clean := map[string]float64{}
+	for category, score := range scores {
+		if !known[category] || math.IsNaN(score) || math.IsInf(score, 0) {
+			continue
+		}
+		if score < 0 {
+			score = 0
+		}
+		if score > 1 {
+			score = 1
+		}
+		clean[category] = score
+	}
+	if len(clean) == 0 {
+		return nil, false
+	}
+	return clean, true
 }

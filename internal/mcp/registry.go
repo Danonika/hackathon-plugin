@@ -29,13 +29,20 @@ func (r *Registry) Register(t Tool) {
 
 func (r *Registry) Get(name string) (*Tool, bool) {
 	t, ok := r.tools[name]
-	return t, ok
+	if !ok {
+		return nil, false
+	}
+	copied := *t
+	return &copied, true
 }
 
 func (r *Registry) List() []*Tool {
 	out := make([]*Tool, 0, len(r.order))
 	for _, n := range r.order {
-		out = append(out, r.tools[n])
+		if t, ok := r.tools[n]; ok {
+			copied := *t
+			out = append(out, &copied)
+		}
 	}
 	return out
 }

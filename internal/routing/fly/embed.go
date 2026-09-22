@@ -105,6 +105,11 @@ func (r *Router) embeddingCategoryScores(ctx context.Context, task string) (map[
 	}
 	sims := map[string]float64{}
 	for cat, centroid := range centroids {
+		if len(centroid) != len(taskVec) {
+			// Stale cache from another embedding model: skip instead of
+			// silently comparing truncated vectors.
+			continue
+		}
 		sims[cat] = cosine(taskVec, centroid)
 	}
 	if len(sims) == 0 {

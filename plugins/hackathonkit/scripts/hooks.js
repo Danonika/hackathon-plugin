@@ -108,8 +108,12 @@ function payloadSessionID(payload) {
     payload.conversationId,
     payload.thread_id,
     payload.threadId,
-    payload.id,
   ];
+  if (typeof payload.id === "string" && /^s[-_]/.test(payload.id.trim())) {
+    // Some harnesses put the session id in `id`, but it is a generic field:
+    // only accept session-looking values.
+    candidates.push(payload.id);
+  }
   if (payload.session && typeof payload.session === "object") {
     candidates.push(payload.session.id);
   }
@@ -126,7 +130,8 @@ function payloadSessionID(payload) {
 
 function newSessionID() {
   const stamp = new Date().toISOString().replace(/[-:T]/g, "").slice(0, 14);
-  return "s-" + stamp + "-" + process.pid;
+  const random = crypto.randomBytes(4).toString("hex");
+  return "s-" + stamp + "-" + process.pid + "-" + random;
 }
 
 // One file per session: concurrent start/stop operations touch different files
@@ -288,7 +293,18 @@ switch (EVENT) {
   }
   case "stop": {
     const payload = parsePayload(readStdin());
-    const id = payloadSessionID(payload) || lastActiveID();
+    let id = payloadSessionID(payload);
+    if (!id) {
+      const active = readActive();
+      if (active.length === 1) {
+        id = active[0].id;
+      } else {
+        // With zero or several active sessions the payload is the only
+        // reliable source; do not remove a session we cannot identify.
+        process.stderr.write("hackathonkit hooks: stop without a session id; keeping active sessions\n");
+        break;
+      }
+    }
     appendJSONL(SESSIONS_LOG, {
       ts: new Date().toISOString(),
       type: "session_end",
@@ -301,4 +317,5 @@ switch (EVENT) {
     process.stderr.write("hackathonkit hooks: unknown event " + EVENT + "\n");
 }
 
-process.exit(0);
+// Natural exit lets stdout flush; process.exit() can truncate piped output.
+process.exitCode = 0;

@@ -177,15 +177,15 @@ function applyNeuronEvent(ev) {
   resetKcColor();
   if (ev.type === 'recommend') {
     const mbon = ev.mbon || {};
-    const values = Object.values(mbon);
-    const max = Math.max(...values, 0.001);
+    const values = (mbon && typeof mbon === 'object' && !Array.isArray(mbon)) ? Object.values(mbon).slice(0, 4096).map(Number).filter(Number.isFinite) : [];
+    const max = values.length ? Math.max(...values, 0.001) : 0.001;
     mbonMeshes.forEach((m, i) => { const v = values[i] || 0; m.scale.setScalar(.5 + 1.8 * (v / max)); m.material.emissiveIntensity = .4 + 1.6 * (v / max); });
     statusEl.textContent = 'encoder: ' + (ev.encoder || '?') + ' · route: ' + (ev.route || '?') + ' · max ' + (ev.max_score ?? '?');
   }
   if (ev.type === 'feedback') {
     const reward = !!ev.reward;
     for (const s of (ev.active_kc || [])) {
-      const i = s.index; if (i == null || i >= KC_TOTAL) continue;
+      const i = s.index; if (typeof i !== 'number' || !Number.isInteger(i) || i < 0 || i >= KC_TOTAL) continue;
       kcColors[i * 3] = reward ? .13 : .95; kcColors[i * 3 + 1] = reward ? .8 : .25; kcColors[i * 3 + 2] = reward ? .3 : .25;
     }
     kcGeo.attributes.color.needsUpdate = true;
@@ -223,7 +223,8 @@ async function poll() {
     }
     if ((feedback.events || []).length) {
       const fb = feedback.events[feedback.events.length - 1];
-      if (fb.ts !== state.lastFeedback?.ts) { applyNeuronEvent({ type: 'feedback', reward: fb.source === 'accepted' || fb.source === 'normal-teacher', pam: 0, ppl1: 0, source: fb.source, ts: fb.ts, active_kc: lastNeuron?.active_kc || [] }); }
+      const fbKey = fb.ts || (fb.task + '|' + fb.source);
+      if (fbKey !== state.lastFeedbackKey) { state.lastFeedbackKey = fbKey; applyNeuronEvent({ type: 'feedback', reward: fb.source === 'accepted' || fb.source === 'normal-teacher', pam: 0, ppl1: 0, source: fb.source, ts: fb.ts, active_kc: lastNeuron?.active_kc || [] }); }
     }
     if ((events.events || []).length) {
       const ev = events.events[events.events.length - 1];
@@ -236,10 +237,11 @@ async function poll() {
 poll(); setInterval(poll, 2500);
 
 const clock = new THREE.Clock();
+const COLOR_IDLE = new THREE.Color(0x2b3a55), COLOR_REWARD = new THREE.Color(0x1f4d33), COLOR_PUNISH = new THREE.Color(0x3f1d1d);
 function animate() {
   requestAnimationFrame(animate);
   const t = clock.getElapsedTime();
-  if (window.__flyMixer) window.__flyMixer.update(0.016);
+  if (window.__flyMixer) window.__flyMixer.update(Math.min(0.1, clock.getDelta()));
   wings.forEach((w, i) => { w.rotation.z = Math.sin(t * 40) * .5 * (i ? 1 : -1); });
   const hover = Math.sin(t * 2.2) * .18;
   if (state.mode === 'reward' || state.mode === 'punish') {
@@ -250,7 +252,7 @@ function animate() {
     state.target.set(-4.5, 1.6 + hover, 0);
     fly.position.lerp(state.target, .02);
   }
-  bodyMat.color.lerp(new THREE.Color(state.mode === 'punish' ? 0x3f1d1d : state.mode === 'reward' ? 0x1f4d33 : 0x2b3a55), .05);
+  bodyMat.color.lerp(state.mode === 'punish' ? COLOR_PUNISH : state.mode === 'reward' ? COLOR_REWARD : COLOR_IDLE, .05);
   sugar.scale.setScalar(state.mode === 'reward' && fly.position.distanceTo(sugar.position) < 1.6 ? .55 : 1);
   pam.scale.setScalar(1 + .25 * Math.sin(t * 3) + (state.mode === 'reward' ? .8 : 0));
   ppl1.scale.setScalar(1 + .25 * Math.sin(t * 3.4) + (state.mode === 'punish' ? .9 : 0));

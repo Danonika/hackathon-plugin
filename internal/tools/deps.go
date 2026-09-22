@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"math"
 	"strconv"
 	"strings"
 
@@ -99,7 +100,16 @@ func argFloat(args map[string]any, key string, def float64) float64 {
 }
 
 func argInt(args map[string]any, key string, def int) int {
-	return int(argFloat(args, key, float64(def)))
+	value := argFloat(args, key, float64(def))
+	switch {
+	case math.IsNaN(value):
+		return def
+	case value > math.MaxInt32:
+		return math.MaxInt32
+	case value < math.MinInt32:
+		return math.MinInt32
+	}
+	return int(value)
 }
 
 func argBool(args map[string]any, key string, def bool) bool {

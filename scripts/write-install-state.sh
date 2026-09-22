@@ -4,9 +4,12 @@ set -e
 ROOT="$1"
 PROFILE="${2:-full}"
 RUNTIME="${3:-unknown}"
+mkdir -p "$ROOT/configs"
 
-VERSION=$(sed -n 's/.*"version": *"\([^"]*\)".*/\1/p' "$ROOT/plugins/hackathonkit/.codex-plugin/plugin.json" | head -n 1)
+PLUGIN_JSON="$ROOT/plugins/hackathonkit/.codex-plugin/plugin.json"
+VERSION=$(sed -n 's/.*"version": *"\([^"]*\)".*/\1/p' "$PLUGIN_JSON" 2>/dev/null | head -n 1)
 if [ -z "$VERSION" ]; then
+  echo "[install-state] warning: cannot read a version from $PLUGIN_JSON" >&2
   VERSION="unknown"
 fi
 

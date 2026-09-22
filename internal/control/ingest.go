@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -63,21 +64,34 @@ func (s *Store) Ingest(ctx context.Context, root string) (IngestResult, error) {
 }
 
 func (s *Store) ingestJSONL(ctx context.Context, name, path string, handle func(context.Context, map[string]any) error) (int, error) {
-	data, err := os.ReadFile(path)
+	f, err := os.Open(path)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return 0, nil
 		}
 		return 0, err
 	}
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil {
+		return 0, err
+	}
 	offset, err := s.Cursor(ctx, name)
 	if err != nil {
 		return 0, err
 	}
-	if offset > int64(len(data)) {
+	if offset > info.Size() {
 		offset = 0
 	}
-	chunk := data[offset:]
+	// Read only the tail after the cursor: these logs grow unbounded.
+	if _, err := f.Seek(offset, io.SeekStart); err != nil {
+		return 0, err
+	}
+	data, err := io.ReadAll(f)
+	if err != nil {
+		return 0, err
+	}
+	chunk := data
 	if len(chunk) == 0 {
 		return 0, nil
 	}

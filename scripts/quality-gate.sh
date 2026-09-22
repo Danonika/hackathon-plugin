@@ -11,8 +11,12 @@ if command -v go >/dev/null 2>&1; then
   TMP_BIN="${TMPDIR:-/tmp}/hackathonkit-mcp-quality.$$"
   trap 'rm -f "$TMP_BIN"' EXIT INT TERM
   cd "$ROOT"
-  go build -buildvcs=false -o "$TMP_BIN" ./cmd/hackathonkit-mcp
-  exec "$TMP_BIN" --repo-root "$ROOT" --quality-gate
+  go build -buildvcs=false -o "$TMP_BIN" ./cmd/hackathonkit-mcp || {
+    echo "[quality-gate] go build failed" >&2
+    exit 1
+  }
+  # No exec: the EXIT trap must run to remove the temporary binary.
+  "$TMP_BIN" --repo-root "$ROOT" --quality-gate
 fi
 
 echo "[quality-gate] no runtime available; build one with scripts/setup.sh" >&2

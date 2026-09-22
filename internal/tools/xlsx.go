@@ -238,7 +238,7 @@ func readSharedStrings(f *zip.File) ([]string, error) {
 		return nil, err
 	}
 	defer rc.Close()
-	dec := xml.NewDecoder(rc)
+	dec := xml.NewDecoder(io.LimitReader(rc, maxXLSXSharedBytes))
 	var out []string
 	var cur strings.Builder
 	inSI, inT := false, false
@@ -249,6 +249,9 @@ func readSharedStrings(f *zip.File) ([]string, error) {
 		}
 		if err != nil {
 			return nil, err
+		}
+		if len(out) > maxXLSXSharedStrings {
+			return nil, fmt.Errorf("sharedStrings.xml exceeds %d entries", maxXLSXSharedStrings)
 		}
 		switch t := tok.(type) {
 		case xml.StartElement:
@@ -284,7 +287,7 @@ func readSheetRows(f *zip.File, shared []string, styles xlsxStyles) ([][]string,
 		return nil, err
 	}
 	defer rc.Close()
-	dec := xml.NewDecoder(rc)
+	dec := xml.NewDecoder(io.LimitReader(rc, maxXLSXSheetBytes))
 	var rows [][]string
 	var curRow []string
 	var curVal strings.Builder
@@ -371,6 +374,9 @@ func readSheetRows(f *zip.File, shared []string, styles xlsxStyles) ([][]string,
 				}
 				curRow[col] = value
 			case "row":
+				if len(rows) >= maxXLSXRows {
+					return nil, fmt.Errorf("worksheet exceeds %d rows", maxXLSXRows)
+				}
 				rows = append(rows, curRow)
 				inRow = false
 			}
@@ -394,7 +400,13 @@ func colFromRef(ref string) int {
 	return col - 1
 }
 
-const maxXLSXCols = 16384
+const (
+	maxXLSXCols          = 16384
+	maxXLSXRows          = 200000
+	maxXLSXSharedBytes   = 64 << 20
+	maxXLSXSharedStrings = 1000000
+	maxXLSXSheetBytes    = 256 << 20
+)
 
 type xlsxStyles struct {
 	dateStyles    map[int]bool

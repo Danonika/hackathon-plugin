@@ -159,7 +159,8 @@ func Save(root string, plan Plan) error {
 
 func CurrentStage(plan Plan) (Stage, bool) {
 	for _, stage := range plan.Stages {
-		if stage.Status != "done" && stage.Status != "cut" {
+		status := NormalizeStatus(stage.Status)
+		if status != "done" && status != "cut" {
 			return stage, true
 		}
 	}

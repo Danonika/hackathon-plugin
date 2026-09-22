@@ -80,10 +80,10 @@ func TestSecurityHelpers(t *testing.T) {
 	if count != 2 || line != 2 {
 		t.Fatalf("invisibleUnicode = (%d, %d), want (2, 2)", count, line)
 	}
-	if got := redactSecret("short"); got != "***" {
+	if got := redactSecret("short"); got != "[redacted]" {
 		t.Fatalf("redactSecret short = %q", got)
 	}
-	if got := redactSecret("verylongsecretvalue"); got != "very***ue" {
+	if got := redactSecret("verylongsecretvalue"); got != "[redacted]" {
 		t.Fatalf("redactSecret = %q", got)
 	}
 }

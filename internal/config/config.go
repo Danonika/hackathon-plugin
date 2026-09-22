@@ -320,7 +320,9 @@ func (m *Manager) Routing() RoutingState {
 	path := m.RoutingPath()
 	if data, err := os.ReadFile(path); err == nil {
 		var doc routingDoc
-		if yaml.Unmarshal(data, &doc) == nil && doc.Routing.Mode != "" {
+		if uerr := yaml.Unmarshal(data, &doc); uerr != nil {
+			log.Printf("config: cannot parse %s: %v (keeping the last known routing state)", path, uerr)
+		} else if doc.Routing.Mode != "" {
 			mode := normalizeMode(doc.Routing.Mode)
 			if mode == "" {
 				log.Printf("config: ignoring invalid routing mode %q in %s (expected normal or fly)", doc.Routing.Mode, path)
@@ -337,6 +339,8 @@ func (m *Manager) Routing() RoutingState {
 			m.routingInit = true
 			return m.routingCache
 		}
+	} else if err != nil && !os.IsNotExist(err) {
+		log.Printf("config: cannot read %s: %v (keeping the last known routing state)", path, err)
 	}
 	if m.routingInit {
 		return m.routingCache

@@ -1,5 +1,6 @@
 #!/usr/bin/env sh
-# Remove generated Hackathon Agent Kit artifacts. Data, logs and source stay in place.
+# Remove generated Hackathon Agent Kit artifacts. Runtime state (data/control) is removed;
+# data/input, data/artifacts, logs and committed source stay in place.
 set -e
 ROOT="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
 if [ -z "$ROOT" ] || [ "$ROOT" = "/" ] || [ ! -f "$ROOT/docker-compose.yml" ] || [ ! -f "$ROOT/go.mod" ]; then

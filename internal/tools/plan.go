@@ -35,15 +35,19 @@ func registerPlans(reg *mcp.Registry, d Deps) {
 			if rawSlug == "" || (slug == "plan" && strings.ToLower(strings.TrimSpace(rawSlug)) != "plan") {
 				return mcp.Fail(trace(ctx), "slug must contain at least one letter or digit"), nil
 			}
+			warnings := []string{}
 			stages := []plans.Stage{}
 			if raw, ok := args["stages"].([]any); ok && len(raw) > 0 {
+				skipped := 0
 				for _, item := range raw {
 					m, ok := item.(map[string]any)
 					if !ok {
+						skipped++
 						continue
 					}
 					id, _ := m["id"].(string)
-					if id == "" {
+					if strings.TrimSpace(id) == "" {
+						skipped++
 						continue
 					}
 					goal, _ := m["goal"].(string)
@@ -55,11 +59,11 @@ func registerPlans(reg *mcp.Registry, d Deps) {
 					if !plans.ValidStatus(status) {
 						return mcp.Fail(trace(ctx), fmt.Sprintf("invalid stage status %q", status)), nil
 					}
-					timebox := 0
-					if v, ok := m["timebox_minutes"].(float64); ok {
-						timebox = int(v)
-					}
+					timebox := int(argFloat(m, "timebox_minutes", 0))
 					stages = append(stages, plans.Stage{ID: id, Goal: goal, Status: status, TimeboxMinute: timebox})
+				}
+				if skipped > 0 {
+					warnings = append(warnings, fmt.Sprintf("skipped %d malformed stage(s)", skipped))
 				}
 			}
 			if len(stages) == 0 {
@@ -78,13 +82,17 @@ func registerPlans(reg *mcp.Registry, d Deps) {
 			if d.Metrics != nil {
 				d.Metrics.Inc("plan_creates_total")
 			}
-			return mcp.OK(trace(ctx), map[string]any{
+			envelope := mcp.OK(trace(ctx), map[string]any{
 				"slug":     plan.Slug,
 				"revision": plan.Revision,
 				"path":     relPath(d.Cfg.Root(), plans.Path(d.Cfg.Root(), plan.Slug)),
 				"stages":   plan.Stages,
 				"summary":  plans.Summary(plan),
-			}), nil
+			})
+			if len(warnings) > 0 {
+				envelope = envelope.WithWarnings(warnings...)
+			}
+			return envelope, nil
 		},
 	))
 

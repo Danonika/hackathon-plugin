@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"regexp"
 	"strings"
@@ -59,7 +60,7 @@ func registerSecurity(reg *mcp.Registry, d Deps) {
 			}
 			truncated := false
 			if len(text) > securityScanLimit {
-				text = text[:securityScanLimit]
+				text = truncateRunes(text, securityScanLimit)
 				truncated = true
 			}
 			findings := scanSecurity(text)
@@ -106,7 +107,12 @@ func securitySource(d Deps, args map[string]any) (string, string, error) {
 		if err != nil {
 			return "", "", err
 		}
-		data, err := os.ReadFile(full)
+		f, err := os.Open(full)
+		if err != nil {
+			return "", "", err
+		}
+		defer f.Close()
+		data, err := io.ReadAll(io.LimitReader(f, int64(securityScanLimit)+1))
 		if err != nil {
 			return "", "", err
 		}
@@ -126,21 +132,23 @@ func scanSecurity(text string) []securityFinding {
 	findings := []securityFinding{}
 	for lineNumber, line := range strings.Split(text, "\n") {
 		for _, rule := range securityRules {
-			match := rule.re.FindString(line)
-			if match == "" {
+			matches := rule.re.FindAllString(line, -1)
+			if len(matches) == 0 {
 				continue
 			}
-			excerpt := match
-			if rule.secret {
-				excerpt = redactSecret(match)
+			for _, match := range matches {
+				excerpt := match
+				if rule.secret {
+					excerpt = redactSecret(match)
+				}
+				findings = append(findings, securityFinding{
+					Type:     rule.name,
+					Severity: rule.severity,
+					Line:     lineNumber + 1,
+					Excerpt:  excerpt,
+					Pattern:  rule.re.String(),
+				})
 			}
-			findings = append(findings, securityFinding{
-				Type:     rule.name,
-				Severity: rule.severity,
-				Line:     lineNumber + 1,
-				Excerpt:  excerpt,
-				Pattern:  rule.re.String(),
-			})
 		}
 	}
 	if count, line := invisibleUnicode(text); count > 0 {
@@ -190,9 +198,8 @@ func isInvisible(r rune) bool {
 	return false
 }
 
+// redactSecret masks the whole secret: partial masking (first/last characters)
+// still leaks credential material into logs and artifacts.
 func redactSecret(value string) string {
-	if len(value) <= 8 {
-		return "***"
-	}
-	return value[:4] + "***" + value[len(value)-2:]
+	return "[redacted]"
 }

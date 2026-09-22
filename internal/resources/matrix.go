@@ -116,6 +116,11 @@ func Plan(matrix Matrix, statuses []Status, trackRef string) (TrackPlan, []Decis
 			decision.Chosen = variants[len(variants)-1]
 			chosenIndex = len(variants) - 1
 			decision.Degraded = true
+			if decision.Chosen.Provider != "" {
+				// No variant is ready and the fallback itself is provider-backed:
+				// surface the missing key instead of pretending it is available.
+				decision.Missing = append(decision.Missing, providerMissing(statuses, decision.Chosen.Provider)...)
+			}
 		} else if decision.Chosen.Provider == "" && chosenIndex > 0 {
 			decision.Degraded = true
 		}

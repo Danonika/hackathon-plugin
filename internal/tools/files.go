@@ -85,9 +85,12 @@ func registerFiles(reg *mcp.Registry, d Deps) {
 				warnings = append(warnings, "legacy .xls (BIFF) workbooks are not supported; convert the file to .xlsx or .csv first")
 			default:
 				if isTextExt(ext) {
-					if b, rerr := os.ReadFile(full); rerr == nil {
+					b, rerr := os.ReadFile(full)
+					if rerr != nil {
+						warnings = append(warnings, "could not read text content: "+rerr.Error())
+					} else {
 						data["lines"] = strings.Count(string(b), "\n") + 1
-						data["chars"] = len(b)
+						data["chars"] = len([]rune(string(b)))
 					}
 				} else {
 					warnings = append(warnings, "binary or unsupported file type: only metadata is reported")

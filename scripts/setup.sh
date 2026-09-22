@@ -7,6 +7,10 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --profile)
       PROFILE="${2:-}"
+      if [ -z "$PROFILE" ]; then
+        echo "[setup] --profile requires a value (core or full)" >&2
+        exit 1
+      fi
       shift 2
       ;;
     --profile=*)
@@ -35,7 +39,8 @@ cd "$ROOT"
 echo "[setup] repository root: $ROOT (profile: $PROFILE)"
 
 if [ ! -f .env ]; then
-  cp .env.example .env
+  (umask 077 && cp .env.example .env)
+  chmod 600 .env 2>/dev/null || true
   echo "[setup] created .env from .env.example (set OPENAI_API_KEY for speech/vision)"
 fi
 

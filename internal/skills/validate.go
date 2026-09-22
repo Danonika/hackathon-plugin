@@ -196,7 +196,15 @@ func parseFrontmatter(text string) (frontmatter, error) {
 		return frontmatter{}, fmt.Errorf("SKILL.md must start with YAML frontmatter")
 	}
 	rest := text[len("---\n"):]
-	end := strings.Index(rest, "\n---")
+	end := -1
+	offset := 0
+	for _, line := range strings.Split(rest, "\n") {
+		if strings.TrimRight(line, "\r") == "---" {
+			end = offset
+			break
+		}
+		offset += len(line) + 1
+	}
 	if end < 0 {
 		return frontmatter{}, fmt.Errorf("frontmatter is not terminated with ---")
 	}

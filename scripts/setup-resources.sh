@@ -59,6 +59,13 @@ if ask_yes "Do you have a ChatGPT/Codex Pro subscription?"; then CODEX_PRO=1; fi
 
 printf 'Track (number 01-10 or slug, empty to skip): '
 read -r TRACK || TRACK=""
+case "$TRACK" in
+  ""|[0-9]|[0-9][0-9]|[0-9][0-9]-[a-z-]*|[a-z][a-z-]*) ;;
+  *)
+    echo "[resources] ignoring invalid track '$TRACK'" >&2
+    TRACK=""
+    ;;
+esac
 
 SPEC="openai_api=$([ "$OPENAI" = 1 ] && echo true || echo false)"
 SPEC="$SPEC,nvidia_api=$([ "$NVIDIA" = 1 ] && echo true || echo false)"

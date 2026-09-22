@@ -23,10 +23,14 @@ trap 'rm -f "$TMP"' EXIT INT TERM
 ROOT_JSON="$(json_escape "$ROOT")" LAUNCHER_JSON="$(json_escape "hackathonkit-mcp-launcher.sh")" awk '
   BEGIN { root = ENVIRON["ROOT_JSON"]; launcher = ENVIRON["LAUNCHER_JSON"] }
   {
-    while ((i = index($0, "{{REPO_ROOT}}")) > 0) {
+    for (n = 0; n < 50; n++) {
+      i = index($0, "{{REPO_ROOT}}")
+      if (i == 0) break
       $0 = substr($0, 1, i - 1) root substr($0, i + 13)
     }
-    while ((i = index($0, "{{MCP_LAUNCHER}}")) > 0) {
+    for (n = 0; n < 50; n++) {
+      i = index($0, "{{MCP_LAUNCHER}}")
+      if (i == 0) break
       $0 = substr($0, 1, i - 1) launcher substr($0, i + 16)
     }
     print

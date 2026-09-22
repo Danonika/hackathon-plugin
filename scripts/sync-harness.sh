@@ -36,8 +36,16 @@ do
     MISSING=$((MISSING + 1))
   fi
 done
+if command -v python3 >/dev/null 2>&1; then
+  for f in .claude-plugin/plugin.json .claude-plugin/marketplace.json .opencode/opencode.json plugins/hackathonkit/hooks/codex-hooks.json; do
+    if ! python3 -c 'import json, sys; json.load(open(sys.argv[1]))' "$ROOT/$f" >/dev/null 2>&1; then
+      echo "[sync-harness] invalid JSON manifest: $f" >&2
+      MISSING=$((MISSING + 1))
+    fi
+  done
+fi
 if [ "$MISSING" -ne 0 ]; then
-  echo "[sync-harness] $MISSING adapter file(s) missing" >&2
+  echo "[sync-harness] $MISSING adapter file(s) missing or invalid" >&2
   exit 1
 fi
 

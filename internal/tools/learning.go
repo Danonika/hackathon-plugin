@@ -78,10 +78,15 @@ func registerLearning(reg *mcp.Registry, d Deps) {
 					"count":   0,
 				}, "no learnings matched; record one with learning.record after the task"), nil
 			}
+			sanitized := make([]learning.Match, 0, len(matches))
+			for _, match := range matches {
+				match.Learning = match.Learning.WithoutVector()
+				sanitized = append(sanitized, match)
+			}
 			return mcp.OK(trace(ctx), map[string]any{
-				"matches": matches,
-				"count":   len(matches),
-			}).WithMetrics(map[string]any{"count": len(matches)}), nil
+				"matches": sanitized,
+				"count":   len(sanitized),
+			}).WithMetrics(map[string]any{"count": len(sanitized)}), nil
 		},
 	))
 
@@ -112,7 +117,7 @@ func registerLearning(reg *mcp.Registry, d Deps) {
 			return mcp.OK(trace(ctx), map[string]any{
 				"promoted": promoted,
 				"reason":   reason,
-				"learning": item,
+				"learning": item.WithoutVector(),
 			}), nil
 		},
 	))

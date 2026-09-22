@@ -17,10 +17,33 @@ func parseNumber(s string) (float64, bool) {
 	if v, err := strconv.ParseFloat(s, 64); err == nil {
 		return v, true
 	}
-	if v, err := strconv.ParseFloat(strings.ReplaceAll(s, ",", "."), 64); err == nil {
+	if strings.Contains(s, ",") && !strings.Contains(s, ".") {
+		if commaIsThousands(s) {
+			s = strings.ReplaceAll(s, ",", "")
+		} else {
+			s = strings.ReplaceAll(s, ",", ".")
+		}
+	}
+	if v, err := strconv.ParseFloat(s, 64); err == nil {
 		return v, true
 	}
 	return 0, false
+}
+
+// commaIsThousands reports whether every comma-separated group after the first
+// has exactly three digits ("1,234", "1,234,567"), which is a thousands
+// separator rather than a decimal mark ("1,5").
+func commaIsThousands(s string) bool {
+	parts := strings.Split(s, ",")
+	if len(parts) < 2 || len(parts[0]) == 0 || len(parts[0]) > 3 {
+		return false
+	}
+	for _, part := range parts[1:] {
+		if len(part) != 3 {
+			return false
+		}
+	}
+	return true
 }
 
 var timeLayouts = []string{
@@ -45,9 +68,13 @@ func parseTimeValue(s string) (time.Time, bool) {
 	}
 	if v, err := strconv.ParseInt(s, 10, 64); err == nil {
 		switch {
-		case v > 1e12:
+		case v >= 1e17: // nanoseconds
+			return time.Unix(0, v), true
+		case v >= 1e14: // microseconds
+			return time.UnixMicro(v), true
+		case v >= 1e11: // milliseconds (1973+)
 			return time.UnixMilli(v), true
-		case v > 1e9:
+		case v >= 1e8: // seconds (1973+)
 			return time.Unix(v, 0), true
 		}
 	}
@@ -64,8 +91,14 @@ func timestampHeader(name string) bool {
 	if n == "ts" || strings.HasPrefix(n, "ts_") || strings.HasSuffix(n, "_ts") {
 		return true
 	}
-	for _, kw := range []string{"time", "date", "timestamp", "datetime", "дата", "время", "период"} {
-		if strings.Contains(n, kw) {
+	// Whole-token matching avoids false positives such as "update", "runtime"
+	// or "lifetime" that merely contain a keyword.
+	tokens := strings.FieldsFunc(n, func(r rune) bool {
+		return !(r >= 'a' && r <= 'z' || r >= 'а' && r <= 'я' || r >= '0' && r <= '9')
+	})
+	for _, token := range tokens {
+		switch token {
+		case "time", "date", "timestamp", "datetime", "дата", "время", "период":
 			return true
 		}
 	}
@@ -73,14 +106,45 @@ func timestampHeader(name string) bool {
 }
 
 func xmlEscape(s string) string {
-	r := strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;", `"`, "&quot;", "'", "&apos;")
-	return r.Replace(s)
+	var b strings.Builder
+	b.Grow(len(s))
+	for _, r := range s {
+		switch {
+		case r == '&':
+			b.WriteString("&amp;")
+		case r == '<':
+			b.WriteString("&lt;")
+		case r == '>':
+			b.WriteString("&gt;")
+		case r == '"':
+			b.WriteString("&quot;")
+		case r == '\'':
+			b.WriteString("&apos;")
+		case r == 0x9 || r == 0xA || r == 0xD || (r >= 0x20 && r <= 0xD7FF) || (r >= 0xE000 && r <= 0xFFFD):
+			b.WriteRune(r)
+		default:
+			// Control characters and surrogates are illegal in XML 1.0.
+		}
+	}
+	return b.String()
 }
 
 func shortHash(s string) string {
-	h := fnv.New32a()
+	h := fnv.New64a()
 	_, _ = h.Write([]byte(s))
-	return strconv.FormatUint(uint64(h.Sum32()), 16)
+	return strconv.FormatUint(h.Sum64(), 16)
+}
+
+// truncateRunes cuts s to at most n bytes without splitting a UTF-8 rune.
+func truncateRunes(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	cut := n
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+	return s[:cut]
 }
 
 func slugify(s string) string {

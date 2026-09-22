@@ -187,6 +187,10 @@ func registerTimeSeries(reg *mcp.Registry, d Deps) {
 			if method == "" {
 				method = "zscore"
 			}
+			if method != "zscore" && method != "iqr" {
+				warnings = append(warnings, fmt.Sprintf("unknown method %q; using zscore", method))
+				method = "zscore"
+			}
 			type anomaly struct {
 				Timestamp string  `json:"timestamp"`
 				Value     float64 `json:"value"`
@@ -226,7 +230,15 @@ func registerTimeSeries(reg *mcp.Registry, d Deps) {
 				}
 			default:
 				window := argInt(args, "window", 24)
+				if window < 3 || window > 10000 {
+					warnings = append(warnings, fmt.Sprintf("window %d out of range; using 24", window))
+					window = 24
+				}
 				threshold := argFloat(args, "threshold", 3.0)
+				if threshold <= 0 {
+					warnings = append(warnings, fmt.Sprintf("threshold %v must be positive; using 3.0", threshold))
+					threshold = 3.0
+				}
 				for i := 1; i < len(points); i++ {
 					start := i - window
 					if start < 0 {
@@ -266,6 +278,7 @@ func registerTimeSeries(reg *mcp.Registry, d Deps) {
 				}
 			}
 			sort.Slice(anomalies, func(i, j int) bool { return anomalies[i].Timestamp < anomalies[j].Timestamp })
+			totalAnomalies := len(anomalies)
 			limit := argInt(args, "limit", 100)
 			if limit <= 0 || limit > 10000 {
 				limit = 100
@@ -274,12 +287,13 @@ func registerTimeSeries(reg *mcp.Registry, d Deps) {
 				anomalies = anomalies[:limit]
 			}
 			env := mcp.OK(trace(ctx), map[string]any{
-				"time_column":   timeCol,
-				"value_column":  valueCol,
-				"method":        method,
-				"count":         len(points),
-				"anomaly_count": len(anomalies),
-				"anomalies":     anomalies,
+				"time_column":        timeCol,
+				"value_column":       valueCol,
+				"method":             method,
+				"count":              len(points),
+				"anomaly_count":      totalAnomalies,
+				"anomalies_returned": len(anomalies),
+				"anomalies":          anomalies,
 			})
 			for _, a := range anomalies {
 				env = env.WithSources(mcp.Source{Timestamp: a.Timestamp, Column: valueCol})

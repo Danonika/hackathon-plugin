@@ -3,6 +3,7 @@ package tools
 import (
 	"archive/zip"
 	"context"
+	"encoding/json"
 	"encoding/xml"
 	"fmt"
 	"io"
@@ -213,8 +214,16 @@ func registerDocuments(reg *mcp.Registry, d Deps) {
 			if werr != nil {
 				return mcp.Fail(trace(ctx), werr.Error()), nil
 			}
-			meta := fmt.Sprintf(`{"source":%q,"artifact_id":%q,"chars":%d,"extracted_at":%q}`,
-				path, artifact, len([]rune(text)), time.Now().UTC().Format(time.RFC3339))
+			metaBytes, merr := json.Marshal(map[string]any{
+				"source":       path,
+				"artifact_id":  artifact,
+				"chars":        len([]rune(text)),
+				"extracted_at": time.Now().UTC().Format(time.RFC3339),
+			})
+			if merr != nil {
+				return mcp.Fail(trace(ctx), merr.Error()), nil
+			}
+			meta := string(metaBytes)
 			_, _ = d.Store.WriteArtifact(
 				fmt.Sprintf("extracted/%s-%s-%s.meta.json", slugify(base), shortHash(path), stamp),
 				[]byte(meta),
@@ -266,9 +275,10 @@ func registerDocuments(reg *mcp.Registry, d Deps) {
 				truncated = true
 			}
 			env := mcp.OK(trace(ctx), map[string]any{
-				"text":      text,
-				"chars":     len(r),
-				"truncated": truncated,
+				"text":        text,
+				"chars":       len([]rune(text)),
+				"total_chars": len(r),
+				"truncated":   truncated,
 			})
 			if truncated {
 				env = env.WithWarnings("text truncated; use documents.ingest and knowledge.index for large documents")
