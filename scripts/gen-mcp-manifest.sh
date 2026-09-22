@@ -14,10 +14,11 @@ if [ ! -f "$TEMPLATE" ]; then
 fi
 
 json_escape() {
-  printf '%s' "$1" | tr -d '\r\n' | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' -e 's/	/\\t/g'
+  # Escape backslashes, quotes and every C0 control character.
+  printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' | tr '\r\n\t\f\v' '    ' | sed -e 's/	/\\t/g'
 }
 
-TMP="$ROOT/plugins/hackathonkit/.mcp.json.tmp.$$"
+TMP=$(mktemp "$ROOT/plugins/hackathonkit/.mcp.json.tmp.XXXXXX")
 trap 'rm -f "$TMP"' EXIT INT TERM
 
 ROOT_JSON="$(json_escape "$ROOT")" LAUNCHER_JSON="$(json_escape "hackathonkit-mcp-launcher.sh")" awk '
@@ -37,7 +38,7 @@ ROOT_JSON="$(json_escape "$ROOT")" LAUNCHER_JSON="$(json_escape "hackathonkit-mc
   }
 ' "$TEMPLATE" > "$TMP"
 
-if grep -q "{{" "$TMP"; then
+if grep -q -e "{{REPO_ROOT}}" -e "{{MCP_LAUNCHER}}" "$TMP"; then
   echo "[mcp-manifest] unexpanded placeholder remains; keeping the previous manifest" >&2
   exit 1
 fi

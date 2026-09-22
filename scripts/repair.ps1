@@ -21,9 +21,13 @@ New-Item -ItemType Directory -Force -Path (Join-Path $root "logs"), (Join-Path $
 
 $profile = "full"
 $statePath = Join-Path $root "configs\install-state.json"
-if (Test-Path $statePath) {
-  $match = Select-String -Path $statePath -Pattern '"profile"\s*:\s*"([^"]+)"' | Select-Object -First 1
-  if ($match) { $profile = $match.Matches[0].Groups[1].Value }
+if (Test-Path -LiteralPath $statePath) {
+  try {
+    $state = Get-Content -LiteralPath $statePath -Raw | ConvertFrom-Json
+    if ($state.profile) { $profile = $state.profile }
+  } catch {
+    Write-Warning "[repair] could not read the install state; using 'full'"
+  }
 }
 
 $runtime = "binary"
@@ -33,7 +37,10 @@ if (Get-Command docker -ErrorAction SilentlyContinue) {
 }
 
 $bin = Join-Path $root "bin\hackathonkit-mcp.exe"
-if (-not (Test-Path $bin) -and $runtime -eq "binary") {
+$demo = Join-Path $root "bin\hackathonkit-demo-api.exe"
+$ctl = Join-Path $root "bin\hackathonkit-ctl.exe"
+if ((-not (Test-Path $bin)) -or (-not (Test-Path $demo)) -or (-not (Test-Path $ctl))) {
+if ($runtime -eq "binary") {
   if (Get-Command go -ErrorAction SilentlyContinue) {
     New-Item -ItemType Directory -Force -Path (Join-Path $root "bin") | Out-Null
     go build -o bin/hackathonkit-mcp.exe ./cmd/hackathonkit-mcp
@@ -47,6 +54,7 @@ if (-not (Test-Path $bin) -and $runtime -eq "binary") {
     Write-Error "[repair] no Go toolchain and no docker engine; MCP runtime unavailable"
     exit 1
   }
+}
 }
 
 $global:LASTEXITCODE = 0

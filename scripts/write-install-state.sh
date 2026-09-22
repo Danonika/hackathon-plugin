@@ -15,7 +15,7 @@ json_escape() {
 }
 
 PLUGIN_JSON="$ROOT/plugins/hackathonkit/.codex-plugin/plugin.json"
-VERSION=$(sed -n 's/.*"version": *"\([^"]*\)".*/\1/p' "$PLUGIN_JSON" 2>/dev/null | head -n 1)
+VERSION=$(sed -n 's/^[[:space:]]*"version": *"\([^"]*\)".*/\1/p' "$PLUGIN_JSON" 2>/dev/null | head -n 1)
 if [ -z "$VERSION" ]; then
   echo "[install-state] warning: cannot read a version from $PLUGIN_JSON" >&2
   VERSION="unknown"
@@ -23,14 +23,19 @@ fi
 
 SKILLS=0
 if [ -d "$ROOT/.agents/skills" ]; then
-  SKILLS=$(find "$ROOT/.agents/skills" -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')
+  SKILLS=$(find "$ROOT/.agents/skills" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | wc -l | tr -d ' ')
+fi
+if ! [ -d "$ROOT/.agents/skills" ]; then
+  echo "[install-state] warning: .agents/skills is missing; skills count is 0" >&2
 fi
 
 STAMP=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 VERSION_JSON=$(json_escape "$VERSION")
 PROFILE_JSON=$(json_escape "$PROFILE")
 RUNTIME_JSON=$(json_escape "$RUNTIME")
-cat > "$ROOT/configs/install-state.json" <<EOF
+TMP_STATE=$(mktemp "$ROOT/configs/install-state.json.tmp.XXXXXX")
+trap 'rm -f "$TMP_STATE"' EXIT INT TERM
+cat > "$TMP_STATE" <<EOF
 {
   "version": "$VERSION_JSON",
   "profile": "$PROFILE_JSON",
@@ -45,4 +50,5 @@ cat > "$ROOT/configs/install-state.json" <<EOF
   "generated_at": "$STAMP"
 }
 EOF
+mv "$TMP_STATE" "$ROOT/configs/install-state.json"
 echo "[install-state] wrote configs/install-state.json (version $VERSION, profile $PROFILE, runtime $RUNTIME)"

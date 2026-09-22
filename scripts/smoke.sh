@@ -21,8 +21,19 @@ case "${1:-}" in
     ;;
 esac
 
+ERR_FILE=$(mktemp "${TMPDIR:-/tmp}/hackathonkit-smoke-stderr.XXXXXX")
+trap 'rm -f "$ERR_FILE"' EXIT INT TERM
+
 run_binary() {
-  printf '%s\n' "$REQUESTS" | "$ROOT/bin/hackathonkit-mcp" --repo-root "$ROOT" 2>/dev/null
+  printf '%s\n' "$REQUESTS" | "$ROOT/bin/hackathonkit-mcp" --repo-root "$ROOT" 2>"$ERR_FILE"
+}
+
+fail_with_stderr() {
+  echo "[smoke] $1" >&2
+  if [ -s "$ERR_FILE" ]; then
+    tail -5 "$ERR_FILE" >&2
+  fi
+  exit 1
 }
 
 run_compose() {
@@ -36,20 +47,32 @@ case "$TRANSPORT" in
       echo "[smoke] --binary requires $ROOT/bin/hackathonkit-mcp" >&2
       exit 1
     fi
-    OUT="$(run_binary)"
+    if ! OUT="$(run_binary)"; then
+      fail_with_stderr "local binary failed"
+    fi
     ;;
   compose)
     if ! command -v "$DOCKER_BIN" >/dev/null 2>&1; then
       echo "[smoke] --compose requires the docker CLI" >&2
       exit 1
     fi
-    OUT="$(run_compose)"
+    if ! OUT="$(run_compose)"; then
+      fail_with_stderr "docker compose failed"
+    fi
     ;;
   auto)
     if [ -x "$ROOT/bin/hackathonkit-mcp" ]; then
-      OUT="$(run_binary)"
+      NEWEST=$(find "$ROOT/cmd" "$ROOT/internal" -name '*.go' -newer "$ROOT/bin/hackathonkit-mcp" 2>/dev/null | head -n 1)
+      if [ -n "$NEWEST" ]; then
+        echo "[smoke] warning: bin/hackathonkit-mcp is older than $NEWEST" >&2
+      fi
+      if ! OUT="$(run_binary)"; then
+        fail_with_stderr "local binary failed"
+      fi
     elif command -v "$DOCKER_BIN" >/dev/null 2>&1; then
-      OUT="$(run_compose)"
+      if ! OUT="$(run_compose)"; then
+        fail_with_stderr "docker compose failed"
+      fi
     else
       echo "[smoke] no MCP runtime available (build bin/ or start docker)" >&2
       exit 1
@@ -57,9 +80,9 @@ case "$TRANSPORT" in
     ;;
 esac
 
-LINES=$(printf '%s\n' "$OUT" | grep -c '"jsonrpc"' || true)
+LINES=$(printf '%s\n' "$OUT" | grep -c . || true)
 if [ "$LINES" != "3" ]; then
-  echo "[smoke] MCP handshake FAILED: expected 3 JSON-RPC responses, got $LINES" >&2
+  echo "[smoke] MCP handshake FAILED: expected 3 response lines, got $LINES" >&2
   exit 1
 fi
 

@@ -54,8 +54,8 @@ if ($dockerOk) {
   docker compose -f (Join-Path $root "docker-compose.yml") build hackathonkit-mcp
   if ($LASTEXITCODE -ne 0) { Write-Error "[setup] docker compose build failed"; exit 1 }
   Write-Host "[setup] starting infrastructure (postgres, redis, minio)"
-  docker compose -f (Join-Path $root "docker-compose.yml") up -d postgres redis minio
-  if ($LASTEXITCODE -ne 0) { Write-Error "[setup] docker compose up failed"; exit 1 }
+  docker compose -f (Join-Path $root "docker-compose.yml") up -d --wait postgres redis minio
+  if ($LASTEXITCODE -ne 0) { Write-Error "[setup] docker compose up failed or services are not healthy"; exit 1 }
 } else {
   Write-Warning "[setup] docker engine is not available; building local binaries instead"
   if (-not (Get-Command go -ErrorAction SilentlyContinue)) {
@@ -63,11 +63,12 @@ if ($dockerOk) {
     exit 1
   }
   New-Item -ItemType Directory -Force -Path (Join-Path $root "bin") | Out-Null
-  go build -o bin/hackathonkit-mcp.exe ./cmd/hackathonkit-mcp
+  $exe = if ($env:OS -eq "Windows_NT") { ".exe" } else { "" }
+  go build -o "bin/hackathonkit-mcp$exe" ./cmd/hackathonkit-mcp
   if ($LASTEXITCODE -ne 0) { Write-Error "[setup] go build hackathonkit-mcp failed"; exit 1 }
-  go build -o bin/hackathonkit-demo-api.exe ./cmd/demo-api
+  go build -o "bin/hackathonkit-demo-api$exe" ./cmd/demo-api
   if ($LASTEXITCODE -ne 0) { Write-Error "[setup] go build demo-api failed"; exit 1 }
-  go build -o bin/hackathonkit-ctl.exe ./cmd/hackathonkit-ctl
+  go build -o "bin/hackathonkit-ctl$exe" ./cmd/hackathonkit-ctl
   if ($LASTEXITCODE -ne 0) { Write-Error "[setup] go build hackathonkit-ctl failed"; exit 1 }
   Write-Host "[setup] local binaries built in bin/"
 }

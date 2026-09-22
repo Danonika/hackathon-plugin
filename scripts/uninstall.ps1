@@ -7,15 +7,20 @@ if (-not $PSCommandPath) {
   exit 1
 }
 $root = Split-Path -Parent (Split-Path -Parent $PSCommandPath)
-if (-not $root -or -not (Test-Path -LiteralPath (Join-Path $root "docker-compose.yml"))) {
+if (-not $root -or -not (Test-Path -LiteralPath (Join-Path $root "docker-compose.yml")) -or -not (Test-Path -LiteralPath (Join-Path $root "go.mod"))) {
   Write-Error "[uninstall] refusing: '$root' does not look like the hackathonkit repository root"
   exit 1
 }
 
+$codexFail = 0
 if (Get-Command codex -ErrorAction SilentlyContinue) {
   if ($Yes) {
+    $global:LASTEXITCODE = 0
     & codex plugin remove hackathonkit *> $null
+    if ($LASTEXITCODE -ne 0) { Write-Warning "[uninstall] codex plugin remove failed"; $codexFail = 1 }
+    $global:LASTEXITCODE = 0
     & codex plugin marketplace remove hackathonkit-local *> $null
+    if ($LASTEXITCODE -ne 0) { Write-Warning "[uninstall] codex marketplace remove failed"; $codexFail = 1 }
     Write-Host "[uninstall] removed hackathonkit plugin and marketplace"
   } else {
     Write-Host "would run: codex plugin remove hackathonkit"
@@ -34,7 +39,7 @@ $targets = @(
 $Failures = 0
 foreach ($rel in $targets) {
   $target = Join-Path $root $rel
-  $rootPrefix = $root.TrimEnd('\') + '\'
+  $rootPrefix = $root.TrimEnd([System.IO.Path]::DirectorySeparatorChar, '/', '\') + [System.IO.Path]::DirectorySeparatorChar
   if (-not $target.StartsWith($rootPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
     Write-Warning "[uninstall] refusing to remove a path outside the repository: $target"
     $Failures++
@@ -72,8 +77,8 @@ if (-not $Yes) {
   Write-Host "[uninstall] dry run: re-run with -Yes to apply"
   exit 0
 }
-if ($Failures -gt 0) {
-  Write-Error "[uninstall] $Failures target(s) failed"
+if ($Failures -gt 0 -or $codexFail -ne 0) {
+  Write-Error "[uninstall] finished with warnings ($Failures path failure(s))"
   exit 1
 }
 Write-Host "[uninstall] done. data/, logs/ and committed files were kept."

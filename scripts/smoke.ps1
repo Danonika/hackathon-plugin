@@ -24,6 +24,7 @@ if (Test-Path -LiteralPath $binary) {
       -RedirectStandardInput $inFile -RedirectStandardOutput $outFile -PassThru -NoNewWindow
     if (-not $proc.WaitForExit(60000)) {
       $proc.Kill()
+      $proc.WaitForExit()
       if (-not $Quiet) { Write-Host "[smoke] MCP server timed out after 60s" }
       exit 1
     }
@@ -49,6 +50,7 @@ if (Test-Path -LiteralPath $binary) {
       -WorkingDirectory $root -RedirectStandardInput $inFile -RedirectStandardOutput $outFile -PassThru -NoNewWindow
     if (-not $proc.WaitForExit(120000)) {
       $proc.Kill()
+      $proc.WaitForExit()
       if (-not $Quiet) { Write-Host "[smoke] docker compose timed out after 120s" }
       exit 1
     }
@@ -75,11 +77,13 @@ foreach ($line in $lines) {
       $ok = $false
       if (-not $Quiet) { Write-Host "[smoke] JSON-RPC error for id=$($obj.id): $($obj.error.message)" }
     }
-    if (-not $obj.result -and -not $obj.error) {
+    $hasResult = $obj.PSObject.Properties.Name -contains "result"
+    $hasError = $obj.PSObject.Properties.Name -contains "error"
+    if (-not $hasResult -and -not $hasError) {
       $ok = $false
       if (-not $Quiet) { Write-Host "[smoke] response id=$($obj.id) has no result payload" }
     }
-    if ($obj.result -and $obj.result.isError) {
+    if ($hasResult -and $obj.result.isError) {
       $ok = $false
       if (-not $Quiet) { Write-Host "[smoke] tool call id=$($obj.id) reported isError" }
     }

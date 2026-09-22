@@ -16,6 +16,16 @@ if ($LASTEXITCODE -ne 0) {
   exit 1
 }
 
+$SkillsSrc = Join-Path $Root "plugins\hackathonkit\skills"
+if (-not (Test-Path -LiteralPath $SkillsSrc)) {
+  Write-Error "[sync-harness] skills source not found: $SkillsSrc"
+  exit 1
+}
+if ((Get-ChildItem -LiteralPath $SkillsSrc -Directory | Measure-Object).Count -eq 0) {
+  Write-Error "[sync-harness] skills source is empty: $SkillsSrc"
+  exit 1
+}
+
 # Claude Code reads project skills from .claude/skills. Mirror atomically so a
 # failed copy cannot leave the mirror missing or partial.
 $ClaudeSkills = Join-Path $Root ".claude\skills"
@@ -23,8 +33,14 @@ $ClaudeTmp = "$ClaudeSkills.tmp.$PID"
 if (Test-Path -LiteralPath $ClaudeTmp) { Remove-Item -LiteralPath $ClaudeTmp -Recurse -Force }
 New-Item -ItemType Directory -Force -Path $ClaudeTmp | Out-Null
 try {
-  Get-ChildItem -LiteralPath (Join-Path $Root "plugins\hackathonkit\skills") -Force |
+  Get-ChildItem -LiteralPath $SkillsSrc -Force |
     Copy-Item -Destination $ClaudeTmp -Recurse -Force
+  $srcSkillCount = (Get-ChildItem -LiteralPath $SkillsSrc -Directory).Count
+  $dstSkillCount = (Get-ChildItem -LiteralPath $ClaudeTmp -Directory).Count
+  if ($srcSkillCount -ne $dstSkillCount) {
+    Write-Error "[sync-harness] claude mirror mismatch: $srcSkillCount source, $dstSkillCount copied"
+    exit 1
+  }
   # Move the live mirror aside before the swap so a failure cannot leave it
   # missing or half-populated.
   $ClaudeOld = "$ClaudeSkills.old.$PID"
@@ -57,6 +73,18 @@ $Missing = 0
 foreach ($f in $Required) {
   if (-not (Test-Path (Join-Path $Root $f))) {
     Write-Warning "[sync-harness] missing adapter file: $f"
+    $Missing++
+  }
+}
+if ($Missing -ne 0) { exit 1 }
+
+# Parity with sync-harness.sh: validate the committed JSON manifests.
+foreach ($f in @(".claude-plugin\plugin.json", ".claude-plugin\marketplace.json", ".opencode\opencode.json", "plugins\hackathonkit\hooks\codex-hooks.json")) {
+  $path = Join-Path $Root $f
+  try {
+    $null = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json
+  } catch {
+    Write-Error "[sync-harness] invalid JSON manifest: $f ($($_.Exception.Message))"
     $Missing++
   }
 }

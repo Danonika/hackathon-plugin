@@ -3,8 +3,8 @@ param(
 )
 $ErrorActionPreference = "Stop"
 if (-not $Root) {
-  if (-not $PSCommandPath) {
-    Write-Error "[mcp-manifest] cannot resolve the repository root from an empty PSCommandPath"
+  if (-not $PSScriptRoot) {
+    Write-Error "[mcp-manifest] cannot resolve the repository root (empty PSScriptRoot)"
     exit 1
   }
   $Root = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
@@ -20,6 +20,10 @@ if (-not (Test-Path -LiteralPath $templatePath)) {
   exit 1
 }
 $template = Get-Content -LiteralPath $templatePath -Raw
+if ($null -eq $template) {
+  Write-Error "[mcp-manifest] template is empty: $templatePath"
+  exit 1
+}
 
 # ConvertTo-Json produces a correctly escaped JSON string literal; strip the
 # surrounding quotes so the value can be spliced into the template.
@@ -31,8 +35,15 @@ $manifestPath = Join-Path $Root "plugins\hackathonkit\.mcp.json"
 $manifestTmp = "$manifestPath.tmp.$PID"
 try {
   [System.IO.File]::WriteAllText($manifestTmp, $manifest, (New-Object System.Text.UTF8Encoding($false)))
-  if ((Get-Content -LiteralPath $manifestTmp -Raw) -match "\{\{") {
+  $rendered = Get-Content -LiteralPath $manifestTmp -Raw
+  if ($rendered -match "\{\{(REPO_ROOT|MCP_LAUNCHER)\}\}") {
     Write-Error "[mcp-manifest] unexpanded placeholder remains; keeping the previous manifest"
+    exit 1
+  }
+  try {
+    $null = $rendered | ConvertFrom-Json
+  } catch {
+    Write-Error "[mcp-manifest] rendered manifest is not valid JSON: $($_.Exception.Message)"
     exit 1
   }
   Move-Item -LiteralPath $manifestTmp -Destination $manifestPath -Force

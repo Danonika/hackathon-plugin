@@ -27,7 +27,7 @@ if command -v codex >/dev/null 2>&1; then
     if command -v jq >/dev/null 2>&1; then
       if printf '%s' "$PLUGIN_JSON" | jq -e '.installed[]? | select(.name == "hackathonkit")' >/dev/null 2>&1; then
         PLUGIN_STATE=disabled
-        if printf '%s' "$PLUGIN_JSON" | jq -e '.installed[]? | select(.name == "hackathonkit" and (.enabled == true))' >/dev/null 2>&1; then
+        if printf '%s' "$PLUGIN_JSON" | jq -e '.installed[]? | select(.name == "hackathonkit" and (.enabled != false))' >/dev/null 2>&1; then
           PLUGIN_STATE=enabled
         fi
       fi
@@ -41,7 +41,7 @@ except Exception:
 state = ""
 for entry in data.get("installed", []):
     if entry.get("name") == "hackathonkit":
-        state = "enabled" if entry.get("enabled") else "disabled"
+        state = "disabled" if entry.get("enabled") is False else "enabled"
 print(state)
 ' 2>/dev/null)
       if [ -z "$PLUGIN_STATE" ]; then
@@ -57,7 +57,7 @@ print(state)
             found = 1
           }
         }
-        if (found) print "disabled"
+        if (found) print "enabled"
       }'); then
       if [ -z "$PLUGIN_STATE" ]; then
         PLUGIN_STATE=missing
@@ -68,6 +68,7 @@ print(state)
   case "$PLUGIN_STATE" in
     enabled) check "hackathonkit plugin" 1 "installed and enabled"; PLUGIN_OK=1 ;;
     disabled) check "hackathonkit plugin" 0 "installed but disabled; enable it in Codex" ;;
+    unknown) check "hackathonkit plugin" 0 "could not parse codex plugin list output" ;;
     *) check "hackathonkit plugin" 0 "run scripts/setup.sh" ;;
   esac
 
@@ -94,7 +95,7 @@ fi
 
 if [ -x "$ROOT/bin/hackathonkit-mcp" ]; then
   check "mcp runtime" 1 "local binary"
-elif command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1 && docker images --format '{{.Repository}}' 2>/dev/null | grep -q -- '-hackathonkit-mcp$'; then
+elif command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1 && docker images --format '{{.Repository}}' 2>/dev/null | grep -q -E '(^|/)hackathon-agent-kit-hackathonkit-mcp$'; then
   check "mcp runtime" 1 "docker image"
 else
   check "mcp runtime" 0 "run scripts/setup.sh"

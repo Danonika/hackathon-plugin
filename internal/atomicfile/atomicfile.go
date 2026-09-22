@@ -43,6 +43,13 @@ func Write(path string, data []byte, mode os.FileMode) error {
 		os.Remove(tmpName)
 		return err
 	}
+	// Flush before the rename so a crash cannot leave an empty or truncated
+	// file behind a valid name.
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		os.Remove(tmpName)
+		return err
+	}
 	if err := tmp.Close(); err != nil {
 		os.Remove(tmpName)
 		return err
@@ -50,6 +57,10 @@ func Write(path string, data []byte, mode os.FileMode) error {
 	if err := os.Rename(tmpName, path); err != nil {
 		os.Remove(tmpName)
 		return err
+	}
+	if dirHandle, err := os.Open(dir); err == nil {
+		_ = dirHandle.Sync()
+		_ = dirHandle.Close()
 	}
 	return nil
 }

@@ -70,24 +70,39 @@ fi
 check "--binary used the local binary" "$(grep -q '^binary .*stdin=3' "$TMP/marker" 2>/dev/null && echo 1 || echo 0)"
 check "--binary skipped docker" "$(grep -q '^docker ' "$TMP/marker" 2>/dev/null && echo 0 || echo 1)"
 
-# --auto prefers the local binary.
+# --auto prefers the local binary and must not touch docker.
 rm -f "$TMP/marker"
-run_smoke --auto >/dev/null 2>&1 || true
+if run_smoke --auto >/dev/null 2>&1; then
+  check "--auto exits 0" 1
+else
+  check "--auto exits 0" 0 "non-zero exit"
+fi
 check "--auto prefers the local binary" "$(grep -q '^binary ' "$TMP/marker" 2>/dev/null && echo 1 || echo 0)"
+check "--auto skips docker" "$(grep -q '^docker ' "$TMP/marker" 2>/dev/null && echo 0 || echo 1)"
 
 # --compose without docker fails loudly.
 rm -f "$TMP/marker"
 if HACKATHONKIT_SMOKE_DOCKER="hackathonkit-no-such-docker" MARKER="$TMP/marker" PATH="$TMP/bin:/usr/bin:/bin" sh "$REPO/scripts/smoke.sh" --compose >/dev/null 2>&1; then
-  check "--compose without docker fails" 0 "expected a non-zero exit"
+  COMPOSE_STATUS=0
 else
-  check "--compose without docker fails" 1
+  COMPOSE_STATUS=$?
+fi
+if [ "$COMPOSE_STATUS" = "1" ]; then
+  check "--compose without docker fails with exit 1" 1
+else
+  check "--compose without docker fails with exit 1" 0 "exit=$COMPOSE_STATUS"
 fi
 
 # Unknown arguments are rejected.
 if run_smoke --telepathy >/dev/null 2>&1; then
-  check "unknown argument rejected" 0 "expected exit 2"
+  UNKNOWN_STATUS=0
 else
-  check "unknown argument rejected" 1
+  UNKNOWN_STATUS=$?
+fi
+if [ "$UNKNOWN_STATUS" = "2" ]; then
+  check "unknown argument rejected with exit 2" 1
+else
+  check "unknown argument rejected with exit 2" 0 "exit=$UNKNOWN_STATUS"
 fi
 
 if [ "$FAIL" -ne 0 ]; then

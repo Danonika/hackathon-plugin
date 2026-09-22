@@ -52,6 +52,9 @@ on_interrupt() {
 trap restore_echo EXIT
 trap on_interrupt INT TERM
 
+if [ ! -t 0 ]; then
+  echo "[resources] non-interactive stdin: every unanswered prompt defaults to no" >&2
+fi
 echo "[resources] answering stores booleans in configs/resources.json; keys go to .env only"
 
 OPENAI=0; NVIDIA=0; TELEGRAM=0; POSTGRES=0; MINIO=0; CODEX_PRO=0
@@ -67,7 +70,7 @@ read -r TRACK || TRACK=""
 case "$TRACK" in
   ""|[0-9]|[0-9][0-9]|[0-9][0-9]-[a-z-]*|[a-z][a-z-]*) ;;
   *)
-    echo "[resources] ignoring invalid track '$TRACK'" >&2
+    echo "[resources] ignoring invalid track '$TRACK' (expected e.g. 08 or 08-innovation)" >&2
     TRACK=""
     ;;
 esac
@@ -81,8 +84,9 @@ SPEC="$SPEC,codex_pro=$([ "$CODEX_PRO" = 1 ] && echo true || echo false)"
 if [ -n "$TRACK" ]; then
   SPEC="$SPEC,track=$TRACK"
 fi
-mcp --resources-set "$SPEC" >/dev/null
 
+# Collect secrets first: the profile must not claim a resource before its key
+# is actually stored.
 if [ "$OPENAI" = 1 ]; then set_key OPENAI_API_KEY "$(read_secret 'OPENAI_API_KEY (empty to skip)')"; fi
 if [ "$NVIDIA" = 1 ]; then set_key NVIDIA_API_KEY "$(read_secret 'NVIDIA_API_KEY (empty to skip)')"; fi
 if [ "$TELEGRAM" = 1 ]; then
@@ -95,6 +99,8 @@ if [ "$MINIO" = 1 ]; then
   set_key MINIO_ACCESS_KEY "$(read_secret 'MINIO_ACCESS_KEY (empty to skip)')"
   set_key MINIO_SECRET_KEY "$(read_secret 'MINIO_SECRET_KEY (empty to skip)')"
 fi
+
+mcp --resources-set "$SPEC" >/dev/null
 
 echo "[resources] saved profile:"
 mcp --resources

@@ -10,6 +10,10 @@ case "$TARGET" in
     exit 2
     ;;
 esac
+if [ "$(printf '%s' "$TARGET" | tr -cd '.' | wc -c | tr -d ' ')" -gt 1 ]; then
+  echo "[coverage] HACKATHONKIT_COVERAGE_TARGET must have at most one dot, got '$TARGET'" >&2
+  exit 2
+fi
 if ! awk -v t="$TARGET" 'BEGIN { exit (t + 0 >= 0 && t + 0 <= 100) ? 0 : 1 }'; then
   echo "[coverage] HACKATHONKIT_COVERAGE_TARGET must be between 0 and 100, got '$TARGET'" >&2
   exit 2
@@ -20,16 +24,17 @@ cd "$ROOT"
 
 # Containers may run as root over a repo owned by another user; disable VCS
 # stamping so git's dubious-ownership check cannot fail the build.
-case "${GOFLAGS:-}" in
-  *-buildvcs*) ;;
-  "") GOFLAGS="-buildvcs=false" ;;
-  *) GOFLAGS="$GOFLAGS -buildvcs=false" ;;
-esac
+GOFLAGS=$(printf '%s' "${GOFLAGS:-}" | sed -E 's/[[:space:]]*-buildvcs=[^[:space:]]*//g; s/^[[:space:]]+//; s/[[:space:]]+$//')
+if [ -n "$GOFLAGS" ]; then
+  GOFLAGS="$GOFLAGS -buildvcs=false"
+else
+  GOFLAGS="-buildvcs=false"
+fi
 export GOFLAGS
 
 if ! TEST_OUT=$(go test ./... -count=1 -coverprofile="$PROFILE" 2>&1); then
   echo "[coverage] test suite failed" >&2
-  printf '%s\n' "$TEST_OUT" | grep -E 'FAIL|--- FAIL' | head -20 >&2
+  printf '%s\n' "$TEST_OUT" | tail -30 >&2
   exit 1
 fi
 

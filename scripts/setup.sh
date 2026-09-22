@@ -40,8 +40,23 @@ echo "[setup] repository root: $ROOT (profile: $PROFILE)"
 
 if [ ! -f .env ]; then
   (umask 077 && cp .env.example .env)
-  chmod 600 .env 2>/dev/null || true
   echo "[setup] created .env from .env.example (set OPENAI_API_KEY for speech/vision)"
+fi
+# .env holds credentials: never leave it group/other readable.
+if [ -f .env ]; then
+  ENV_MODE=$(stat -c '%a' .env 2>/dev/null || stat -f '%Lp' .env 2>/dev/null || echo 600)
+  case "$ENV_MODE" in
+    *00) ;;
+    *) chmod 600 .env 2>/dev/null || true ;;
+  esac
+fi
+# A deterministic demo token protects the demo API without manual steps.
+if ! grep -q '^HACKATHONKIT_DEMO_TOKEN=.' .env 2>/dev/null; then
+  TOKEN=$(od -An -N16 -tx1 /dev/urandom 2>/dev/null | tr -d ' \n' || true)
+  if [ -n "$TOKEN" ]; then
+    sh "$ROOT/scripts/env-set.sh" .env HACKATHONKIT_DEMO_TOKEN "$TOKEN"
+    echo "[setup] generated HACKATHONKIT_DEMO_TOKEN for the demo API"
+  fi
 fi
 
 # Persist the host UID/GID so non-root containers can write through bind mounts.
@@ -98,7 +113,9 @@ sh "$ROOT/scripts/write-install-state.sh" "$ROOT" "$PROFILE" "$RUNTIME"
 if command -v codex >/dev/null 2>&1; then
   echo "[setup] registering repo marketplace and installing the Hackathon Agent Kit plugin"
   codex plugin remove hackathonkit >/dev/null 2>&1 || true
-  codex plugin marketplace add "$ROOT" >/dev/null 2>&1 || true
+  if ! codex plugin marketplace add "$ROOT" >/dev/null 2>&1; then
+    echo "[setup] warning: codex plugin marketplace add failed" >&2
+  fi
   if codex plugin add hackathonkit@hackathonkit-local >/dev/null 2>&1; then
     echo "[setup] plugin installed; start a NEW Codex session to load it"
   else

@@ -38,11 +38,17 @@ case "$KEY" in
 esac
 
 if [ "$FROM_STDIN" = "1" ]; then
-  IFS= read -r VALUE || true
+  VALUE=$(cat)
+  # A single trailing newline is a line terminator, not part of the value.
+  VALUE=${VALUE%"
+"}
 fi
 
 if [ -L "$FILE" ]; then
-  TARGET=$(readlink -f "$FILE" 2>/dev/null || true)
+  TARGET=""
+  if command -v readlink >/dev/null 2>&1; then
+    TARGET=$(readlink -f "$FILE" 2>/dev/null || readlink "$FILE" 2>/dev/null || true)
+  fi
   if [ -n "$TARGET" ]; then
     FILE="$TARGET"
   fi
@@ -52,10 +58,10 @@ MODE="600"
 OWNER=""
 if [ -f "$FILE" ]; then
   MODE=$(stat -c '%a' "$FILE" 2>/dev/null || stat -f '%Lp' "$FILE" 2>/dev/null || echo 600)
-  OWNER=$(stat -c '%u:%g' "$FILE" 2>/dev/null || true)
+  OWNER=$(stat -c '%u:%g' "$FILE" 2>/dev/null || stat -f '%u:%g' "$FILE" 2>/dev/null || true)
 fi
 
-TMP="$FILE.tmp.$$"
+TMP=$(mktemp "$FILE.tmp.XXXXXX" 2>/dev/null || echo "$FILE.tmp.$$")
 trap 'rm -f "$TMP"' EXIT INT TERM
 
 if [ ! -f "$FILE" ]; then
@@ -64,9 +70,24 @@ fi
 
 # The key is matched literally (no regex) and the value travels through the
 # environment, so backslashes and other escape sequences survive unchanged.
+LOCK="$FILE.lock"
+for _ in 1 2 3 4 5 6 7 8 9 10; do
+  if mkdir "$LOCK" 2>/dev/null; then
+    break
+  fi
+  sleep 0.1
+done
+trap 'rm -rf "$LOCK"' EXIT INT TERM
+
 (umask 077 && KEY="$KEY" VALUE="$VALUE" awk '
   BEGIN { k = ENVIRON["KEY"]; v = ENVIRON["VALUE"]; done = 0 }
-  substr($0, 1, length(k) + 1) == k "=" { print k "=" v; done = 1; next }
+  substr($0, 1, length(k) + 1) == k "=" {
+    if (done == 0) {
+      print k "=" v
+      done = 1
+    }
+    next
+  }
   { print }
   END { if (!done) print k "=" v }
 ' "$FILE" > "$TMP")

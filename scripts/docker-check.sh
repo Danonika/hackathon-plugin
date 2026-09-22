@@ -51,8 +51,16 @@ redact_logs() {
   sed -E -e 's#://[^/@ ]+@#://***@#g' -e 's/([A-Za-z_]*(PASSWORD|PASS|TOKEN|SECRET|DSN|KEY)[A-Za-z_]*)([=: ]+)[^ "]+/\1\3[redacted]/g'
 }
 
+INFRA_STARTED=0
+stop_infra() {
+  if [ "$INFRA_STARTED" = "1" ]; then
+    docker compose stop postgres redis minio >/dev/null 2>&1 || true
+  fi
+}
+
 diagnostics() {
   status=$?
+  stop_infra
   if [ "$status" -ne 0 ]; then
     echo "[docker-check] FAILED (exit $status); diagnostics (credentials redacted):" >&2
     docker compose ps -a 2>&1 | redact_logs >&2 || true
@@ -78,6 +86,7 @@ fi
 
 echo "[docker-check] start infrastructure (postgres, redis, minio)"
 docker compose up -d postgres redis minio
+INFRA_STARTED=1
 
 echo "[docker-check] wait for postgres and minio"
 tries=0
@@ -89,6 +98,17 @@ until docker compose exec -T postgres pg_isready -U hackathonkit -d hackathonkit
   fi
   sleep 2
 done
+echo "[docker-check] wait for redis"
+tries=0
+until docker compose exec -T redis redis-cli ping 2>/dev/null | grep -q PONG; do
+  tries=$((tries + 1))
+  if [ "$tries" -ge 30 ]; then
+    echo "[docker-check] redis did not become ready" >&2
+    exit 1
+  fi
+  sleep 2
+done
+
 if command -v curl >/dev/null 2>&1; then
   tries=0
   until curl -fsS http://127.0.0.1:9000/minio/health/live >/dev/null 2>&1; do
@@ -100,7 +120,19 @@ if command -v curl >/dev/null 2>&1; then
     sleep 2
   done
 else
-  echo "[docker-check] curl not found; skipping the minio readiness probe"
+  echo "[docker-check] curl not found; probing minio from inside the container"
+  MINIO_OK=0
+  for _ in $(seq 1 30); do
+    if docker compose exec -T minio sh -c 'exit 0' >/dev/null 2>&1; then
+      MINIO_OK=1
+      break
+    fi
+    sleep 2
+  done
+  if [ "$MINIO_OK" != "1" ]; then
+    echo "[docker-check] minio container is not accepting exec connections" >&2
+    exit 1
+  fi
 fi
 
 echo "[docker-check] MCP selftest in the container"

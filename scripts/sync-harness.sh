@@ -1,7 +1,12 @@
 #!/usr/bin/env sh
 # Generate harness mirrors and verify committed adapter manifests.
 set -e
-ROOT="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
+SELF="$0"
+case "$SELF" in
+  */*) ;;
+  *) SELF=$(command -v -- "$SELF" 2>/dev/null || echo "$SELF") ;;
+esac
+ROOT="$(CDPATH= cd -- "$(dirname -- "$SELF")/.." && pwd)"
 
 sh "$ROOT/scripts/sync-skills.sh"
 
@@ -9,7 +14,10 @@ sh "$ROOT/scripts/sync-skills.sh"
 # failed copy cannot leave the mirror missing or partial.
 CLAUDE_DST="$ROOT/.claude/skills"
 CLAUDE_TMP="$CLAUDE_DST.tmp.$$"
-trap 'rm -rf "$CLAUDE_TMP"' EXIT INT TERM
+cleanup_tmp() { rm -rf "$CLAUDE_TMP"; }
+on_signal() { cleanup_tmp; exit 130; }
+trap cleanup_tmp EXIT
+trap on_signal INT TERM
 rm -rf "$CLAUDE_TMP"
 mkdir -p "$CLAUDE_TMP"
 cp -R "$ROOT/plugins/hackathonkit/skills/." "$CLAUDE_TMP/"
@@ -43,14 +51,23 @@ do
     MISSING=$((MISSING + 1))
   fi
 done
-if command -v python3 >/dev/null 2>&1; then
-  for f in .claude-plugin/plugin.json .claude-plugin/marketplace.json .opencode/opencode.json plugins/hackathonkit/hooks/codex-hooks.json; do
-    if ! python3 -c 'import json, sys; json.load(open(sys.argv[1]))' "$ROOT/$f" >/dev/null 2>&1; then
-      echo "[sync-harness] invalid JSON manifest: $f" >&2
-      MISSING=$((MISSING + 1))
-    fi
-  done
-fi
+json_valid() {
+  if command -v python3 >/dev/null 2>&1; then
+    python3 -c 'import json, sys; json.load(open(sys.argv[1]))' "$1" >/dev/null 2>&1
+  elif command -v node >/dev/null 2>&1; then
+    node -e 'JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"))' "$1" >/dev/null 2>&1
+  else
+    # No validator available: at least require a plausible object start.
+    head -c 1 "$1" 2>/dev/null | grep -q '{'
+  fi
+}
+
+for f in .claude-plugin/plugin.json .claude-plugin/marketplace.json .opencode/opencode.json plugins/hackathonkit/hooks/codex-hooks.json; do
+  if ! json_valid "$ROOT/$f"; then
+    echo "[sync-harness] invalid JSON manifest: $f" >&2
+    MISSING=$((MISSING + 1))
+  fi
+done
 if [ "$MISSING" -ne 0 ]; then
   echo "[sync-harness] $MISSING adapter file(s) missing or invalid" >&2
   exit 1

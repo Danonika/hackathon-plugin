@@ -14,7 +14,10 @@ COUNT_SRC=$(find "$SRC" -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')
 # Build the mirror in a temporary directory and swap it in, so consumers never
 # observe a missing or half-populated mirror when the copy fails.
 TMP="$DST.tmp.$$"
-trap 'rm -rf "$TMP"' EXIT INT TERM
+cleanup_tmp() { rm -rf "$TMP"; }
+on_signal() { cleanup_tmp; exit 130; }
+trap cleanup_tmp EXIT
+trap on_signal INT TERM
 rm -rf "$TMP"
 mkdir -p "$TMP"
 cp -R "$SRC/." "$TMP/"
@@ -28,6 +31,16 @@ if [ "$COUNT_SRC" != "$COUNT_DST" ] || [ "$FILES_SRC" != "$FILES_DST" ] || [ "$S
   echo "[sync-skills] mirror mismatch: dirs $COUNT_SRC/$COUNT_DST files $FILES_SRC/$FILES_DST SKILL.md $SKILLS_SRC/$SKILLS_DST" >&2
   exit 1
 fi
+
+# Serialize concurrent mirror runs so two writers cannot interleave the swap.
+LOCK="$DST.lock"
+for _ in 1 2 3 4 5 6 7 8 9 10; do
+  if mkdir "$LOCK" 2>/dev/null; then
+    break
+  fi
+  sleep 0.2
+done
+trap 'rm -rf "$LOCK"' EXIT INT TERM
 
 OLD="$DST.old.$$"
 if [ -d "$DST" ]; then
