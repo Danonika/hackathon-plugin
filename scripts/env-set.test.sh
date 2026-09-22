@@ -47,6 +47,28 @@ else
   check "missing arguments rejected" 1
 fi
 
+# The value can be fed through stdin so secrets stay out of argv.
+(umask 022 && printf 'from-stdin' | sh "$HELPER" "$TMP/stdin.env" S)
+check "stdin value is stored" "$(grep -q '^S=from-stdin$' "$TMP/stdin.env" && echo 1 || echo 0)"
+check "stdin value file is 0600" "$([ "$(file_mode "$TMP/stdin.env")" = "600" ] && echo 1 || echo 0)" "mode=$(file_mode "$TMP/stdin.env")"
+
+# Backslashes and other escape sequences survive unchanged.
+sh "$HELPER" "$TMP/escape.env" B 'p\q\\r'
+check "backslash value is literal" "$(grep -q '^B=p\\q\\\\r$' "$TMP/escape.env" && echo 1 || echo 0)" "got: $(cat "$TMP/escape.env")"
+
+# Keys are matched literally, not as regexes.
+printf 'A_B=old\nA_XB=keep\n' > "$TMP/literal.env"
+sh "$HELPER" "$TMP/literal.env" A_B new
+check "literal key is replaced" "$(grep -q '^A_B=new$' "$TMP/literal.env" && echo 1 || echo 0)"
+check "lookalike key is untouched" "$(grep -q '^A_XB=keep$' "$TMP/literal.env" && echo 1 || echo 0)"
+
+# Keys that are not valid environment names are rejected.
+if sh "$HELPER" "$TMP/bad.env" 'BAD-KEY' v >/dev/null 2>&1; then
+  check "invalid key rejected" 0 "expected a non-zero exit"
+else
+  check "invalid key rejected" 1
+fi
+
 if [ "$FAIL" -ne 0 ]; then
   echo "[env-set-test] $FAIL assertion(s) failed"
   exit 1

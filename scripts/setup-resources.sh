@@ -20,18 +20,32 @@ ask_yes() {
   case "$answer" in y|Y|yes|YES) return 0 ;; *) return 1 ;; esac
 }
 
+restore_echo() {
+  if [ -t 0 ] && command -v stty >/dev/null 2>&1; then
+    stty echo 2>/dev/null || true
+  fi
+}
+
+# read_secret prints its prompt to stderr so command substitution captures only
+# the value; the value itself is returned on stdout.
 read_secret() {
-  printf '%s: ' "$1"
+  printf '%s: ' "$1" >&2
   if [ -t 0 ] && command -v stty >/dev/null 2>&1; then stty -echo; fi
   read -r value || value=""
-  if [ -t 0 ] && command -v stty >/dev/null 2>&1; then stty echo; printf '\n'; fi
+  if [ -t 0 ] && command -v stty >/dev/null 2>&1; then
+    stty echo
+    printf '\n' >&2
+  fi
   printf '%s' "$value"
 }
 
+# set_key feeds the value through stdin so it never appears in process argv.
 set_key() {
   [ -n "$2" ] || return 0
-  sh "$ROOT/scripts/env-set.sh" "$ROOT/.env" "$1" "$2"
+  printf '%s' "$2" | sh "$ROOT/scripts/env-set.sh" "$ROOT/.env" "$1"
 }
+
+trap restore_echo EXIT INT TERM
 
 echo "[resources] answering stores booleans in configs/resources.json; keys go to .env only"
 

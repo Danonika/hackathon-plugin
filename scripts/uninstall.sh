@@ -2,6 +2,10 @@
 # Remove generated Hackathon Agent Kit artifacts. Data, logs and source stay in place.
 set -e
 ROOT="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
+if [ -z "$ROOT" ] || [ "$ROOT" = "/" ] || [ ! -f "$ROOT/docker-compose.yml" ] || [ ! -f "$ROOT/go.mod" ]; then
+  echo "[uninstall] refusing: '$ROOT' does not look like the hackathonkit repository root" >&2
+  exit 1
+fi
 
 APPLY=0
 for arg in "$@"; do

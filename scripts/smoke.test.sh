@@ -46,7 +46,7 @@ write_responder "$REPO/bin/hackathonkit-mcp" binary
 write_responder "$TMP/bin/docker" docker
 
 run_smoke() {
-  MARKER="$TMP/marker" PATH="$TMP/bin:/usr/bin:/bin" sh "$REPO/scripts/smoke.sh" "$@"
+  HACKATHONKIT_SMOKE_DOCKER="$TMP/bin/docker" MARKER="$TMP/marker" PATH="$TMP/bin:/usr/bin:/bin" sh "$REPO/scripts/smoke.sh" "$@"
 }
 
 # --compose forces Docker even though bin/hackathonkit-mcp exists.
@@ -76,7 +76,7 @@ check "--auto prefers the local binary" "$(grep -q '^binary$' "$TMP/marker" 2>/d
 
 # --compose without docker fails loudly.
 rm -f "$TMP/marker"
-if MARKER="$TMP/marker" PATH="/usr/bin:/bin" sh "$REPO/scripts/smoke.sh" --compose >/dev/null 2>&1; then
+if HACKATHONKIT_SMOKE_DOCKER="hackathonkit-no-such-docker" MARKER="$TMP/marker" PATH="$TMP/bin:/usr/bin:/bin" sh "$REPO/scripts/smoke.sh" --compose >/dev/null 2>&1; then
   check "--compose without docker fails" 0 "expected a non-zero exit"
 else
   check "--compose without docker fails" 1

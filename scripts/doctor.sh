@@ -31,10 +31,20 @@ if command -v codex >/dev/null 2>&1; then
           PLUGIN_STATE=enabled
         fi
       fi
-    elif printf '%s' "$PLUGIN_JSON" | grep -q '"name": *"hackathonkit"'; then
-      PLUGIN_STATE=disabled
-      if printf '%s' "$PLUGIN_JSON" | grep -q '"enabled": *true'; then
-        PLUGIN_STATE=enabled
+    elif PLUGIN_STATE=$(printf '%s' "$PLUGIN_JSON" | awk '
+      { text = text $0 }
+      END {
+        n = split(text, parts, "{")
+        for (i = 1; i <= n; i++) {
+          if (parts[i] ~ /"name"[ \t]*:[ \t]*"hackathonkit"/) {
+            if (parts[i] ~ /"enabled"[ \t]*:[ \t]*true/) { print "enabled"; exit }
+            found = 1
+          }
+        }
+        if (found) print "disabled"
+      }'); then
+      if [ -z "$PLUGIN_STATE" ]; then
+        PLUGIN_STATE=missing
       fi
     fi
   fi

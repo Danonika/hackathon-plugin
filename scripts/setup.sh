@@ -40,8 +40,9 @@ if [ ! -f .env ]; then
 fi
 
 # Persist the host UID/GID so non-root containers can write through bind mounts.
-if command -v id >/dev/null 2>&1 && ! grep -q '^HACKATHONKIT_UID=' .env 2>/dev/null; then
-  printf 'HACKATHONKIT_UID=%s\nHACKATHONKIT_GID=%s\n' "$(id -u)" "$(id -g)" >> .env
+if command -v id >/dev/null 2>&1; then
+  sh "$ROOT/scripts/env-set.sh" .env HACKATHONKIT_UID "$(id -u)"
+  sh "$ROOT/scripts/env-set.sh" .env HACKATHONKIT_GID "$(id -g)"
   echo "[setup] recorded HACKATHONKIT_UID/HACKATHONKIT_GID in .env for bind-mount ownership"
 fi
 

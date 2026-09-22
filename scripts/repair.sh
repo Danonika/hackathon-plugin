@@ -24,9 +24,12 @@ fi
 if [ ! -x "$ROOT/bin/hackathonkit-mcp" ] && [ "$RUNTIME" = "binary" ]; then
   if command -v go >/dev/null 2>&1; then
     mkdir -p "$ROOT/bin"
-    go build -o "$ROOT/bin/hackathonkit-mcp" ./cmd/hackathonkit-mcp
-    go build -o "$ROOT/bin/hackathonkit-demo-api" ./cmd/demo-api
-    go build -o "$ROOT/bin/hackathonkit-ctl" ./cmd/hackathonkit-ctl
+    (
+      cd "$ROOT"
+      go build -o "$ROOT/bin/hackathonkit-mcp" ./cmd/hackathonkit-mcp
+      go build -o "$ROOT/bin/hackathonkit-demo-api" ./cmd/demo-api
+      go build -o "$ROOT/bin/hackathonkit-ctl" ./cmd/hackathonkit-ctl
+    )
     echo "[repair] rebuilt local binaries in bin/"
   else
     echo "[repair] warning: no Go toolchain and no docker engine; MCP runtime unavailable" >&2

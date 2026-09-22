@@ -1,6 +1,7 @@
 #!/usr/bin/env sh
 set -e
 ROOT="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
+DOCKER_BIN="${HACKATHONKIT_SMOKE_DOCKER:-docker}"
 
 REQUESTS=$(cat <<'EOF'
 {"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","clientInfo":{"name":"smoke","version":"0"}}}
@@ -26,7 +27,7 @@ run_binary() {
 
 run_compose() {
   cd "$ROOT"
-  printf '%s\n' "$REQUESTS" | docker compose -f "$ROOT/docker-compose.yml" run --rm -T hackathonkit-mcp 2>/dev/null
+  printf '%s\n' "$REQUESTS" | "$DOCKER_BIN" compose -f "$ROOT/docker-compose.yml" run --rm -T hackathonkit-mcp 2>/dev/null
 }
 
 case "$TRANSPORT" in
@@ -38,7 +39,7 @@ case "$TRANSPORT" in
     OUT="$(run_binary)"
     ;;
   compose)
-    if ! command -v docker >/dev/null 2>&1; then
+    if ! command -v "$DOCKER_BIN" >/dev/null 2>&1; then
       echo "[smoke] --compose requires the docker CLI" >&2
       exit 1
     fi
@@ -47,7 +48,7 @@ case "$TRANSPORT" in
   auto)
     if [ -x "$ROOT/bin/hackathonkit-mcp" ]; then
       OUT="$(run_binary)"
-    elif command -v docker >/dev/null 2>&1; then
+    elif command -v "$DOCKER_BIN" >/dev/null 2>&1; then
       OUT="$(run_compose)"
     else
       echo "[smoke] no MCP runtime available (build bin/ or start docker)" >&2

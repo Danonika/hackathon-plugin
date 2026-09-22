@@ -5,10 +5,17 @@ ROOT="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
 
 sh "$ROOT/scripts/sync-skills.sh"
 
-# Claude Code reads project skills from .claude/skills.
-rm -rf "$ROOT/.claude/skills"
-mkdir -p "$ROOT/.claude/skills"
-cp -R "$ROOT/plugins/hackathonkit/skills/." "$ROOT/.claude/skills/"
+# Claude Code reads project skills from .claude/skills. Mirror atomically so a
+# failed copy cannot leave the mirror missing or partial.
+CLAUDE_DST="$ROOT/.claude/skills"
+CLAUDE_TMP="$CLAUDE_DST.tmp.$$"
+trap 'rm -rf "$CLAUDE_TMP"' EXIT INT TERM
+rm -rf "$CLAUDE_TMP"
+mkdir -p "$CLAUDE_TMP"
+cp -R "$ROOT/plugins/hackathonkit/skills/." "$CLAUDE_TMP/"
+rm -rf "$CLAUDE_DST"
+mv "$CLAUDE_TMP" "$CLAUDE_DST"
+trap - EXIT INT TERM
 
 MISSING=0
 for f in \

@@ -4,6 +4,16 @@
 set -e
 ROOT="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
 TARGET="${HACKATHONKIT_COVERAGE_TARGET:-80}"
+case "$TARGET" in
+  ''|*[!0-9.]*)
+    echo "[coverage] HACKATHONKIT_COVERAGE_TARGET must be a number, got '$TARGET'" >&2
+    exit 2
+    ;;
+esac
+if ! awk -v t="$TARGET" 'BEGIN { exit (t + 0 >= 0 && t + 0 <= 100) ? 0 : 1 }'; then
+  echo "[coverage] HACKATHONKIT_COVERAGE_TARGET must be between 0 and 100, got '$TARGET'" >&2
+  exit 2
+fi
 PROFILE="${TMPDIR:-/tmp}/hackathonkit-coverage.$$"
 trap 'rm -f "$PROFILE"' EXIT INT TERM
 cd "$ROOT"
