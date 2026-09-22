@@ -244,6 +244,53 @@ export async function loadFlyModel() {
   let wingPhase = 0;
   const smooth = { activity: 0, speed: 0, turn: 0, flight: 0 };
 
+  const forelegs = ['left', 'right'].map((side, index) => ({
+    side: index === 0 ? 1 : -1,
+    tip: skeleton.getObjectByName('claw_T1_' + side),
+    chain: articulated.filter(body => /^(coxa|femur|tibia)_T1_/.test(body.part.name) && body.part.name.endsWith(side)).reverse(),
+  }));
+  const headBone = skeleton.getObjectByName('head');
+  const targetPoint = new THREE.Vector3(), pivot = new THREE.Vector3(), axis = new THREE.Vector3();
+  const from = new THREE.Vector3(), to = new THREE.Vector3(), cross = new THREE.Vector3();
+  const orientation = new THREE.Quaternion(), jointRotation = new THREE.Quaternion();
+  function clapForelegs(beat, strength) {
+    if (!headBone) return;
+    group.updateWorldMatrix(true, true);
+    for (const leg of forelegs) {
+      if (!leg.tip) continue;
+      headBone.getWorldPosition(targetPoint);
+      group.worldToLocal(targetPoint);
+      targetPoint.x += 0.43;
+      targetPoint.y -= 0.10;
+      targetPoint.z = leg.side * (0.018 + (1 - beat) * 0.21);
+      group.localToWorld(targetPoint);
+      // Small CCD steps guide the real front claws together; joint limits and
+      // the original skeleton are retained, so a clap cannot detach a limb.
+      for (let pass = 0; pass < 4; pass++) for (const body of leg.chain) {
+        for (let j = body.joints.length - 1; j >= 0; j--) {
+          const joint = body.joints[j];
+          body.part.parent.getWorldQuaternion(orientation);
+          orientation.multiply(body.base);
+          for (let k = 0; k < j; k++) orientation.multiply(jointRotation.setFromAxisAngle(body.joints[k].axis, body.joints[k].angle));
+          axis.copy(joint.axis).applyQuaternion(orientation).normalize();
+          body.part.getWorldPosition(pivot);
+          leg.tip.getWorldPosition(from).sub(pivot);
+          to.copy(targetPoint).sub(pivot);
+          from.addScaledVector(axis, -from.dot(axis));
+          to.addScaledVector(axis, -to.dot(axis));
+          if (from.lengthSq() < 1e-9 || to.lengthSq() < 1e-9) continue;
+          from.normalize(); to.normalize();
+          const adjustment = Math.atan2(axis.dot(cross.crossVectors(from, to)), clamp(from.dot(to), -1, 1));
+          joint.angle = clamp(joint.angle + clamp(adjustment, -0.28, 0.28) * strength, joint.range[0], joint.range[1]);
+          body.part.quaternion.copy(body.base);
+          for (const item of body.joints) body.part.quaternion.multiply(jointRotation.setFromAxisAngle(item.axis, item.angle));
+          body.part.quaternion.normalize();
+          body.part.updateWorldMatrix(false, true);
+        }
+      }
+    }
+  }
+
   function animate(time, dt, state = {}) {
     if (disposed) return;
     const step = clamp(finite(dt, 1 / 60), 0, 0.1);
@@ -261,7 +308,11 @@ export async function loadFlyModel() {
     wingPhase = (wingPhase + step * TAU * (6 + flight * 12)) % TAU;
     const correction = mode === 'correction' ? activity : 0;
     const reward = mode === 'reward' ? activity : 0;
-    const clap = mode === 'reward' ? Math.min(1, Number(state.clap) || reward) * (Number(state.clapAmp) > 0 ? Number(state.clapAmp) : 1) : 0;
+    const clap = mode === 'reward' ? clamp(finite(state.clap, reward), 0, 1.4) * clamp(finite(state.clapAmp, 1), 0, 3) : 0;
+    const expressive = state.gesture === 'clap' || state.gesture === 'offended';
+    const gesture = clamp(finite(state.gestureStrength), 0, 1);
+    const clapBeat = 0.5 - 0.5 * Math.cos(finite(state.gestureTime) * TAU * 2.4);
+
 
     for (const body of articulated) {
       const name = body.part.name;
@@ -303,11 +354,28 @@ export async function loadFlyModel() {
         } else if (name === 'rostrum' || name === 'haustellum') {
           if (!joint.name.includes('abduct')) angle = reward * 0.035 * (0.75 + Math.sin(t * 4) * 0.25);
         }
+        // Expressive demo poses stay within each anatomical joint's range.
+        if (expressive && state.gesture === 'clap' && pair === 1) {
+          if (name.startsWith('coxa_')) {
+            if (joint.name.includes('abduct')) angle = -side * (0.12 + clapBeat * 0.48) * clap;
+            else if (joint.name.includes('twist')) angle = side * 0.18 * clap;
+            else angle = 1.05 * clap;
+          } else if (name.startsWith('femur_')) {
+            angle = joint.name.includes('twist') ? side * 0.12 * clap : (0.65 + 0.20 * clapBeat) * clap;
+          } else if (name.startsWith('tibia_')) angle = (1.08 - 0.24 * clapBeat) * clap;
+          else if (name.startsWith('tarsus_')) angle = 0.18 * clap;
+        }
+        if (expressive && state.gesture === 'offended') {
+          if (name === 'head' && joint.name === 'head') angle = -0.23 * gesture;
+          else if (name.startsWith('antenna_') && !joint.name.includes('abduct') && !joint.name.includes('twist')) angle -= 0.14 * gesture;
+          else if (pair > 0) angle *= 2.6;
+        }
         joint.angle += (clamp(angle, joint.range[0], joint.range[1]) - joint.angle) * (name.startsWith('wing_') ? 1 : damping);
         body.part.quaternion.multiply(delta.setFromAxisAngle(joint.axis, joint.angle));
       }
       body.part.quaternion.normalize();
     }
+    if (state.gesture === 'clap' && clap > 0.01) clapForelegs(clapBeat, Math.min(1, clap));
   }
 
   return { group, animate, meshCount, dispose, groundOffset: group.userData.groundOffset, forward: new THREE.Vector3(1, 0, 0) };

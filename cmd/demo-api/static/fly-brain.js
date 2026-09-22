@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { createDashboardAnatomy } from './brain-anatomy-detail.js';
 import { OBJLoader } from 'three/addons/loaders/OBJLoader.js';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
@@ -42,35 +43,39 @@ function neuronPosition(index, count, array) {
 /**
  * Independent corner view; the caller owns its one shared animation loop.
  * update(recommendation) accepts the /fly-neuron-events recommend record.
- * render(timeSeconds, dtSeconds, {mode, activity, pulse}) accepts a signed
- * feedback pulse (-1..1), positive for reward. Pulse affects the anatomy rim,
- * never KC activity. No timer, fetch polling or simulated firing runs here.
+ * render(timeSeconds, dtSeconds, {mode, activity, pulse, pam, ppl1}) accepts a
+ * signed feedback pulse (-1..1), positive for reward. The dashboard theme
+ * colors separate schematic PAM/PPL1 markers; only snapshots activate its KC
+ * points. The default theme retains the existing fly page animation.
  */
-export async function createBrainView(container) {
+export async function createBrainView(container, options = {}) {
   if (!container || typeof container.appendChild !== 'function') {
     throw new TypeError('Для мозга нужен DOM-контейнер.');
   }
 
+  const dashboard = options.theme === 'dashboard';
   const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, powerPreference: 'low-power' });
   renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
-  renderer.setClearColor(0x090916, 0);
+  renderer.setClearColor(dashboard ? 0x000102 : 0x090916, dashboard ? 1 : 0);
   renderer.outputColorSpace = THREE.SRGBColorSpace;
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
   renderer.toneMappingExposure = 1.0;
   renderer.domElement.style.cssText = 'display:block;width:100%;height:100%;touch-action:none;outline:none';
   renderer.domElement.setAttribute('role', 'img');
-  renderer.domElement.setAttribute('aria-label', 'Регионы мозга VFB и схема активности KC-нейронов');
+  renderer.domElement.setAttribute('aria-label', dashboard
+    ? 'Регионы мозга VFB, активность KC и условные зоны сигналов PAM и PPL1'
+    : 'Регионы мозга VFB и схема активности KC-нейронов');
   container.appendChild(renderer.domElement);
 
   const scene = new THREE.Scene();
   const camera = new THREE.PerspectiveCamera(33, 1, 0.01, 40);
   const composer = new EffectComposer(renderer);
   composer.addPass(new RenderPass(scene, camera));
-  const bloomPass = new UnrealBloomPass(new THREE.Vector2(1, 1), 0.55, 0.5, 0.55);
+  const bloomPass = new UnrealBloomPass(new THREE.Vector2(1, 1), dashboard ? 0.32 : 0.55, 0.5, dashboard ? 0.78 : 0.55);
   composer.addPass(bloomPass);
 
   const brain = new THREE.Group();
-  brain.rotation.set(-0.23, 0.07, -0.035);
+  brain.rotation.set(dashboard ? 0.04 : -0.23, dashboard ? 0 : 0.07, dashboard ? 0 : -0.035);
   scene.add(brain);
 
   const anatomy = new THREE.Group();
@@ -85,26 +90,26 @@ export async function createBrainView(container) {
   controls.minPolarAngle = 0.25;
   controls.maxPolarAngle = Math.PI - 0.25;
 
-  scene.add(new THREE.HemisphereLight(0xe8ddff, 0x221329, 1.15));
-  const key = new THREE.DirectionalLight(0xffd3e9, 1.5);
+  scene.add(new THREE.HemisphereLight(dashboard ? 0xa6a0ef : 0xe8ddff, 0x221329, dashboard ? 0.8 : 1.15));
+  const key = new THREE.DirectionalLight(dashboard ? 0x8997ef : 0xffd3e9, dashboard ? 1.0 : 1.5);
   key.position.set(-2, 3, 5);
   scene.add(key);
-  const rim = new THREE.DirectionalLight(0x9f8bff, 1.2);
+  const rim = new THREE.DirectionalLight(0x9f8bff, dashboard ? 0.65 : 1.2);
   rim.position.set(4, 1, -3);
   scene.add(rim);
 
-  // Тёмная базовая модель: структура читается как серая анатомия, а не как
-  // источник свечения. Яркими остаются только активные KC-нейроны и пульс.
+  // The dashboard uses violet atlas surfaces; the default theme keeps its
+  // gray anatomy and original feedback pulse styling.
   const regionMaterials = [
     new THREE.MeshPhysicalMaterial({
-      color: 0x8a8398, emissive: 0x241a33, emissiveIntensity: 0.1,
-      roughness: 0.45, metalness: 0.05, transparent: true, opacity: 0.5,
+      color: dashboard ? 0x6150c4 : 0x8a8398, emissive: dashboard ? 0x25186d : 0x241a33, emissiveIntensity: dashboard ? 0.14 : 0.1,
+      roughness: dashboard ? 0.32 : 0.45, metalness: 0.05, transparent: true, opacity: dashboard ? 0.38 : 0.5,
       side: THREE.DoubleSide, depthWrite: false,
       clearcoat: 0.35, clearcoatRoughness: 0.35,
     }),
     new THREE.MeshPhysicalMaterial({
-      color: 0x9a90ae, emissive: 0x2a1f3d, emissiveIntensity: 0.12,
-      roughness: 0.48, metalness: 0.03, transparent: true, opacity: 0.62,
+      color: dashboard ? 0x8065df : 0x9a90ae, emissive: dashboard ? 0x442494 : 0x2a1f3d, emissiveIntensity: dashboard ? 0.17 : 0.12,
+      roughness: dashboard ? 0.34 : 0.48, metalness: 0.03, transparent: true, opacity: dashboard ? 0.5 : 0.62,
       side: THREE.DoubleSide, depthWrite: false,
       clearcoat: 0.3, clearcoatRoughness: 0.38,
     }),
@@ -146,27 +151,31 @@ export async function createBrainView(container) {
   anatomy.scale.setScalar(scale);
   anatomy.position.copy(center).multiplyScalar(-scale);
 
+  const dashboardDetail = dashboard ? createDashboardAnatomy(brain, anatomy, regionMaterials) : null;
+
   const pointMaterial = new THREE.ShaderMaterial({
     transparent: true,
     vertexColors: true,
     depthWrite: false,
     blending: THREE.AdditiveBlending,
-    uniforms: { pixelRatio: { value: renderer.getPixelRatio() } },
+    uniforms: { pixelRatio: { value: renderer.getPixelRatio() }, pointScale: { value: dashboard ? 0.43 : 1 }, pointAlpha: { value: dashboard ? 0.5 : 1 } },
     vertexShader: `
       attribute float intensity;
       varying vec3 neuronColor;
       varying float neuronIntensity;
       uniform float pixelRatio;
+      uniform float pointScale;
       void main() {
         neuronColor = color;
         neuronIntensity = intensity;
         vec4 viewPosition = modelViewMatrix * vec4(position, 1.0);
         gl_Position = projectionMatrix * viewPosition;
         float distanceScale = clamp(5.5 / -viewPosition.z, 0.65, 1.4);
-        gl_PointSize = (3.2 + 7.5 * sqrt(intensity)) * pixelRatio * distanceScale;
+        gl_PointSize = (3.2 + 7.5 * sqrt(intensity)) * pixelRatio * distanceScale * pointScale;
       }
     `,
     fragmentShader: `
+      uniform float pointAlpha;
       varying vec3 neuronColor;
       varying float neuronIntensity;
       void main() {
@@ -175,7 +184,7 @@ export async function createBrainView(container) {
         float core = exp(-6.0 * radius * radius);
         float halo = pow(1.0 - radius, 1.8) * 0.55 * neuronIntensity;
         float alpha = core * (0.12 + 1.05 * neuronIntensity) + halo * 0.9;
-        gl_FragColor = vec4(neuronColor, alpha);
+        gl_FragColor = vec4(neuronColor, alpha * pointAlpha);
         #include <tonemapping_fragment>
         #include <colorspace_fragment>
       }
@@ -198,9 +207,9 @@ export async function createBrainView(container) {
     if (!points || !hasVisibleActivation) return;
     intensity.fill(0);
     for (let index = 0; index < neuronCount; index++) {
-      colors[index * 3] = 0.19;
-      colors[index * 3 + 1] = 0.14;
-      colors[index * 3 + 2] = 0.32;
+      colors[index * 3] = dashboard ? 0.22 : 0.19;
+      colors[index * 3 + 1] = dashboard ? 0.22 : 0.14;
+      colors[index * 3 + 2] = dashboard ? 0.52 : 0.32;
     }
     points.geometry.attributes.intensity.needsUpdate = true;
     points.geometry.attributes.color.needsUpdate = true;
@@ -262,9 +271,9 @@ export async function createBrainView(container) {
       if (intensity[index] === 0) status.activeCount++;
       intensity[index] = Math.max(intensity[index], activation);
       const strength = Math.sqrt(intensity[index]);
-      colors[index * 3] = 0.19 + strength * 0.91;
-      colors[index * 3 + 1] = 0.14 + strength * 0.63;
-      colors[index * 3 + 2] = 0.32 + strength * 0.84;
+      colors[index * 3] = dashboard ? 0.22 + strength * 0.23 : 0.19 + strength * 0.91;
+      colors[index * 3 + 1] = dashboard ? 0.22 + strength * 0.85 : 0.14 + strength * 0.63;
+      colors[index * 3 + 2] = dashboard ? 0.52 + strength * 0.65 : 0.32 + strength * 0.84;
       hasVisibleActivation = true;
     }
     points.geometry.attributes.intensity.needsUpdate = true;
@@ -283,7 +292,7 @@ export async function createBrainView(container) {
     const height = Math.max(container.clientHeight, 1);
     camera.aspect = width / height;
     // Fit the 3.8-unit anatomy with a quiet margin, including narrow layouts.
-    const distance = Math.max(4.9, 2.16 / (Math.tan(THREE.MathUtils.degToRad(camera.fov / 2)) * camera.aspect));
+    const distance = Math.max(dashboard ? 3.75 : 4.9, (dashboard ? 2.07 : 2.16) / (Math.tan(THREE.MathUtils.degToRad(camera.fov / 2)) * camera.aspect));
     const direction = camera.position.clone().sub(controls.target);
     if (direction.lengthSq() < 0.001) direction.set(0, 0.52, 1);
     camera.position.copy(direction.normalize().multiplyScalar(distance).add(controls.target));
@@ -297,6 +306,19 @@ export async function createBrainView(container) {
     if (disposed) return;
     status.fresh = isFresh();
     if (!status.fresh) clearActivity();
+    if (dashboard) {
+      // Only the real snapshot controls the indexed KC values. Feedback
+      // changes these separate, illustrative PAM/PPL1 signal annotations.
+      const pulse = clamp(finite(shared.pulse), -1, 1);
+      const signals = [
+        clamp(finite(shared.pam, Math.max(0, pulse)), 0, 1),
+        clamp(finite(shared.ppl1, Math.max(0, -pulse)), 0, 1),
+      ];
+      controls.update();
+      dashboardDetail.render(signals[0], signals[1], camera);
+      composer.render();
+      return;
+    }
     if (points && neuronCount > 0) {
       const sparkSeed = Math.floor(time * 6);
       for (let i = 0; i < neuronCount; i++) {
@@ -377,14 +399,20 @@ export async function createBrainView(container) {
     controls.dispose();
     points?.geometry.dispose();
     pointMaterial.dispose();
-    anatomy.traverse(node => { if (node.isMesh) node.geometry.dispose(); });
+    const anatomyGeometry = new Set();
+    anatomy.traverse(node => { if (node.isMesh) anatomyGeometry.add(node.geometry); });
+    anatomyGeometry.forEach(geometry => geometry.dispose());
+    dashboardDetail?.dispose();
+
     regionMaterials.forEach(material => material.dispose());
+    bloomPass.dispose();
+    composer.dispose();
     renderer.dispose();
     renderer.domElement.remove();
   }
 
   setNeuronCount(DEFAULT_KC_TOTAL);
-  camera.position.set(0, 0.35, 5.6);
+  camera.position.set(0, dashboard ? 0 : 0.35, 5.6);
   controls.target.set(0, 0, 0);
   resize();
   if (typeof ResizeObserver !== 'undefined') {
