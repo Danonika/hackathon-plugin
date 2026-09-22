@@ -97,6 +97,10 @@ func run(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "fly-train: embeddings failed:", err)
 		return 1
 	}
+	if len(vectors) != len(rows) {
+		fmt.Fprintf(stderr, "fly-train: embeddings returned %d vectors for %d rows\n", len(vectors), len(rows))
+		return 1
+	}
 
 	brain := fly.NewMBrain(*kc, *sparsity, categories, 42)
 	const learningRate = 0.15

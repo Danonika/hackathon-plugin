@@ -92,7 +92,7 @@ func (s *Store) RecomputeRisk(ctx context.Context) (int, error) {
 			return updated, err
 		}
 		end := now
-		if sess.EndedAt != nil && sess.EndedAt.After(end) {
+		if sess.EndedAt != nil && sess.EndedAt.Before(end) {
 			end = *sess.EndedAt
 		}
 		if latest, err := s.latestGlobalTS(ctx); err == nil && latest.After(end) {

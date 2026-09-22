@@ -56,6 +56,22 @@ func TestBOMHeaderStripped(t *testing.T) {
 	}
 }
 
+func TestColumnIndexRejectsEmptyAndAmbiguous(t *testing.T) {
+	tbl := &table{Headers: []string{"grid", "id_value", "value"}}
+	if got := tbl.columnIndex(""); got != -1 {
+		t.Fatalf("empty name = %d, want -1", got)
+	}
+	if got := tbl.columnIndex("id"); got != -1 {
+		t.Fatalf("ambiguous partial name = %d, want -1", got)
+	}
+	if got := tbl.columnIndex("value"); got != 2 {
+		t.Fatalf("exact name = %d, want 2", got)
+	}
+	if got := tbl.columnIndex("id_value"); got != 1 {
+		t.Fatalf("exact second name = %d, want 1", got)
+	}
+}
+
 func TestColumnIndexFallback(t *testing.T) {
 	tbl := &table{Headers: []string{" Timestamp ", "Measured Value", "note"}}
 	cases := []struct {

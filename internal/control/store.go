@@ -146,18 +146,23 @@ func (s *Store) Close() error {
 	return s.db.Close()
 }
 
+// timeLayout is a fixed-width UTC timestamp: unlike RFC3339Nano it never drops
+// trailing zeros, so stored TEXT values sort lexicographically in time order
+// (all range queries compare strings).
+const timeLayout = "2006-01-02T15:04:05.000000000Z07:00"
+
 func formatTime(t time.Time) string {
 	if t.IsZero() {
 		return ""
 	}
-	return t.UTC().Format(time.RFC3339Nano)
+	return t.UTC().Format(timeLayout)
 }
 
 func parseTime(value string) time.Time {
 	if value == "" {
 		return time.Time{}
 	}
-	for _, layout := range []string{time.RFC3339Nano, time.RFC3339, "2006-01-02T15:04:05.000Z"} {
+	for _, layout := range []string{time.RFC3339Nano, time.RFC3339, timeLayout, "2006-01-02T15:04:05.000Z"} {
 		if t, err := time.Parse(layout, value); err == nil {
 			return t.UTC()
 		}
@@ -190,6 +195,37 @@ ON CONFLICT(id) DO UPDATE SET
 		sess.ID, sess.Root, sess.Kind, sess.Task, sess.Status, sess.Stage, sess.PlanSlug, sess.Worktree,
 		sess.RiskScore, string(reasons), formatTime(sess.CreatedAt), formatTime(sess.UpdatedAt), nullableTime(sess.EndedAt))
 	return err
+}
+
+// StartSession creates the session when it is missing and otherwise refreshes
+// last-seen without resurrecting an already ended session, so replayed
+// session_start/heartbeat records cannot flip status back to active.
+func (s *Store) StartSession(ctx context.Context, sess Session) error {
+	now := time.Now().UTC()
+	if sess.CreatedAt.IsZero() {
+		sess.CreatedAt = now
+	}
+	result, err := s.db.ExecContext(ctx,
+		`UPDATE sessions SET root=COALESCE(NULLIF(?,''), root), updated_at=? WHERE id=? AND status != 'ended'`,
+		sess.Root, formatTime(now), sess.ID)
+	if err != nil {
+		return err
+	}
+	if n, _ := result.RowsAffected(); n > 0 {
+		return nil
+	}
+	var exists int
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM sessions WHERE id=?`, sess.ID).Scan(&exists); err != nil {
+		return err
+	}
+	if exists > 0 {
+		return nil
+	}
+	sess.Status = "active"
+	if sess.Kind == "" {
+		sess.Kind = "agent"
+	}
+	return s.UpsertSession(ctx, sess)
 }
 
 func (s *Store) EndSession(ctx context.Context, id string, ts time.Time) error {

@@ -143,15 +143,43 @@ func (c *Client) Embed(ctx context.Context, texts []string) ([][]float64, error)
 	payload := map[string]any{"model": c.EmbeddingModel, "input": texts}
 	var out struct {
 		Data []struct {
+			Index     *int      `json:"index"`
 			Embedding []float64 `json:"embedding"`
 		} `json:"data"`
 	}
 	if err := c.doJSON(ctx, "/embeddings", payload, &out); err != nil {
 		return nil, err
 	}
-	result := make([][]float64, 0, len(out.Data))
+	indexed := false
 	for _, d := range out.Data {
-		result = append(result, d.Embedding)
+		if d.Index != nil {
+			indexed = true
+			break
+		}
+	}
+	if !indexed {
+		// Providers that omit the index field return vectors in input order.
+		if len(out.Data) != len(texts) {
+			return nil, fmt.Errorf("embeddings response returned %d vectors for %d inputs", len(out.Data), len(texts))
+		}
+		result := make([][]float64, len(texts))
+		for i, d := range out.Data {
+			result[i] = d.Embedding
+		}
+		return result, nil
+	}
+	result := make([][]float64, len(texts))
+	for _, d := range out.Data {
+		index := *d.Index
+		if index < 0 || index >= len(texts) {
+			return nil, fmt.Errorf("embeddings response index %d out of range for %d inputs", index, len(texts))
+		}
+		result[index] = d.Embedding
+	}
+	for i, vector := range result {
+		if vector == nil {
+			return nil, fmt.Errorf("embeddings response missing a vector for input %d", i)
+		}
 	}
 	return result, nil
 }

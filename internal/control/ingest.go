@@ -83,6 +83,7 @@ func (s *Store) ingestJSONL(ctx context.Context, name, path string, handle func(
 	}
 	count := 0
 	consumed := 0
+	lastGood := 0
 	for consumed < len(chunk) {
 		nl := bytes.IndexByte(chunk[consumed:], '\n')
 		if nl < 0 {
@@ -101,9 +102,15 @@ func (s *Store) ingestJSONL(ctx context.Context, name, path string, handle func(
 			break
 		}
 		if err := handle(ctx, record); err != nil {
+			// Records handled before this line were applied; persist the cursor
+			// up to the last good line so the next cycle does not duplicate them.
+			if lastGood > 0 {
+				_ = s.SetCursor(ctx, name, offset+int64(lastGood))
+			}
 			return count, err
 		}
 		count++
+		lastGood = consumed
 	}
 	if consumed > 0 {
 		if err := s.SetCursor(ctx, name, offset+int64(consumed)); err != nil {
@@ -123,11 +130,10 @@ func (s *Store) handleSessionRecord(ctx context.Context, rec map[string]any) err
 	case "session_end":
 		return s.EndSession(ctx, id, ts)
 	default:
-		return s.UpsertSession(ctx, Session{
+		return s.StartSession(ctx, Session{
 			ID:        id,
 			Root:      stringField(rec, "root"),
 			Kind:      "agent",
-			Status:    "active",
 			CreatedAt: ts,
 		})
 	}

@@ -78,3 +78,43 @@ func TestPlanStatusWithoutPlanIsPartial(t *testing.T) {
 		t.Fatalf("expected partial without a plan, got %s", env.Status)
 	}
 }
+
+func TestPlanSlugValidationAndStatusNormalization(t *testing.T) {
+	reg, root := testRegistry(t)
+
+	if env := call(t, reg, "plan.create", map[string]any{"slug": "!!!"}); env.Status != "error" {
+		t.Fatalf("symbolic slug must be rejected, got %s", env.Status)
+	}
+	if env := call(t, reg, "plan.update", map[string]any{"slug": "!!!", "stage": "S0", "status": "done"}); env.Status != "error" {
+		t.Fatalf("symbolic update slug must be rejected, got %s", env.Status)
+	}
+
+	create := call(t, reg, "plan.create", map[string]any{
+		"slug": "mixed-case",
+		"stages": []any{
+			map[string]any{"id": "S0", "goal": "kick off", "status": "Doing"},
+		},
+	})
+	if create.Status != "ok" {
+		t.Fatalf("create: %s %+v", create.Status, create.Warnings)
+	}
+	stages := create.Data.(map[string]any)["stages"].([]plans.Stage)
+	if stages[0].Status != "doing" {
+		t.Fatalf("stage status = %q, want doing", stages[0].Status)
+	}
+
+	update := call(t, reg, "plan.update", map[string]any{"slug": "mixed-case", "stage": "S0", "status": "DONE"})
+	if update.Status != "ok" {
+		t.Fatalf("update: %s %+v", update.Status, update.Warnings)
+	}
+	if got := update.Data.(map[string]any)["status"]; got != "done" {
+		t.Fatalf("reported status = %v, want done", got)
+	}
+	plan, err := plans.Load(root, "mixed-case")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.Stages[0].Status != "done" {
+		t.Fatalf("persisted status = %q, want done", plan.Stages[0].Status)
+	}
+}

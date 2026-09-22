@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"strings"
 
 	"hackathonkit.local/agentkit/internal/mcp"
 	"hackathonkit.local/agentkit/internal/plans"
@@ -29,9 +30,10 @@ func registerPlans(reg *mcp.Registry, d Deps) {
 		},
 		[]string{"slug"},
 		func(ctx context.Context, args map[string]any) (any, error) {
-			slug := plans.Slug(argString(args, "slug"))
-			if slug == "" {
-				return mcp.Fail(trace(ctx), "slug is required"), nil
+			rawSlug := argString(args, "slug")
+			slug := plans.Slug(rawSlug)
+			if rawSlug == "" || (slug == "plan" && strings.ToLower(strings.TrimSpace(rawSlug)) != "plan") {
+				return mcp.Fail(trace(ctx), "slug must contain at least one letter or digit"), nil
 			}
 			stages := []plans.Stage{}
 			if raw, ok := args["stages"].([]any); ok && len(raw) > 0 {
@@ -46,6 +48,7 @@ func registerPlans(reg *mcp.Registry, d Deps) {
 					}
 					goal, _ := m["goal"].(string)
 					status, _ := m["status"].(string)
+					status = plans.NormalizeStatus(status)
 					if status == "" {
 						status = "todo"
 					}
@@ -97,11 +100,12 @@ func registerPlans(reg *mcp.Registry, d Deps) {
 		},
 		[]string{"slug", "stage", "status"},
 		func(ctx context.Context, args map[string]any) (any, error) {
-			slug := plans.Slug(argString(args, "slug"))
+			rawSlug := argString(args, "slug")
+			slug := plans.Slug(rawSlug)
 			stageID := argString(args, "stage")
-			status := argString(args, "status")
-			if slug == "" || stageID == "" || status == "" {
-				return mcp.Fail(trace(ctx), "slug, stage and status are required"), nil
+			status := plans.NormalizeStatus(argString(args, "status"))
+			if rawSlug == "" || (slug == "plan" && strings.ToLower(strings.TrimSpace(rawSlug)) != "plan") || stageID == "" || status == "" {
+				return mcp.Fail(trace(ctx), "slug, stage and status are required (slug must contain at least one letter or digit)"), nil
 			}
 			if !plans.ValidStatus(status) {
 				return mcp.Fail(trace(ctx), fmt.Sprintf("invalid status %q", status)), nil

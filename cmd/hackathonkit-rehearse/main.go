@@ -259,8 +259,10 @@ type mcpClient struct {
 	cmd     *exec.Cmd
 	stdin   io.WriteCloser
 	stdout  *bufio.Reader
+	stderr  *bytes.Buffer
 	nextID  int
 	timeout time.Duration
+	dead    bool
 }
 
 func startMCP(binary, root string) (*mcpClient, error) {
@@ -295,6 +297,9 @@ func startMCP(binary, root string) (*mcpClient, error) {
 }
 
 func (c *mcpClient) request(method string, params map[string]any) (json.RawMessage, error) {
+	if c.dead {
+		return nil, fmt.Errorf("client closed after an earlier timeout")
+	}
 	c.nextID++
 	req := map[string]any{"jsonrpc": "2.0", "id": c.nextID, "method": method}
 	if params != nil {
@@ -336,6 +341,9 @@ func (c *mcpClient) request(method string, params map[string]any) (json.RawMessa
 		}
 		return resp.Result, nil
 	case <-time.After(c.timeout):
+		// The read goroutine is still blocked; mark the client dead so no later
+		// request can race with it for the next response line.
+		c.dead = true
 		c.close()
 		return nil, fmt.Errorf("timeout after %s", c.timeout)
 	}

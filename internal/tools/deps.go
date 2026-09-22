@@ -112,17 +112,25 @@ func argBool(args map[string]any, key string, def bool) bool {
 func argStringSlice(args map[string]any, key string) []string {
 	switch v := args[key].(type) {
 	case []string:
-		return v
+		out := []string{}
+		for _, item := range v {
+			if item = strings.TrimSpace(item); item != "" {
+				out = append(out, item)
+			}
+		}
+		return out
 	case []any:
 		out := []string{}
 		for _, item := range v {
 			if s, ok := item.(string); ok {
-				out = append(out, s)
+				if s = strings.TrimSpace(s); s != "" {
+					out = append(out, s)
+				}
 			}
 		}
 		return out
 	case string:
-		if v == "" {
+		if v = strings.TrimSpace(v); v == "" {
 			return nil
 		}
 		return []string{v}

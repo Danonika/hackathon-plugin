@@ -250,12 +250,30 @@ func TestEmbed(t *testing.T) {
 		c := newFakeClient(t, func(w http.ResponseWriter, r *http.Request) {
 			_, _ = w.Write([]byte(`{"data":[]}`))
 		})
-		vectors, err := c.Embed(context.Background(), []string{"a"})
+		if _, err := c.Embed(context.Background(), []string{"a"}); err == nil || !strings.Contains(err.Error(), "0 vectors for 1 inputs") {
+			t.Fatalf("err = %v", err)
+		}
+	})
+
+	t.Run("indexed response is reordered", func(t *testing.T) {
+		c := newFakeClient(t, func(w http.ResponseWriter, r *http.Request) {
+			_, _ = w.Write([]byte(`{"data":[{"index":1,"embedding":[0.3]},{"index":0,"embedding":[0.1,0.2]}]}`))
+		})
+		vectors, err := c.Embed(context.Background(), []string{"a", "b"})
 		if err != nil {
 			t.Fatal(err)
 		}
-		if len(vectors) != 0 {
+		if len(vectors) != 2 || vectors[0][0] != 0.1 || vectors[1][0] != 0.3 {
 			t.Fatalf("vectors = %+v", vectors)
+		}
+	})
+
+	t.Run("missing index entry", func(t *testing.T) {
+		c := newFakeClient(t, func(w http.ResponseWriter, r *http.Request) {
+			_, _ = w.Write([]byte(`{"data":[{"index":0,"embedding":[0.1]}]}`))
+		})
+		if _, err := c.Embed(context.Background(), []string{"a", "b"}); err == nil || !strings.Contains(err.Error(), "missing a vector for input 1") {
+			t.Fatalf("err = %v", err)
 		}
 	})
 }

@@ -2,6 +2,7 @@ package control
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -486,5 +487,86 @@ func TestStringFloatField(t *testing.T) {
 	}
 	if got := floatField(rec, "i"); got != 0 {
 		t.Fatalf("floatField non-float = %v", got)
+	}
+}
+
+func TestIngestCursorAdvancesOnHandlerError(t *testing.T) {
+	store := testStore(t)
+	ctx := context.Background()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "stream.jsonl")
+	write(t, path, `{"n":1}`+"\n"+`{"n":2}`+"\n"+`{"n":3}`+"\n")
+
+	seen := []int{}
+	handler := func(_ context.Context, rec map[string]any) error {
+		n := int(rec["n"].(float64))
+		if n == 3 {
+			return errors.New("boom")
+		}
+		seen = append(seen, n)
+		return nil
+	}
+	if _, err := store.ingestJSONL(ctx, "stream", path, handler); err == nil {
+		t.Fatal("expected the handler error to propagate")
+	}
+	offset, err := store.Cursor(ctx, "stream")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := int64(len(`{"n":1}` + "\n" + `{"n":2}` + "\n"))
+	if offset != want {
+		t.Fatalf("cursor = %d, want %d (only applied records)", offset, want)
+	}
+
+	seen = nil
+	retry := func(_ context.Context, rec map[string]any) error {
+		seen = append(seen, int(rec["n"].(float64)))
+		return nil
+	}
+	if _, err := store.ingestJSONL(ctx, "stream", path, retry); err != nil {
+		t.Fatal(err)
+	}
+	if len(seen) != 1 || seen[0] != 3 {
+		t.Fatalf("retry saw %v, want [3]", seen)
+	}
+}
+
+func TestSessionEndIsNotResurrected(t *testing.T) {
+	store := testStore(t)
+	ctx := context.Background()
+	root := t.TempDir()
+	start := `{"ts":"2026-09-21T10:00:00Z","type":"session_start","session_id":"s-1","root":"/x"}`
+	end := `{"ts":"2026-09-21T10:10:00Z","type":"session_end","session_id":"s-1"}`
+	logPath := filepath.Join(root, "logs", "sessions.jsonl")
+	write(t, logPath, start+"\n"+end+"\n")
+
+	if _, err := store.Ingest(ctx, root); err != nil {
+		t.Fatal(err)
+	}
+	sess, err := store.Session(ctx, "s-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sess.Status != "ended" {
+		t.Fatalf("status = %s, want ended", sess.Status)
+	}
+
+	f, err := os.OpenFile(logPath, os.O_WRONLY|os.O_APPEND, 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.WriteString(start + "\n"); err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+	if _, err := store.Ingest(ctx, root); err != nil {
+		t.Fatal(err)
+	}
+	sess, err = store.Session(ctx, "s-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sess.Status != "ended" {
+		t.Fatalf("replayed start resurrected the session: %s", sess.Status)
 	}
 }

@@ -45,7 +45,12 @@ var validStatus = map[string]bool{
 }
 
 func ValidStatus(status string) bool {
-	return validStatus[strings.ToLower(strings.TrimSpace(status))]
+	return validStatus[NormalizeStatus(status)]
+}
+
+// NormalizeStatus canonicalizes a stage status for storage and comparison.
+func NormalizeStatus(status string) string {
+	return strings.ToLower(strings.TrimSpace(status))
 }
 
 func Dir(root string) string {

@@ -64,17 +64,28 @@ func readCSVTable(path string, delimiter string) (*table, error) {
 }
 
 func (t *table) columnIndex(name string) int {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return -1
+	}
 	for i, h := range t.Headers {
-		if strings.EqualFold(strings.TrimSpace(h), strings.TrimSpace(name)) {
+		if strings.EqualFold(strings.TrimSpace(h), name) {
 			return i
 		}
 	}
+	needle := strings.ToLower(name)
+	match := -1
 	for i, h := range t.Headers {
-		if strings.Contains(strings.ToLower(h), strings.ToLower(name)) {
-			return i
+		if strings.Contains(strings.ToLower(h), needle) {
+			if match >= 0 {
+				// Ambiguous partial match: refuse instead of silently picking
+				// the first containing header.
+				return -1
+			}
+			match = i
 		}
 	}
-	return -1
+	return match
 }
 
 type columnProfile struct {
