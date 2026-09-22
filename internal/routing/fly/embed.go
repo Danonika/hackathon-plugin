@@ -64,7 +64,37 @@ var categoryExemplars = map[string][]string{
 type embeddingCache struct {
 	Model     string               `json:"model"`
 	Hash      string               `json:"hash"`
+	Dims      int                  `json:"dims,omitempty"`
 	Centroids map[string][]float64 `json:"centroids"`
+}
+
+// centroidDims returns the vector dimension of the cached centroids (0 if the
+// map is empty or ragged).
+func centroidDims(centroids map[string][]float64) int {
+	dims := 0
+	for _, vec := range centroids {
+		if dims == 0 {
+			dims = len(vec)
+		} else if len(vec) != dims {
+			return 0
+		}
+	}
+	return dims
+}
+
+// cacheDimsMatch rejects a cache whose recorded dimension does not match the
+// centroids it carries (e.g. a hash-encoder fallback persisted under the
+// primary model's tag).
+func cacheDimsMatch(cache embeddingCache) bool {
+	actual := centroidDims(cache.Centroids)
+	if actual == 0 {
+		return false
+	}
+	if cache.Dims == 0 {
+		// Older cache without a recorded dimension: accept but treat as unknown.
+		return true
+	}
+	return cache.Dims == actual
 }
 
 func exemplarHash() string {
@@ -239,7 +269,8 @@ func (r *Router) buildCentroids(ctx context.Context) (map[string][]float64, bool
 			if json.Unmarshal(data, &cache) == nil &&
 				cache.Hash == hash &&
 				cache.Model == r.modelTag &&
-				len(cache.Centroids) > 0 {
+				len(cache.Centroids) > 0 &&
+				cacheDimsMatch(cache) {
 				return cache.Centroids, true
 			}
 		}
@@ -302,7 +333,7 @@ func (r *Router) buildCentroids(ctx context.Context) (map[string][]float64, bool
 	}
 
 	if r.cachePath != "" {
-		cache := embeddingCache{Model: r.modelTag, Hash: hash, Centroids: centroids}
+		cache := embeddingCache{Model: r.modelTag, Hash: hash, Dims: centroidDims(centroids), Centroids: centroids}
 		if data, err := json.Marshal(cache); err == nil {
 			writeFileAtomic(r.cachePath, data)
 		}

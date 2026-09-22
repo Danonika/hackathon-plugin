@@ -108,6 +108,24 @@ func (r *Router) loadBrainLocked() *MBrain {
 	return r.brain
 }
 
+// clone deep-copies the brain so an update can be saved before it is published.
+func (b *MBrain) clone() *MBrain {
+	if b == nil {
+		return nil
+	}
+	out := *b
+	out.Categories = append([]string(nil), b.Categories...)
+	out.Readout = make(map[string][]float64, len(b.Readout))
+	for k, v := range b.Readout {
+		out.Readout[k] = append([]float64(nil), v...)
+	}
+	out.Bias = make(map[string]float64, len(b.Bias))
+	for k, v := range b.Bias {
+		out.Bias[k] = v
+	}
+	return &out
+}
+
 func (r *Router) saveBrain(brain *MBrain) error {
 	if r.brainPath == "" {
 		return nil
@@ -274,8 +292,7 @@ func (r *Router) mbCategoryScores(ctx context.Context, task string) (map[string]
 }
 
 func (r *Router) applyDopamine(ctx context.Context, ev FeedbackEvent) bool {
-	brain := r.loadBrain()
-	if brain == nil || r.embedder == nil {
+	if r.embedder == nil {
 		return false
 	}
 	// Embed outside the lock: the embedder can be a network client.
@@ -283,10 +300,18 @@ func (r *Router) applyDopamine(ctx context.Context, ev FeedbackEvent) bool {
 	if !ok {
 		return false
 	}
+	// Mutate a copy under the lock, then persist outside it so a disk write
+	// never serializes every Router in the process.
 	brainMu.Lock()
-	defer brainMu.Unlock()
-	_, code, ok := brain.scores(vec)
+	base := r.loadBrainLocked()
+	if base == nil {
+		brainMu.Unlock()
+		return false
+	}
+	work := base.clone()
+	_, code, ok := work.scores(vec)
 	if !ok || code == nil {
+		brainMu.Unlock()
 		return false
 	}
 	reward := map[string]bool{}
@@ -304,24 +329,30 @@ func (r *Router) applyDopamine(ctx context.Context, ev FeedbackEvent) bool {
 	switch ev.Source {
 	case "accepted", "normal-teacher":
 		for category := range reward {
-			brain.adjust(category, code, eta)
+			work.adjust(category, code, eta)
 		}
-		brain.Dopamine.PAM++
+		work.Dopamine.PAM++
 	case "codex-correction", "fallback":
 		for category := range punish {
-			brain.adjust(category, code, -eta)
+			work.adjust(category, code, -eta)
 		}
 		for category := range reward {
-			brain.adjust(category, code, eta/2)
+			work.adjust(category, code, eta/2)
 		}
-		brain.Dopamine.PPL1++
+		work.Dopamine.PPL1++
 	default:
+		brainMu.Unlock()
 		return false
 	}
-	r.brain = brain
-	if err := r.saveBrain(brain); err != nil {
+	brainMu.Unlock()
+
+	if err := r.saveBrain(work); err != nil {
+		// In-memory state is unchanged: the caller sees a real failure.
 		return false
 	}
+	brainMu.Lock()
+	r.brain = work
+	brainMu.Unlock()
 	return true
 }
 

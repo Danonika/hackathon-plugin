@@ -137,15 +137,32 @@ func FreezeBundle(opts BundleOptions) (Bundle, error) {
 	}
 	excludeRules := compileExcludes(excludes)
 
-	if entries, err := os.ReadDir(outAbs); err == nil && len(entries) > 0 {
-		if _, err := os.Stat(filepath.Join(outAbs, "bundle.json")); err != nil {
-			return Bundle{}, fmt.Errorf("refusing to delete %s: not a previous bundle (missing bundle.json)", outDir)
+	outEntries, readErr := os.ReadDir(outAbs)
+	switch {
+	case readErr == nil && len(outEntries) > 0:
+		// Only delete a directory this tool owns (marker records the target).
+		markerPath := filepath.Join(outAbs, ".hackathonkit-bundle")
+		marker, markerErr := os.ReadFile(markerPath)
+		if markerErr != nil || strings.TrimSpace(string(marker)) != outAbs {
+			return Bundle{}, fmt.Errorf("refusing to delete %s: not a bundle created by this tool (missing ownership marker)", outDir)
 		}
+		if info, lerr := os.Lstat(outAbs); lerr == nil && info.Mode()&os.ModeSymlink != 0 {
+			return Bundle{}, fmt.Errorf("refusing to delete %s: it is a symlink", outDir)
+		}
+		// Re-stat immediately before removal to narrow the check/use window.
+		if _, serr := os.Stat(markerPath); serr != nil {
+			return Bundle{}, fmt.Errorf("refusing to delete %s: ownership marker disappeared", outDir)
+		}
+	case readErr != nil && !os.IsNotExist(readErr):
+		return Bundle{}, readErr
 	}
 	if err := os.RemoveAll(outAbs); err != nil {
 		return Bundle{}, err
 	}
 	if err := os.MkdirAll(outAbs, 0o755); err != nil {
+		return Bundle{}, err
+	}
+	if err := os.WriteFile(filepath.Join(outAbs, ".hackathonkit-bundle"), []byte(outAbs+"\n"), 0o644); err != nil {
 		return Bundle{}, err
 	}
 
@@ -372,7 +389,7 @@ func hashBundle(dir string) ([]BundleFile, string, error) {
 			return relErr
 		}
 		relSlash := filepath.ToSlash(rel)
-		if relSlash == "bundle.json" || relSlash == "bundle-hash.txt" {
+		if relSlash == "bundle.json" || relSlash == "bundle-hash.txt" || relSlash == ".hackathonkit-bundle" {
 			return nil
 		}
 		sum, err := fileSHA256(path)

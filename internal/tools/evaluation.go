@@ -51,7 +51,7 @@ func registerEvaluation(reg *mcp.Registry, d Deps) {
 				kind = "judges"
 			}
 			if argBool(args, "persist", true) && d.Store != nil {
-				rel := filepath.ToSlash(filepath.Join("evals", pathSegment(kind), pathSegment(agg.SnapshotSHA), "aggregate.json"))
+				rel := filepath.ToSlash(filepath.Join("evals", pathSegment(kind), uniqueSegment(agg.SnapshotSHA), "aggregate.json"))
 				if path, werr := writeRepoJSON(d.Cfg.Root(), rel, agg); werr != nil {
 					data["persist_error"] = werr.Error()
 				} else {
@@ -141,7 +141,7 @@ func registerEvaluation(reg *mcp.Registry, d Deps) {
 				"run2":        aggregateData(agg2),
 			}
 			if argBool(args, "persist", true) && d.Store != nil {
-				rel := filepath.ToSlash(filepath.Join("evals", "calibration", pathSegment(cal.SnapshotSHA), "calibration.json"))
+				rel := filepath.ToSlash(filepath.Join("evals", "calibration", uniqueSegment(cal.SnapshotSHA), "calibration.json"))
 				if path, werr := writeRepoJSON(root, rel, cal); werr != nil {
 					data["persist_error"] = werr.Error()
 				} else {
@@ -232,8 +232,8 @@ func registerEvaluation(reg *mcp.Registry, d Deps) {
 				"mandatory_scenario_failed": comparison.MandatoryFailed,
 			}
 			if argBool(args, "persist", false) && d.Store != nil {
-				stamp := time.Now().UTC().Format("20060102-150405.000")
-				rel := filepath.ToSlash(filepath.Join("evals", "decisions", pathSegment(argString(args, "snapshot_sha")),
+				stamp := time.Now().UTC().Format("20060102-150405.000000000")
+				rel := filepath.ToSlash(filepath.Join("evals", "decisions", uniqueSegment(argString(args, "snapshot_sha")),
 					fmt.Sprintf("%s-%s.json", mode, stamp)))
 				if path, werr := writeRepoJSON(d.Cfg.Root(), rel, comparison); werr != nil {
 					data["persist_error"] = werr.Error()
@@ -382,7 +382,7 @@ func registerEvaluation(reg *mcp.Registry, d Deps) {
 				"rubric_version": evaluation.RubricVersion,
 			}
 			if argBool(args, "persist", true) && d.Store != nil {
-				stamp := time.Now().UTC().Format("20060102-150405.000")
+				stamp := time.Now().UTC().Format("20060102-150405.000000000")
 				rel := filepath.ToSlash(filepath.Join("evals", "rankings", "ranking-"+stamp+".json"))
 				if path, werr := writeRepoJSON(d.Cfg.Root(), rel, ranking); werr != nil {
 					data["persist_error"] = werr.Error()
@@ -574,6 +574,14 @@ func writeRepoJSON(root, rel string, value any) (string, error) {
 }
 
 var pathSegmentUnsafe = regexp.MustCompile(`[^A-Za-z0-9._-]+`)
+
+// uniqueSegment avoids collapsing every sha-less artifact onto "unknown".
+func uniqueSegment(value string) string {
+	if strings.TrimSpace(value) != "" {
+		return pathSegment(value)
+	}
+	return "unknown-" + time.Now().UTC().Format("20060102T150405.000000000")
+}
 
 func pathSegment(value string) string {
 	value = strings.TrimSpace(value)

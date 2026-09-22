@@ -64,6 +64,11 @@ func (s *Server) ServeStreams(ctx context.Context, in io.Reader, out io.Writer) 
 	if out == nil {
 		out = stdoutWriter()
 	}
+	// The reader goroutine blocks inside Read; closing a caller-provided
+	// Closer unblocks it when ServeStreams returns early.
+	if closer, ok := in.(io.Closer); ok {
+		defer closer.Close()
+	}
 	lines := make(chan []byte)
 	scanErr := make(chan error, 1)
 	go func() {

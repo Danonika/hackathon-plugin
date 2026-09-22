@@ -149,6 +149,18 @@ func (s *Store) ArtifactPath(name string, createParent bool) (string, error) {
 	return full, nil
 }
 
+// safeWriteFile refuses to follow a symlink at the final path component and
+// re-verifies containment immediately before the write.
+func (s *Store) safeWriteFile(full string, data []byte, perm os.FileMode) error {
+	if info, err := os.Lstat(full); err == nil && info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("refusing to write through a symlink: %s", full)
+	}
+	if err := s.ensureWithin(full); err != nil {
+		return err
+	}
+	return os.WriteFile(full, data, perm)
+}
+
 func (s *Store) WriteArtifact(rel string, data []byte) (string, error) {
 	clean, err := sanitize(rel)
 	if err != nil {
@@ -161,7 +173,7 @@ func (s *Store) WriteArtifact(rel string, data []byte) (string, error) {
 	if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
 		return "", err
 	}
-	if err := os.WriteFile(full, data, 0o644); err != nil {
+	if err := s.safeWriteFile(full, data, 0o644); err != nil {
 		return "", err
 	}
 	id := filepath.ToSlash(clean)

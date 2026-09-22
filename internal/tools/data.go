@@ -189,6 +189,11 @@ func profileColumns(t *table, selected []string) []columnProfile {
 	return out
 }
 
+const (
+	maxTableBytes = 64 << 20
+	maxTableRows  = 2_000_000
+)
+
 func (d Deps) loadTable(ctx context.Context, args map[string]any) (*table, []string, *mcp.Envelope) {
 	path := argString(args, "path")
 	if path == "" {
@@ -200,12 +205,45 @@ func (d Deps) loadTable(ctx context.Context, args map[string]any) (*table, []str
 		env := mcp.Fail(trace(ctx), err.Error())
 		return nil, nil, &env
 	}
+	if info, serr := os.Stat(full); serr == nil && info.Size() > maxTableBytes {
+		env := mcp.Fail(trace(ctx), fmt.Sprintf("table %s is %d bytes; exceeds the %d-byte limit", path, info.Size(), maxTableBytes))
+		return nil, nil, &env
+	}
 	t, warnings, err := readAnyTable(full, argString(args, "sheet"))
 	if err != nil {
 		env := mcp.Fail(trace(ctx), err.Error())
 		return nil, nil, &env
 	}
+	if len(t.Rows) > maxTableRows {
+		warnings = append(warnings, fmt.Sprintf("table has %d rows; only the first %d were loaded", len(t.Rows), maxTableRows))
+		t.Rows = t.Rows[:maxTableRows]
+	}
+	if err := ctx.Err(); err != nil {
+		env := mcp.Fail(trace(ctx), err.Error())
+		return nil, nil, &env
+	}
 	return t, warnings, nil
+}
+
+// uniqueHeaderKeys builds output keys that stay unique when headers collide
+// after trimming (e.g. "id" and "id ") or are blank.
+func uniqueHeaderKeys(headers []string) []string {
+	keys := make([]string, len(headers))
+	seen := map[string]int{}
+	for i, h := range headers {
+		base := strings.TrimSpace(h)
+		if base == "" {
+			base = fmt.Sprintf("column_%d", i)
+		}
+		if n, ok := seen[base]; ok {
+			seen[base] = n + 1
+			keys[i] = fmt.Sprintf("%s_%d", base, n+1)
+		} else {
+			seen[base] = 0
+			keys[i] = base
+		}
+	}
+	return keys
 }
 
 func registerData(reg *mcp.Registry, d Deps) {
@@ -292,6 +330,7 @@ func registerData(reg *mcp.Registry, d Deps) {
 				limit = 200
 			}
 			out := make([]map[string]string, 0, limit)
+			outKeys := uniqueHeaderKeys(t.Headers)
 			for i, row := range rows {
 				if i >= limit {
 					break
@@ -302,7 +341,7 @@ func registerData(reg *mcp.Registry, d Deps) {
 					if idx < len(row) {
 						value = row[idx]
 					}
-					record[strings.TrimSpace(t.Headers[idx])] = value
+					record[outKeys[idx]] = value
 				}
 				out = append(out, record)
 			}
@@ -354,7 +393,7 @@ func registerData(reg *mcp.Registry, d Deps) {
 			for i := 0; i < len(numeric); i++ {
 				for j := i + 1; j < len(numeric); j++ {
 					idxA, idxB := t.columnIndex(numeric[i]), t.columnIndex(numeric[j])
-					if idxA < 0 || idxB < 0 {
+					if idxA < 0 || idxB < 0 || idxA == idxB {
 						continue
 					}
 					var xs, ys []float64

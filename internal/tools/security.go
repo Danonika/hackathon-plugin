@@ -125,7 +125,19 @@ func securitySource(d Deps, args map[string]any) (string, string, error) {
 		}
 		data, err := readCapped(full, int64(securityScanLimit)+1)
 		if err != nil {
-			return "", "", err
+			if !os.IsNotExist(err) {
+				return "", "", err
+			}
+			// Not materialized locally: use the store read path (object-store
+			// fallback + rehydrate), capped to the scan limit.
+			raw, rerr := d.Store.ReadArtifact(artifact)
+			if rerr != nil {
+				return "", "", rerr
+			}
+			if len(raw) > securityScanLimit {
+				raw = raw[:securityScanLimit]
+			}
+			data = raw
 		}
 		return "artifact:" + artifact, string(data), nil
 	}

@@ -372,9 +372,8 @@ func (m *Manager) SetRoutingMode(mode string) (RoutingState, error) {
 		return RoutingState{}, fmt.Errorf("invalid routing mode %q: expected normal or fly", mode)
 	}
 	mode = normalized
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
+	// Read the current state before taking the lock so a slow/bind-mounted
+	// filesystem cannot serialize every config access behind this write.
 	current := RoutingState{Mode: "normal", Version: 1}
 	if data, err := os.ReadFile(m.RoutingPath()); err == nil {
 		var doc routingDoc
@@ -384,6 +383,12 @@ func (m *Manager) SetRoutingMode(mode string) (RoutingState, error) {
 				current.Mode = normalized
 			}
 		}
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.routingInit && m.routingCache.Version > current.Version {
+		current.Version = m.routingCache.Version
 	}
 	next := RoutingState{Mode: mode, Version: current.Version + 1}
 	data, err := yaml.Marshal(routingDoc{Routing: next})

@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -51,6 +52,10 @@ func registerFiles(reg *mcp.Registry, d Deps) {
 			warnings := []string{}
 			switch ext {
 			case "csv", "tsv":
+				if st.Size() > maxTextInspectBytes {
+					warnings = append(warnings, fmt.Sprintf("table is %d bytes; skipping full parse (limit %d)", st.Size(), maxTextInspectBytes))
+					break
+				}
 				t, warns, terr := readAnyTable(full, "")
 				warnings = append(warnings, warns...)
 				if terr != nil {
@@ -68,6 +73,10 @@ func registerFiles(reg *mcp.Registry, d Deps) {
 					data["has_timestamp"] = hasTS
 				}
 			case "xlsx":
+				if st.Size() > maxTextInspectBytes {
+					warnings = append(warnings, fmt.Sprintf("workbook is %d bytes; skipping full parse (limit %d)", st.Size(), maxTextInspectBytes))
+					break
+				}
 				sheets, warns, terr := readXLSXSheets(full)
 				warnings = append(warnings, warns...)
 				if terr != nil {
