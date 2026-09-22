@@ -81,6 +81,8 @@ function findRepoUp(start) {
 // then the working directory tree, then the in-repo plugin location. A cached
 // plugin install (PLUGIN_ROOT under ~/.codex/plugins/cache) must never win over
 // the actual project.
+let ROOT_VALIDATED = false;
+
 function repoRoot() {
   const candidates = [];
   if (process.env.HACKATHONKIT_REPO_ROOT) {
@@ -96,11 +98,15 @@ function repoRoot() {
     if (isHackathonKitRepo(pluginRoot)) candidates.push(pluginRoot);
   }
   for (const candidate of candidates) {
-    if (looksLikeRepo(candidate)) return candidate;
+    if (looksLikeRepo(candidate)) {
+      ROOT_VALIDATED = true;
+      return candidate;
+    }
   }
   // Prefer the repository this hook script lives in over an unrelated cwd.
   const selfRoot = path.resolve(__dirname, "..", "..", "..");
   if (isHackathonKitRepo(selfRoot)) {
+    ROOT_VALIDATED = true;
     return selfRoot;
   }
   // Never fall back to an unvalidated plugin-cache path.
@@ -108,12 +114,16 @@ function repoRoot() {
 }
 
 const ROOT = repoRoot();
+// Only a validated repository root may receive session state; an untrusted cwd
+// must not be written to.
+const ROOT_VALID = ROOT_VALIDATED;
 const CONTROL_DIR = path.join(ROOT, "data", "control");
 const SESSIONS_DIR = path.join(CONTROL_DIR, "sessions");
 const SESSIONS_LOG = path.join(ROOT, "logs", "sessions.jsonl");
 const EVENTS_LOG = path.join(ROOT, "logs", "session-events.jsonl");
 
 function appendJSONL(file, record) {
+  if (!ROOT_VALID) return;
   try {
     fs.mkdirSync(path.dirname(file), { recursive: true });
     fs.appendFileSync(file, JSON.stringify(record) + "\n");
@@ -194,6 +204,7 @@ function sessionFile(id) {
 }
 
 function writeActive(entry) {
+  if (!ROOT_VALID) return;
   try {
     fs.mkdirSync(SESSIONS_DIR, { recursive: true });
     fs.writeFileSync(sessionFile(entry.id), JSON.stringify(entry) + "\n");
@@ -272,6 +283,7 @@ function fallbackContext() {
 }
 
 function binaryContext() {
+  if (!ROOT_VALID) return "";
   const names =
     process.platform === "win32"
       ? ["hackathonkit-mcp.exe", "hackathonkit-mcp"]

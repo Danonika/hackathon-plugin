@@ -51,7 +51,8 @@ redact_logs() {
   if sed -E 's/a/b/' </dev/null >/dev/null 2>&1; then
     sed -E -e 's#://[^/@ ]+@#://***@#g' -e 's/([A-Za-z_]*(PASSWORD|PASS|TOKEN|SECRET|DSN|KEY)[A-Za-z_]*)([=: ]+)[^ "]+/\1\3[redacted]/g'
   else
-    cat
+    # Fail closed: never print unredacted container logs.
+    printf '[docker-check] sed -E unavailable; container logs withheld to avoid leaking credentials\n'
   fi
 }
 

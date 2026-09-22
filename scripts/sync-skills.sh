@@ -43,15 +43,41 @@ fi
 
 # Serialize concurrent mirror runs so two writers cannot interleave the swap.
 LOCK="$DST.lock"
+LOCKED=0
+# Reclaim a lock left by a crashed run (its holder is gone).
+if [ -d "$LOCK" ]; then
+  HOLDER=$(cat "$LOCK/pid" 2>/dev/null || true)
+  if [ -n "$HOLDER" ] && ! kill -0 "$HOLDER" 2>/dev/null; then
+    rm -rf "$LOCK"
+  fi
+fi
 for _ in 1 2 3 4 5 6 7 8 9 10; do
   if mkdir "$LOCK" 2>/dev/null; then
+    printf '%s' "$$" > "$LOCK/pid" 2>/dev/null || true
+    LOCKED=1
     break
   fi
-  sleep 0.2
+  sleep 1
 done
-trap 'rm -rf "$LOCK"' EXIT INT TERM
+if [ "$LOCKED" != "1" ]; then
+  echo "[sync-skills] another run holds $LOCK; aborting" >&2
+  exit 1
+fi
 
 OLD="$DST.old.$$"
+finish() {
+  if [ -d "$OLD" ] && [ ! -d "$DST" ]; then
+    mv "$OLD" "$DST" 2>/dev/null || true
+  fi
+  rm -rf "$OLD" "$TMP"
+  if [ "$LOCKED" = "1" ]; then
+    rm -rf "$LOCK"
+  fi
+}
+on_signal() { finish; exit 130; }
+trap finish EXIT
+trap on_signal INT TERM
+
 if [ -d "$DST" ]; then
   mv "$DST" "$OLD"
 fi
@@ -60,5 +86,7 @@ if ! mv "$TMP" "$DST"; then
   exit 1
 fi
 rm -rf "$OLD"
+LOCKED=0
+rm -rf "$LOCK"
 trap - EXIT INT TERM
 echo "[sync-skills] mirrored $COUNT_DST of $COUNT_SRC skills to .agents/skills"

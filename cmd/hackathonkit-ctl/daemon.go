@@ -147,14 +147,17 @@ func daemonForeground(root string) error {
 		}
 	}()
 
+	var ingestWG sync.WaitGroup
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	// Registered before stop() so that, with LIFO defers, stop() cancels the
+	// context first and the ingest goroutine can exit before we wait.
+	defer ingestWG.Wait()
 	defer stop()
 
 	// Initial ingest, then periodic replay.
 	if _, err := store.Ingest(ctx, root); err != nil {
 		fmt.Fprintln(os.Stderr, "ingest:", err)
 	}
-	var ingestWG sync.WaitGroup
 	ingestWG.Add(1)
 	go func() {
 		defer ingestWG.Done()
@@ -171,8 +174,6 @@ func daemonForeground(root string) error {
 			}
 		}
 	}()
-	// Wait for the ticker goroutine before the deferred store.Close() runs.
-	defer ingestWG.Wait()
 
 	port := os.Getenv("HACKATHONKIT_CONTROL_PORT")
 	if port == "" {

@@ -40,8 +40,10 @@ read_secret() {
 }
 
 # set_key feeds the value through stdin so it never appears in process argv.
+# Returns non-zero when no value was supplied, so the caller can avoid
+# claiming a resource whose key was not stored.
 set_key() {
-  [ -n "$2" ] || return 0
+  [ -n "$2" ] || return 1
   printf '%s' "$2" | sh "$ROOT/scripts/env-set.sh" "$ROOT/.env" "$1"
 }
 
@@ -75,6 +77,27 @@ case "$TRACK" in
     ;;
 esac
 
+# Collect secrets first and only claim a provider when its key was stored.
+if [ "$OPENAI" = 1 ] && ! set_key OPENAI_API_KEY "$(read_secret 'OPENAI_API_KEY (empty to skip)')"; then
+  OPENAI=0
+fi
+if [ "$NVIDIA" = 1 ] && ! set_key NVIDIA_API_KEY "$(read_secret 'NVIDIA_API_KEY (empty to skip)')"; then
+  NVIDIA=0
+fi
+if [ "$TELEGRAM" = 1 ]; then
+  if ! set_key TELEGRAM_BOT_TOKEN "$(read_secret 'TELEGRAM_BOT_TOKEN (empty to skip)')"; then
+    TELEGRAM=0
+  else
+    set_key TELEGRAM_CHAT_ID "$(read_secret 'TELEGRAM_CHAT_ID (empty to skip)')" || true
+  fi
+fi
+if [ "$POSTGRES" = 1 ] && ! set_key POSTGRES_DSN "$(read_secret 'POSTGRES_DSN (empty to skip)')"; then
+  POSTGRES=0
+fi
+if [ "$MINIO" = 1 ] && ! set_key MINIO_ENDPOINT "$(read_secret 'MINIO_ENDPOINT (empty to skip)')"; then
+  MINIO=0
+fi
+
 SPEC="openai_api=$([ "$OPENAI" = 1 ] && echo true || echo false)"
 SPEC="$SPEC,nvidia_api=$([ "$NVIDIA" = 1 ] && echo true || echo false)"
 SPEC="$SPEC,telegram=$([ "$TELEGRAM" = 1 ] && echo true || echo false)"
@@ -83,21 +106,6 @@ SPEC="$SPEC,minio=$([ "$MINIO" = 1 ] && echo true || echo false)"
 SPEC="$SPEC,codex_pro=$([ "$CODEX_PRO" = 1 ] && echo true || echo false)"
 if [ -n "$TRACK" ]; then
   SPEC="$SPEC,track=$TRACK"
-fi
-
-# Collect secrets first: the profile must not claim a resource before its key
-# is actually stored.
-if [ "$OPENAI" = 1 ]; then set_key OPENAI_API_KEY "$(read_secret 'OPENAI_API_KEY (empty to skip)')"; else set_key OPENAI_API_KEY ""; fi
-if [ "$NVIDIA" = 1 ]; then set_key NVIDIA_API_KEY "$(read_secret 'NVIDIA_API_KEY (empty to skip)')"; fi
-if [ "$TELEGRAM" = 1 ]; then
-  set_key TELEGRAM_BOT_TOKEN "$(read_secret 'TELEGRAM_BOT_TOKEN (empty to skip)')"
-  set_key TELEGRAM_CHAT_ID "$(read_secret 'TELEGRAM_CHAT_ID (empty to skip)')"
-fi
-if [ "$POSTGRES" = 1 ]; then set_key POSTGRES_DSN "$(read_secret 'POSTGRES_DSN (empty to skip)')"; fi
-if [ "$MINIO" = 1 ]; then
-  set_key MINIO_ENDPOINT "$(read_secret 'MINIO_ENDPOINT (empty to skip)')"
-  set_key MINIO_ACCESS_KEY "$(read_secret 'MINIO_ACCESS_KEY (empty to skip)')"
-  set_key MINIO_SECRET_KEY "$(read_secret 'MINIO_SECRET_KEY (empty to skip)')"
 fi
 
 mcp --resources-set "$SPEC" >/dev/null

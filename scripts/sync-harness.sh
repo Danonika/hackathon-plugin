@@ -17,9 +17,16 @@ fi
 # failed copy cannot leave the mirror missing or partial.
 CLAUDE_DST="$ROOT/.claude/skills"
 CLAUDE_TMP="$CLAUDE_DST.tmp.$$"
-cleanup_tmp() { rm -rf "$CLAUDE_TMP"; }
-on_signal() { cleanup_tmp; exit 130; }
-trap cleanup_tmp EXIT
+CLAUDE_OLD=""
+finish_harness() {
+  rm -rf "$CLAUDE_TMP"
+  if [ -n "$CLAUDE_OLD" ] && [ -d "$CLAUDE_OLD" ] && [ ! -d "$CLAUDE_DST" ]; then
+    mv "$CLAUDE_OLD" "$CLAUDE_DST" 2>/dev/null || true
+  fi
+  rm -rf "$CLAUDE_OLD"
+}
+on_signal() { finish_harness; exit 130; }
+trap finish_harness EXIT
 trap on_signal INT TERM
 rm -rf "$CLAUDE_TMP"
 mkdir -p "$CLAUDE_TMP"

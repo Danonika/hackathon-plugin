@@ -157,7 +157,7 @@ func FreezeBundle(opts BundleOptions) (Bundle, error) {
 		if walkErr != nil {
 			return walkErr
 		}
-		rel, relErr := filepath.Rel(root, path)
+		rel, relErr := filepath.Rel(rootResolved, path)
 		if relErr != nil {
 			return relErr
 		}

@@ -25,14 +25,27 @@ try {
   Get-ChildItem -LiteralPath $src -Force |
     Where-Object { -not ($_.Attributes -band [System.IO.FileAttributes]::ReparsePoint) } |
     Copy-Item -Destination $tmp -Recurse -Force
-  $srcCount = (Get-ChildItem -LiteralPath $src -Directory).Count
-  $count = (Get-ChildItem -LiteralPath $tmp -Directory).Count
-  if ($count -ne $srcCount) {
-    Write-Error "[sync-skills] skill count mismatch: $srcCount source, $count copied"
+  $srcNames = @(Get-ChildItem -LiteralPath $src -Directory -Force |
+    Where-Object { -not ($_.Attributes -band [System.IO.FileAttributes]::ReparsePoint) } |
+    Select-Object -ExpandProperty Name | Sort-Object)
+  $dstNames = @(Get-ChildItem -LiteralPath $tmp -Directory -Force |
+    Select-Object -ExpandProperty Name | Sort-Object)
+  if (Compare-Object -ReferenceObject $srcNames -DifferenceObject $dstNames) {
+    Write-Error "[sync-skills] mirror mismatch: source $($srcNames.Count), copied $($dstNames.Count)"
     exit 1
   }
-  if (Test-Path -LiteralPath $dst) { Remove-Item -LiteralPath $dst -Recurse -Force }
-  Move-Item -LiteralPath $tmp -Destination $dst -Force
+  $count = $dstNames.Count
+  $srcCount = $srcNames.Count
+  # Move the live mirror aside before the swap so a failure can restore it.
+  $old = "$dst.old.$PID"
+  if (Test-Path -LiteralPath $dst) { Move-Item -LiteralPath $dst -Destination $old -Force }
+  try {
+    Move-Item -LiteralPath $tmp -Destination $dst -Force
+  } catch {
+    if (Test-Path -LiteralPath $old) { Move-Item -LiteralPath $old -Destination $dst -Force }
+    throw
+  }
+  if (Test-Path -LiteralPath $old) { Remove-Item -LiteralPath $old -Recurse -Force }
 } finally {
   if (Test-Path -LiteralPath $tmp) { Remove-Item -LiteralPath $tmp -Recurse -Force -ErrorAction SilentlyContinue }
 }

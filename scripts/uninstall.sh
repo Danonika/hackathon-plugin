@@ -28,6 +28,22 @@ for arg in "$@"; do
   esac
 done
 
+# Shared skill mirrors: remove only the skills this plugin ships so
+# user-authored skills survive.
+for rel in .agents/skills .claude/skills; do
+  mirror="$ROOT/$rel"
+  [ -d "$mirror" ] || continue
+  for skill in "$ROOT/plugins/hackathonkit/skills"/*/; do
+    [ -d "$skill" ] || continue
+    name=$(basename "$skill")
+    if [ "$APPLY" = "1" ]; then
+      rm -rf "$mirror/$name" 2>/dev/null || FAILURES=$((FAILURES + 1))
+    else
+      echo "would remove: $rel/$name"
+    fi
+  done
+done
+
 CODEX_FAIL=0
 if ! command -v codex >/dev/null 2>&1; then
   echo "[uninstall] codex CLI not found; skipping plugin/marketplace removal"
@@ -52,8 +68,6 @@ fi
 FAILURES=0
 for rel in \
   plugins/hackathonkit/.mcp.json \
-  .agents/skills \
-  .claude/skills \
   configs/install-state.json \
   data/control \
   bin

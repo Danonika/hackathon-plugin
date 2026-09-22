@@ -231,7 +231,14 @@ async function poll() {
       const fb = feedback.events[feedback.events.length - 1];
       const fbKey = fb.ts || (fb.task + '|' + fb.source);
       const neuronFb = (neurons.events || []).filter(e => e.type === 'feedback').pop();
-      if (fbKey !== state.lastFeedbackKey) { state.lastFeedbackKey = fbKey; applyNeuronEvent({ type: 'feedback', reward: fb.source === 'accepted' || fb.source === 'normal-teacher', pam: neuronFb?.pam ?? 0, ppl1: neuronFb?.ppl1 ?? 0, source: fb.source, ts: fb.ts, active_kc: lastNeuron?.active_kc || [] }); }
+      // Only synthesize when the newest neuron record was not itself the
+      // feedback event (otherwise applyNeuronEvent already ran for it).
+      const newestIsFeedback = lastNeuron && lastNeuron.type === 'feedback';
+      if (!newestIsFeedback && fbKey !== state.lastFeedbackKey) {
+        const recommendNeuron = (neurons.events || []).filter(e => e.type === 'recommend').pop();
+        state.lastFeedbackKey = fbKey;
+        applyNeuronEvent({ type: 'feedback', reward: fb.source === 'accepted' || fb.source === 'normal-teacher', pam: neuronFb?.pam ?? 0, ppl1: neuronFb?.ppl1 ?? 0, source: fb.source, ts: fb.ts, active_kc: recommendNeuron?.active_kc || [] });
+      }
     }
     if ((events.events || []).length) {
       const ev = events.events[events.events.length - 1];

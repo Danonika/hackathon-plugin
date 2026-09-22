@@ -58,8 +58,8 @@ if command -v codex >/dev/null 2>&1; then
   if ! codex plugin marketplace add "$ROOT" >/dev/null 2>&1; then
     echo "[repair] warning: codex plugin marketplace add failed" >&2
   fi
-  if codex plugin add hackathonkit@hackathonkit-local >/dev/null 2>&1; then
-    echo "[repair] plugin reinstalled; start a NEW Codex session"
+  if codex plugin add hackathonkit@hackathonkit-local >/dev/null 2>&1 || codex plugin list 2>/dev/null | grep -q hackathonkit; then
+    echo "[repair] plugin present; start a NEW Codex session"
   else
     echo "[repair] warning: could not reinstall the plugin automatically" >&2
     exit 1

@@ -124,10 +124,18 @@ func buildEnv() []string {
 		}
 		base = append(base, kv)
 	}
-	if !strings.Contains(existing, "-buildvcs") {
-		existing = strings.TrimSpace(existing + " -buildvcs=false")
+	// Drop any inherited -buildvcs=... (including an explicit =true) so the
+	// container/root workaround cannot be defeated by the environment.
+	fields := strings.Fields(existing)
+	kept := fields[:0]
+	for _, field := range fields {
+		if strings.HasPrefix(field, "-buildvcs=") {
+			continue
+		}
+		kept = append(kept, field)
 	}
-	return append(base, "GOFLAGS="+existing)
+	merged := strings.Join(append(kept, "-buildvcs=false"), " ")
+	return append(base, "GOFLAGS="+merged)
 }
 
 // cappedBuffer keeps at most maxCheckOutput bytes so a chatty test run cannot
@@ -139,13 +147,17 @@ type cappedBuffer struct {
 }
 
 func (c *cappedBuffer) Write(p []byte) (int, error) {
+	written := len(p)
 	if remaining := maxCheckOutput - c.buf.Len(); remaining > 0 {
-		if len(p) > remaining {
-			p = p[:remaining]
+		chunk := p
+		if len(chunk) > remaining {
+			chunk = chunk[:remaining]
 		}
-		_, _ = c.buf.Write(p)
+		_, _ = c.buf.Write(chunk)
 	}
-	return len(p), nil
+	// Report the full input as written: a short count would look like an I/O
+	// error to the child process.
+	return written, nil
 }
 
 func (c *cappedBuffer) String() string { return c.buf.String() }

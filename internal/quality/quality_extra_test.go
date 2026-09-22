@@ -263,7 +263,7 @@ func TestBuildEnvDisablesVCSStamping(t *testing.T) {
 			flags = strings.TrimPrefix(kv, "GOFLAGS=")
 		}
 	}
-	if flags != "-buildvcs=true" {
-		t.Fatalf("explicit GOFLAGS must be preserved, got %q", flags)
+	if flags != "-buildvcs=false" {
+		t.Fatalf("an explicit -buildvcs=true must be overridden, got %q", flags)
 	}
 }

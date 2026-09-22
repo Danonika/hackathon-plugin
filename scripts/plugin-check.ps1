@@ -58,13 +58,22 @@ $stderrPath = Join-Path $temp "stderr.txt"
 $out = @()
 $exitCode = 0
 try {
-  Push-Location $temp
-  try {
-    $out = @($requests | & $cmd @argList 2>$stderrPath)
-    $exitCode = $LASTEXITCODE
-  } finally {
-    Pop-Location
+  # Run in a job so a hung server cannot block the check forever.
+  $job = Start-Job -ScriptBlock {
+    param($exe, $exeArgs, $payload, $workDir, $errPath)
+    Set-Location -LiteralPath $workDir
+    $payload | & $exe @exeArgs 2>$errPath
+  } -ArgumentList $cmd, $argList, $requests, $temp, $stderrPath
+  if (-not (Wait-Job $job -Timeout 120)) {
+    Stop-Job $job -ErrorAction SilentlyContinue
+    Remove-Job $job -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $temp -Recurse -Force -ErrorAction SilentlyContinue
+    Write-Host "[plugin-check] FAIL: MCP command timed out after 120s"
+    exit 1
   }
+  $out = @(Receive-Job $job)
+  if ($job.State -ne "Completed") { $exitCode = 1 }
+  Remove-Job $job -Force -ErrorAction SilentlyContinue
 } finally {
   $stderrText = ""
   if (Test-Path -LiteralPath $stderrPath) {

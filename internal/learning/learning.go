@@ -321,6 +321,12 @@ func (s *Store) Promote(id string, minObservations int, minConfidence float64) (
 		minObservations = 1
 	}
 
+	unlock, err := s.lockFile()
+	if err != nil {
+		return Learning{}, false, err
+	}
+	defer unlock()
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 

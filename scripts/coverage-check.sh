@@ -10,6 +10,10 @@ case "$TARGET" in
     exit 2
     ;;
 esac
+case "$TARGET" in
+  *[0-9]*) ;;
+  *) echo "[coverage] HACKATHONKIT_COVERAGE_TARGET must contain a digit, got '$TARGET'" >&2; exit 2 ;;
+esac
 if [ "$(printf '%s' "$TARGET" | tr -cd '.' | wc -c | tr -d ' ')" -gt 1 ]; then
   echo "[coverage] HACKATHONKIT_COVERAGE_TARGET must have at most one dot, got '$TARGET'" >&2
   exit 2

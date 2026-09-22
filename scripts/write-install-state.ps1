@@ -46,6 +46,13 @@ $state = [ordered]@{
   }
   generated_at = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
 }
-$out = Join-Path $Root "configs\install-state.json"
-$state | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $out -Encoding UTF8
+$configsDir = Join-Path $Root "configs"
+New-Item -ItemType Directory -Force -Path $configsDir | Out-Null
+$out = Join-Path $configsDir "install-state.json"
+try {
+  $state | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $out -Encoding UTF8 -ErrorAction Stop
+} catch {
+  Write-Error "[install-state] cannot write ${out}: $($_.Exception.Message)"
+  exit 1
+}
 Write-Host "[install-state] wrote configs/install-state.json (version $Version, profile $Profile, runtime $Runtime)"

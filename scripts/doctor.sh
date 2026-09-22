@@ -38,6 +38,8 @@ try:
     data = json.load(sys.stdin)
 except Exception:
     sys.exit(0)
+if not isinstance(data, dict):
+    sys.exit(0)
 state = ""
 for entry in data.get("installed", []):
     if entry.get("name") == "hackathonkit":
@@ -53,8 +55,8 @@ print(state)
         n = split(text, parts, "{")
         for (i = 1; i <= n; i++) {
           if (parts[i] ~ /"name"[ \t]*:[ \t]*"hackathonkit"/) {
-            if (parts[i] ~ /"enabled"[ \t]*:[ \t]*true/) { print "enabled"; exit }
-            found = 1
+            if (parts[i] ~ /"enabled"[ \t]*:[ \t]*false/) { print "disabled"; exit }
+            print "enabled"; exit
           }
         }
         if (found) print "enabled"
@@ -113,8 +115,8 @@ if [ -d "$ROOT/.agents/skills" ]; then
   DST_COUNT=$(find "$ROOT/.agents/skills" -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')
   DST_SKILLS=$(find "$ROOT/.agents/skills" -name SKILL.md | wc -l | tr -d ' ')
 fi
-SRC_NAMES=$(cd "$ROOT/plugins/hackathonkit/skills" 2>/dev/null && ls -1d */ 2>/dev/null | sed 's#/##' | sort)
-DST_NAMES=$(cd "$ROOT/.agents/skills" 2>/dev/null && ls -1d */ 2>/dev/null | sed 's#/##' | sort)
+SRC_NAMES=$(cd "$ROOT/plugins/hackathonkit/skills" 2>/dev/null && ls -1d */ 2>/dev/null | sed 's#/##' | sort) || true
+DST_NAMES=$(cd "$ROOT/.agents/skills" 2>/dev/null && ls -1d */ 2>/dev/null | sed 's#/##' | sort) || true
 if [ "$SRC_COUNT" -gt 0 ] && [ "$SRC_NAMES" = "$DST_NAMES" ] && [ "$SRC_SKILLS" = "$DST_SKILLS" ]; then
   check "skills mirror" 1 "plugin=$SRC_COUNT/$SRC_SKILLS fallback=$DST_COUNT/$DST_SKILLS"
 else

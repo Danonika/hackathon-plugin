@@ -214,6 +214,9 @@ func manifestContextItems(root string) []contextItem {
 			Lines:  strings.Count(string(data), "\n") + 1,
 			Tokens: estimateTokens(int(info.Size())),
 		}
+		if item.Tokens > manifestTokenWarn {
+			item.Flag = fmt.Sprintf("manifest > %d tokens", manifestTokenWarn)
+		}
 		total += item.Tokens
 		items = append(items, item)
 	}

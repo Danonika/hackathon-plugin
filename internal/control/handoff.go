@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"hackathonkit.local/agentkit/internal/learning"
 	"hackathonkit.local/agentkit/internal/plans"
@@ -51,16 +52,30 @@ func BuildHandoff(ctx context.Context, store *Store, learn *learning.Store, root
 		return handoff, fmt.Errorf("session %s outputs: %w", sessionID, err)
 	}
 	handoff.Outputs = outputs
-	// Count decisions from a wider window than the 10 shown, so older pending
-	// decisions are not silently invisible.
-	if decisionEvents, derr := store.Events(ctx, sessionID, 500); derr == nil {
-		for _, ev := range decisionEvents {
+	// eval_decision events carry no session id (they come from decision
+	// files), so they must be counted from the global window.
+	end := time.Now().UTC()
+	if session.EndedAt != nil && session.EndedAt.Before(end) {
+		end = *session.EndedAt
+	}
+	if globalEvents, derr := store.EventsBetween(ctx, session.CreatedAt, end, 10000); derr == nil {
+		for _, ev := range globalEvents {
 			if ev.Type == "eval_decision" {
 				handoff.PendingDecisions++
 			}
 		}
 	} else {
 		handoff.Notes = append(handoff.Notes, "decision history unreadable: "+derr.Error())
+	}
+	// Older records may still carry a session id; count those too.
+	if scopedEvents, derr := store.Events(ctx, sessionID, 10000); derr == nil {
+		for _, ev := range scopedEvents {
+			if ev.Type == "eval_decision" {
+				handoff.PendingDecisions++
+			}
+		}
+	} else {
+		handoff.Notes = append(handoff.Notes, "scoped decision history unreadable: "+derr.Error())
 	}
 	return handoff, nil
 }

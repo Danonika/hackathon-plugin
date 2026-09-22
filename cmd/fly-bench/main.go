@@ -143,6 +143,16 @@ func run(args []string, stdout, stderr io.Writer) int {
 		results = append(results, result)
 	}
 
+	engaged := 0
+	for _, r := range results {
+		if r.FlyTop1 != "" {
+			engaged++
+		}
+	}
+	if engaged == 0 {
+		fmt.Fprintln(stderr, "error: the Fly pipeline produced no recommendations; refusing to publish A/B evidence")
+		return 1
+	}
 	rep := report{
 		SHA:         quality.GitSHA(root),
 		GeneratedAt: time.Now().UTC(),

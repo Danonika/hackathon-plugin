@@ -688,37 +688,31 @@ func ApplyCommission(ranking Ranking, commission Commission) (Ranking, error) {
 	for _, sha := range ranking.Unresolved {
 		unresolvedSet[sha] = true
 	}
-	group := map[string]RankEntry{}
-	for _, entry := range ranking.Entries {
-		if unresolvedSet[entry.SnapshotSHA] {
-			group[entry.SnapshotSHA] = entry
-		}
-	}
-	ordered := append([]string{}, ranking.Unresolved...)
-	sort.SliceStable(ordered, func(i, j int) bool {
-		if commission.Votes[ordered[i]] != commission.Votes[ordered[j]] {
-			return commission.Votes[ordered[i]] > commission.Votes[ordered[j]]
-		}
-		return ordered[i] < ordered[j]
-	})
-	// Replace the contiguous tie group in place so the commission result keeps
-	// the original rank position (the tie is not necessarily last).
+	// Resolve each contiguous tie group in place: entries are score-sorted, so
+	// distinct tie groups at different score levels are handled separately.
 	rest := make([]RankEntry, 0, len(ranking.Entries))
-	inserted := false
-	for _, entry := range ranking.Entries {
-		if !unresolvedSet[entry.SnapshotSHA] {
+	for i := 0; i < len(ranking.Entries); {
+		if !unresolvedSet[ranking.Entries[i].SnapshotSHA] {
+			rest = append(rest, ranking.Entries[i])
+			i++
+			continue
+		}
+		run := []RankEntry{}
+		for i < len(ranking.Entries) && unresolvedSet[ranking.Entries[i].SnapshotSHA] {
+			run = append(run, ranking.Entries[i])
+			i++
+		}
+		sort.SliceStable(run, func(a, b int) bool {
+			votesA, votesB := commission.Votes[run[a].SnapshotSHA], commission.Votes[run[b].SnapshotSHA]
+			if votesA != votesB {
+				return votesA > votesB
+			}
+			return run[a].SnapshotSHA < run[b].SnapshotSHA
+		})
+		for _, entry := range run {
+			entry.TieBreak = "commission"
 			rest = append(rest, entry)
-			continue
 		}
-		if inserted {
-			continue
-		}
-		for _, sha := range ordered {
-			resolved := group[sha]
-			resolved.TieBreak = "commission"
-			rest = append(rest, resolved)
-		}
-		inserted = true
 	}
 	for i := range rest {
 		rest[i].Rank = i + 1

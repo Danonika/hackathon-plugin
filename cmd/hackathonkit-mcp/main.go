@@ -31,7 +31,7 @@ import (
 	"hackathonkit.local/agentkit/internal/tools"
 )
 
-const version = "0.16.13"
+const version = "0.16.14"
 
 // redactBackendError strips credentials from driver/connection errors before
 // they are logged (DSNs can appear in Postgres and MinIO errors).
@@ -41,16 +41,20 @@ func redactBackendError(err error) string {
 	}
 	text := err.Error()
 	for _, marker := range []string{"password=", "passwd=", "secret=", "token="} {
+		searchFrom := 0
 		for {
-			idx := strings.Index(strings.ToLower(text), marker)
+			idx := strings.Index(strings.ToLower(text[searchFrom:]), marker)
 			if idx < 0 {
 				break
 			}
+			idx += searchFrom
 			end := idx + len(marker)
 			for end < len(text) && text[end] != ' ' && text[end] != '&' && text[end] != ';' && text[end] != '\n' {
 				end++
 			}
 			text = text[:idx+len(marker)] + "[redacted]" + text[end:]
+			// Continue past the replacement so the marker is not matched again.
+			searchFrom = idx + len(marker) + len("[redacted]")
 		}
 	}
 	return text

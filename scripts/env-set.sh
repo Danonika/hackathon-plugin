@@ -72,13 +72,34 @@ fi
 # The key is matched literally (no regex) and the value travels through the
 # environment, so backslashes and other escape sequences survive unchanged.
 LOCK="$FILE.lock"
+LOCKED=0
+if [ -d "$LOCK" ]; then
+  HOLDER=$(cat "$LOCK/pid" 2>/dev/null || true)
+  if [ -n "$HOLDER" ] && ! kill -0 "$HOLDER" 2>/dev/null; then
+    rm -rf "$LOCK"
+  fi
+fi
 for _ in 1 2 3 4 5 6 7 8 9 10; do
   if mkdir "$LOCK" 2>/dev/null; then
+    printf '%s' "$$" > "$LOCK/pid" 2>/dev/null || true
+    LOCKED=1
     break
   fi
-  sleep 0.1
+  sleep 1
 done
-trap 'rm -rf "$LOCK"' EXIT INT TERM
+if [ "$LOCKED" != "1" ]; then
+  echo "env-set: another writer holds $LOCK; aborting" >&2
+  exit 1
+fi
+cleanup_env_set() {
+  rm -f "$TMP"
+  if [ "$LOCKED" = "1" ]; then
+    rm -rf "$LOCK"
+  fi
+}
+on_signal_env_set() { cleanup_env_set; exit 130; }
+trap cleanup_env_set EXIT
+trap on_signal_env_set INT TERM
 
 (umask 077 && KEY="$KEY" VALUE="$VALUE" awk '
   BEGIN { k = ENVIRON["KEY"]; v = ENVIRON["VALUE"]; done = 0 }

@@ -188,14 +188,21 @@ func (m tuiModel) View() string {
 		left.WriteString("  " + line + "\n")
 	}
 
+	// Negative limits would panic in truncate on very narrow terminals.
+	rightLimit := func(n int) int {
+		if n < 1 {
+			return 1
+		}
+		return n
+	}
 	var right strings.Builder
 	selected := m.sessions[m.selected]
 	right.WriteString(dimStyle.Render("SESSION "+selected.ID) + "\n")
 	if selected.Task != "" {
-		right.WriteString("task: " + truncate(selected.Task, rightWidth-6) + "\n")
+		right.WriteString("task: " + truncate(selected.Task, rightLimit(rightWidth-6)) + "\n")
 	}
 	if selected.Worktree != "" {
-		right.WriteString(dimStyle.Render("worktree: "+truncate(selected.Worktree, rightWidth-10)) + "\n")
+		right.WriteString(dimStyle.Render("worktree: "+truncate(selected.Worktree, rightLimit(rightWidth-10))) + "\n")
 	}
 	right.WriteString("risk: " + riskStyle(selected.RiskScore).Render(fmt.Sprintf("%.1f", selected.RiskScore)))
 	if len(selected.RiskReasons) > 0 {
@@ -220,7 +227,7 @@ func (m tuiModel) View() string {
 		} else if ev.Status != "" {
 			style = okStyle
 		}
-		right.WriteString(style.Render(fmt.Sprintf("%s %s", ev.TS.Format("15:04:05"), truncate(label, rightWidth-10))) + "\n")
+		right.WriteString(style.Render(fmt.Sprintf("%s %s", ev.TS.Format("15:04:05"), truncate(label, rightLimit(rightWidth-10)))) + "\n")
 	}
 
 	body := lipgloss.NewStyle().Width(leftWidth).Render(left.String())
