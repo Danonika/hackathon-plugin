@@ -1,6 +1,8 @@
 [mcp_servers.hackathonkit]
-# POSIX fallback launcher (Linux/macOS).
-# On Windows, use: command = "./plugins/hackathonkit/scripts/hackathonkit-mcp-launcher.cmd"
+# POSIX launcher (Linux/macOS). Codex cannot execute a .sh on Windows: replace
+# `command` below with "./plugins/hackathonkit/scripts/hackathonkit-mcp-launcher.cmd",
+# or run scripts/setup.ps1, which generates plugins/hackathonkit/.mcp.json with the
+# .cmd launcher for Windows.
 command = "./plugins/hackathonkit/scripts/hackathonkit-mcp-launcher.sh"
 args = []
 startup_timeout_sec = 60

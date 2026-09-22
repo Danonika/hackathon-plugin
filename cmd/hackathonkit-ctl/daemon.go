@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -252,12 +253,28 @@ func controlHandler(store *control.Store, token string) http.Handler {
 		writeControlJSON(w, http.StatusOK, map[string]any{"sessions": sessions})
 	})
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if token != "" && r.Header.Get("X-HackathonKit-Token") != token {
-			writeControlJSON(w, http.StatusUnauthorized, map[string]any{"error": "missing or invalid X-HackathonKit-Token"})
+		if token != "" {
+			// Constant-time comparison so the token cannot be probed by timing.
+			if subtle.ConstantTimeCompare([]byte(r.Header.Get("X-HackathonKit-Token")), []byte(token)) != 1 {
+				writeControlJSON(w, http.StatusUnauthorized, map[string]any{"error": "missing or invalid X-HackathonKit-Token"})
+				return
+			}
+		} else if mutatingMethod(r.Method) && (r.Header.Get("Origin") != "" || r.Header.Get("Referer") != "") {
+			// Without a token, refuse browser-initiated mutations: a page in any
+			// origin could otherwise POST to the loopback API.
+			writeControlJSON(w, http.StatusForbidden, map[string]any{"error": "cross-origin request rejected; set HACKATHONKIT_CONTROL_TOKEN or use a non-browser client"})
 			return
 		}
 		mux.ServeHTTP(w, r)
 	})
+}
+
+func mutatingMethod(method string) bool {
+	switch method {
+	case http.MethodGet, http.MethodHead, http.MethodOptions:
+		return false
+	}
+	return true
 }
 
 func queryInt(r *http.Request, key string, def int) int {

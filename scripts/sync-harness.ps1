@@ -1,13 +1,35 @@
 $ErrorActionPreference = "Stop"
+if (-not $PSCommandPath) {
+  Write-Error "[sync-harness] PSCommandPath is empty; run this script as a file, not dot-sourced"
+  exit 1
+}
 $Root = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
+if (-not (Test-Path -LiteralPath (Join-Path $Root "docker-compose.yml"))) {
+  Write-Error "[sync-harness] refusing: '$Root' does not look like the hackathonkit repository root"
+  exit 1
+}
 
+$global:LASTEXITCODE = 0
 & (Join-Path $PSScriptRoot "sync-skills.ps1")
+if ($LASTEXITCODE -ne 0) {
+  Write-Error "[sync-harness] sync-skills failed with exit code $LASTEXITCODE"
+  exit 1
+}
 
-# Claude Code reads project skills from .claude/skills.
+# Claude Code reads project skills from .claude/skills. Mirror atomically so a
+# failed copy cannot leave the mirror missing or partial.
 $ClaudeSkills = Join-Path $Root ".claude\skills"
-if (Test-Path $ClaudeSkills) { Remove-Item -Recurse -Force $ClaudeSkills }
-New-Item -ItemType Directory -Force -Path $ClaudeSkills | Out-Null
-Copy-Item -Recurse -Force (Join-Path $Root "plugins\hackathonkit\skills\*") $ClaudeSkills
+$ClaudeTmp = "$ClaudeSkills.tmp.$PID"
+if (Test-Path -LiteralPath $ClaudeTmp) { Remove-Item -LiteralPath $ClaudeTmp -Recurse -Force }
+New-Item -ItemType Directory -Force -Path $ClaudeTmp | Out-Null
+try {
+  Get-ChildItem -LiteralPath (Join-Path $Root "plugins\hackathonkit\skills") -Force |
+    Copy-Item -Destination $ClaudeTmp -Recurse -Force
+  if (Test-Path -LiteralPath $ClaudeSkills) { Remove-Item -LiteralPath $ClaudeSkills -Recurse -Force }
+  Move-Item -LiteralPath $ClaudeTmp -Destination $ClaudeSkills -Force
+} finally {
+  if (Test-Path -LiteralPath $ClaudeTmp) { Remove-Item -LiteralPath $ClaudeTmp -Recurse -Force -ErrorAction SilentlyContinue }
+}
 
 $Required = @(
   "AGENTS.md",

@@ -25,7 +25,7 @@ Check "codex CLI" ($null -ne $codex) $(if ($codex) { (codex --version) } else { 
 $docker = Get-Command docker -ErrorAction SilentlyContinue
 $engine = $false
 if ($docker) {
-  cmd /c "docker info >nul 2>nul"
+  docker info *> $null
   $engine = ($LASTEXITCODE -eq 0)
 }
 Check "docker engine" $engine $(if ($engine) { "running" } else { "not running" })
@@ -121,6 +121,7 @@ if ($codex) {
   Check "hackathonkit plugin" ($pluginInstalled -and $pluginEnabled) $pluginDetail
 
   if ($pluginInstalled -and $pluginEnabled) {
+    $global:LASTEXITCODE = 0
     $checkOutput = & (Join-Path $root "scripts\plugin-check.ps1") *>&1
     if ($LASTEXITCODE -eq 0) {
       Check "plugin runtime" $true "installed plugin starts MCP from a foreign cwd"

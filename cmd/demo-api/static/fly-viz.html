@@ -162,6 +162,10 @@ async function loadRealFly() {
 }
 loadRealFly();
 
+function esc(value) {
+  return String(value ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
 const state = { hunger: 40, dopamine: 0, mode: 'idle', lastTrace: null, lastFeedback: null, target: new THREE.Vector3(-4.5, 1.6, 0) };
 const statusEl = document.getElementById('status'), verdictEl = document.getElementById('verdict');
 const hungerEl = document.getElementById('hunger'), hungerVal = document.getElementById('hunger-val');
@@ -193,12 +197,12 @@ function applyNeuronEvent(ev) {
       state.dopamine = Math.min(100, state.dopamine + 22);
       state.hunger = Math.max(0, state.hunger - 18);
       state.target.set(4.6, 1.1, 0);
-      verdictEl.innerHTML = '<span class="good">🍬 награда (PAM ' + (ev.pam || 0) + ') — муха ест сахар</span>';
+      verdictEl.innerHTML = '<span class="good">🍬 награда (PAM ' + esc(ev.pam || 0) + ') — муха ест сахар</span>';
     } else {
       state.dopamine = Math.max(0, state.dopamine - 10);
       state.hunger = Math.min(100, state.hunger + 25);
       state.target.set(-6.5, 1.0, 2.5);
-      verdictEl.innerHTML = '<span class="bad">⚡ ошибка (PPL1 ' + (ev.ppl1 || 0) + ') — боль и голод</span>';
+      verdictEl.innerHTML = '<span class="bad">⚡ ошибка (PPL1 ' + esc(ev.ppl1 || 0) + ') — боль и голод</span>';
     }
   }
   hungerEl.style.width = state.hunger + '%'; hungerVal.textContent = Math.round(state.hunger) + '%';

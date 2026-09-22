@@ -1,4 +1,8 @@
 bin/
+/hackathonkit-mcp
+/hackathonkit-demo-api
+/hackathonkit-ctl
+/hackathonkit-rehearse
 *.exe
 .env
 logs/

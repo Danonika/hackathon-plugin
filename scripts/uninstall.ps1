@@ -1,13 +1,21 @@
 param(
   [switch]$Yes
 )
-$ErrorActionPreference = "Continue"
+$ErrorActionPreference = "Stop"
+if (-not $PSCommandPath) {
+  Write-Error "[uninstall] PSCommandPath is empty; run this script as a file, not dot-sourced"
+  exit 1
+}
 $root = Split-Path -Parent (Split-Path -Parent $PSCommandPath)
+if (-not $root -or -not (Test-Path -LiteralPath (Join-Path $root "docker-compose.yml"))) {
+  Write-Error "[uninstall] refusing: '$root' does not look like the hackathonkit repository root"
+  exit 1
+}
 
 if (Get-Command codex -ErrorAction SilentlyContinue) {
   if ($Yes) {
-    cmd /c "codex plugin remove hackathonkit >nul 2>nul"
-    cmd /c "codex plugin marketplace remove hackathonkit-local >nul 2>nul"
+    & codex plugin remove hackathonkit *> $null
+    & codex plugin marketplace remove hackathonkit-local *> $null
     Write-Host "[uninstall] removed hackathonkit plugin and marketplace"
   } else {
     Write-Host "would run: codex plugin remove hackathonkit"
@@ -23,9 +31,21 @@ $targets = @(
   "data\control",
   "bin"
 )
+$Failures = 0
 foreach ($rel in $targets) {
+  $target = Join-Path $root $rel
+  if (-not $target.StartsWith($root, [System.StringComparison]::OrdinalIgnoreCase)) {
+    Write-Warning "[uninstall] refusing to remove a path outside the repository: $target"
+    $Failures++
+    continue
+  }
   if ($Yes) {
-    Remove-Item -Recurse -Force (Join-Path $root $rel) -ErrorAction SilentlyContinue
+    try {
+      if (Test-Path -LiteralPath $target) { Remove-Item -LiteralPath $target -Recurse -Force -ErrorAction Stop }
+    } catch {
+      Write-Warning "[uninstall] failed to remove ${rel}: $($_.Exception.Message)"
+      $Failures++
+    }
   } else {
     Write-Host "would remove: $rel"
   }
@@ -34,5 +54,9 @@ foreach ($rel in $targets) {
 if (-not $Yes) {
   Write-Host "[uninstall] dry run: re-run with -Yes to apply"
   exit 0
+}
+if ($Failures -gt 0) {
+  Write-Error "[uninstall] $Failures target(s) failed"
+  exit 1
 }
 Write-Host "[uninstall] done. data/, logs/ and committed files were kept."

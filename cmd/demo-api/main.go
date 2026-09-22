@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/subtle"
 	"embed"
 	"encoding/json"
 	"fmt"
@@ -125,7 +126,7 @@ func newHandler(root string, mgr *config.Manager, meta metadata.Recorder, token 
 			return
 		}
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		_, _ = w.Write(page)
+		_, _ = w.Write([]byte(strings.ReplaceAll(string(page), "__HACKATHONKIT_DEMO_TOKEN__", token)))
 	})
 	mux.HandleFunc("/control", func(w http.ResponseWriter, r *http.Request) {
 		page, err := staticFS.ReadFile("static/control.html")
@@ -180,7 +181,7 @@ func newHandler(root string, mgr *config.Manager, meta metadata.Recorder, token 
 			return
 		}
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		_, _ = w.Write(page)
+		_, _ = w.Write([]byte(strings.ReplaceAll(string(page), "__HACKATHONKIT_DEMO_TOKEN__", token)))
 	})
 	mux.HandleFunc("/plan/api/latest", func(w http.ResponseWriter, r *http.Request) {
 		plan, ok := plans.Latest(root)
@@ -202,12 +203,13 @@ func newHandler(root string, mgr *config.Manager, meta metadata.Recorder, token 
 			writeJSON(w, http.StatusForbidden, map[string]any{"error": "forbidden origin"})
 			return
 		}
-		if token != "" && r.Header.Get("X-HackathonKit-Token") != token {
+		if token != "" && subtle.ConstantTimeCompare([]byte(r.Header.Get("X-HackathonKit-Token")), []byte(token)) != 1 {
 			writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "missing or invalid X-HackathonKit-Token"})
 			return
 		}
 		var body struct {
 			Slug     string `json:"slug"`
+			Revision int    `json:"revision"`
 			Decision string `json:"decision"`
 			Note     string `json:"note"`
 		}
@@ -230,6 +232,10 @@ func newHandler(root string, mgr *config.Manager, meta metadata.Recorder, token 
 		}
 		if !ok {
 			writeJSON(w, http.StatusNotFound, map[string]any{"error": "no plan to review"})
+			return
+		}
+		if body.Revision > 0 && body.Revision != plan.Revision {
+			writeJSON(w, http.StatusConflict, map[string]any{"error": "plan revision changed; reload before deciding", "revision": plan.Revision})
 			return
 		}
 		record, err := writeApproval(root, plan.Slug, plan.Revision, body.Decision, body.Note)

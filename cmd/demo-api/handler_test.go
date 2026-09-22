@@ -94,6 +94,11 @@ func TestStaticPages(t *testing.T) {
 		}
 	}
 
+	planPage := doRequest(t, h, http.MethodGet, "/plan", "", nil)
+	if body := planPage.Body.String(); !strings.Contains(body, `"s3cret"`) || strings.Contains(body, "__HACKATHONKIT_DEMO_TOKEN__") {
+		t.Fatalf("plan page token was not substituted")
+	}
+
 	rec := doRequest(t, h, http.MethodGet, "/does-not-exist", "", nil)
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("GET /does-not-exist = %d, want 404", rec.Code)
@@ -631,5 +636,20 @@ func TestApprovalHelpers(t *testing.T) {
 	writeTestFile(t, filepath.Join(blockedRoot, "evals"), "a file blocks the plans dir")
 	if _, err := writeApproval(blockedRoot, "p", 1, "approve", ""); err == nil {
 		t.Fatal("writeApproval must fail when evals is a file")
+	}
+}
+func TestPlanDecisionRevisionGuard(t *testing.T) {
+	root := t.TempDir()
+	h := testHandler(root, config.NewManager(root), metadata.Disabled{}, "s3cret")
+	if err := plans.Save(root, plans.Plan{Slug: "rev-plan", Stages: plans.DefaultStages, Revision: 3}); err != nil {
+		t.Fatal(err)
+	}
+	rec := doRequest(t, h, http.MethodPost, "/plan/decision", `{"slug":"rev-plan","decision":"approve","revision":2}`, map[string]string{"X-HackathonKit-Token": "s3cret"})
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("stale revision = %d, want 409: %s", rec.Code, rec.Body.String())
+	}
+	rec = doRequest(t, h, http.MethodPost, "/plan/decision", `{"slug":"rev-plan","decision":"approve","revision":3}`, map[string]string{"X-HackathonKit-Token": "s3cret"})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("matching revision = %d: %s", rec.Code, rec.Body.String())
 	}
 }

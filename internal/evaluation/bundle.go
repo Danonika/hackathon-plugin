@@ -117,7 +117,9 @@ func FreezeBundle(opts BundleOptions) (Bundle, error) {
 	if err != nil {
 		return Bundle{}, err
 	}
-	relOut, err := filepath.Rel(root, outAbs)
+	rootResolved := resolveExistingPath(root)
+	outResolved := resolveExistingPath(outAbs)
+	relOut, err := filepath.Rel(rootResolved, outResolved)
 	if err != nil || relOut == "." || relOut == ".." || strings.HasPrefix(relOut, ".."+string(filepath.Separator)) {
 		return Bundle{}, fmt.Errorf("bundle output must be inside the repository root: %s", outDir)
 	}
@@ -401,17 +403,21 @@ func resolveGitSHA(root string) string {
 	}
 	value := strings.TrimSpace(string(head))
 	if !strings.HasPrefix(value, "ref: ") {
-		if len(value) >= 40 {
+		if validGitSHA(value) {
 			return value
 		}
 		return ""
 	}
 	ref := strings.TrimSpace(strings.TrimPrefix(value, "ref: "))
-	if ref == "" {
+	if !validGitRef(ref) {
 		return ""
 	}
-	if data, err := os.ReadFile(filepath.Join(gitDir, filepath.FromSlash(ref))); err == nil {
-		if sha := strings.TrimSpace(string(data)); sha != "" {
+	refPath := filepath.Join(gitDir, filepath.FromSlash(ref))
+	if !strings.HasPrefix(refPath, gitDir+string(filepath.Separator)) {
+		return ""
+	}
+	if data, err := os.ReadFile(refPath); err == nil {
+		if sha := strings.TrimSpace(string(data)); validGitSHA(sha) {
 			return sha
 		}
 	}
@@ -425,9 +431,59 @@ func resolveGitSHA(root string) string {
 			continue
 		}
 		parts := strings.Fields(line)
-		if len(parts) == 2 && parts[1] == ref {
+		if len(parts) == 2 && parts[1] == ref && validGitSHA(parts[0]) {
 			return parts[0]
 		}
 	}
 	return ""
+}
+
+func validGitRef(ref string) bool {
+	if ref == "" || strings.HasPrefix(ref, "/") || strings.Contains(ref, "..") || strings.ContainsAny(ref, "\\:") {
+		return false
+	}
+	for _, r := range ref {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9',
+			r == '/', r == '-', r == '_', r == '.':
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+func validGitSHA(value string) bool {
+	if len(value) != 40 && len(value) != 64 {
+		return false
+	}
+	for _, r := range value {
+		if !(r >= '0' && r <= '9' || r >= 'a' && r <= 'f' || r >= 'A' && r <= 'F') {
+			return false
+		}
+	}
+	return true
+}
+
+// resolveExistingPath resolves symlinks on the longest existing prefix of path
+// so containment checks cannot be bypassed by a symlinked directory.
+func resolveExistingPath(path string) string {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return filepath.Clean(path)
+	}
+	current := abs
+	var suffix []string
+	for {
+		if resolved, err := filepath.EvalSymlinks(current); err == nil {
+			parts := append([]string{resolved}, suffix...)
+			return filepath.Join(parts...)
+		}
+		parent := filepath.Dir(current)
+		if parent == current {
+			return abs
+		}
+		suffix = append([]string{filepath.Base(current)}, suffix...)
+		current = parent
+	}
 }

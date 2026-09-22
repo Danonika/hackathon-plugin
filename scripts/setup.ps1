@@ -35,7 +35,7 @@ New-Item -ItemType Directory -Force -Path (Join-Path $root "logs"), (Join-Path $
 
 $dockerOk = $false
 if (Get-Command docker -ErrorAction SilentlyContinue) {
-  cmd /c "docker info >nul 2>nul"
+  docker info *> $null
   $dockerOk = ($LASTEXITCODE -eq 0)
 }
 
@@ -69,16 +69,16 @@ if ($dockerOk) {
 $codex = Get-Command codex -ErrorAction SilentlyContinue
 if ($codex) {
   Write-Host "[setup] registering repo marketplace and installing the Hackathon Agent Kit plugin"
-  cmd /c "codex plugin remove hackathonkit >nul 2>nul"
-  cmd /c "codex plugin marketplace add `"$root`" >nul 2>nul"
+  & codex plugin remove hackathonkit *> $null
+  & codex plugin marketplace add $root *> $null
   if ($LASTEXITCODE -ne 0) {
     Write-Warning "[setup] codex plugin marketplace add failed (exit $LASTEXITCODE)"
   }
-  cmd /c "codex plugin add hackathonkit@hackathonkit-local >nul 2>nul"
+  & codex plugin add hackathonkit@hackathonkit-local *> $null
   if ($LASTEXITCODE -eq 0) {
     Write-Host "[setup] plugin installed; start a NEW Codex session to load it"
   } else {
-    Write-Warning "[setup] could not install the plugin automatically. Run manually: codex plugin marketplace add `"$root`"; codex plugin add hackathonkit@hackathonkit-local"
+    Write-Warning "[setup] could not install the plugin automatically. Run manually: codex plugin marketplace add '$root'; codex plugin add hackathonkit@hackathonkit-local"
   }
 } else {
   Write-Warning "[setup] codex CLI not found; install it (npm install -g @openai/codex) and re-run setup"

@@ -90,3 +90,23 @@ func TestControlHandlerToken(t *testing.T) {
 		t.Fatalf("with token status = %d, want 200", rec.Code)
 	}
 }
+
+func TestControlHandlerRejectsCrossOriginMutationsWithoutToken(t *testing.T) {
+	store := testControlStore(t)
+	handler := controlHandler(store, "")
+
+	req := httptest.NewRequest(http.MethodPost, "/api/risk", nil)
+	req.Header.Set("Origin", "http://evil.example")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("cross-origin POST status = %d, want 403", rec.Code)
+	}
+
+	req = httptest.NewRequest(http.MethodPost, "/api/risk", nil)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("local POST status = %d, want 200", rec.Code)
+	}
+}

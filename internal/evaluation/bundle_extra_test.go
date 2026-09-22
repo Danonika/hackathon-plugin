@@ -263,3 +263,54 @@ func TestFreezeBundleCustomExcludesAndSymlinks(t *testing.T) {
 		}
 	}
 }
+
+func TestResolveGitSHARejectsTraversalAndNonHex(t *testing.T) {
+	t.Run("traversal ref", func(t *testing.T) {
+		root := t.TempDir()
+		writeFile(t, filepath.Join(root, ".git", "HEAD"), "ref: ../../../../etc/passwd\n")
+		if got := resolveGitSHA(root); got != "" {
+			t.Fatalf("got %q, want empty", got)
+		}
+	})
+	t.Run("absolute ref", func(t *testing.T) {
+		root := t.TempDir()
+		writeFile(t, filepath.Join(root, ".git", "HEAD"), "ref: /etc/passwd\n")
+		if got := resolveGitSHA(root); got != "" {
+			t.Fatalf("got %q, want empty", got)
+		}
+	})
+	t.Run("non-hex loose ref", func(t *testing.T) {
+		root := t.TempDir()
+		writeFile(t, filepath.Join(root, ".git", "HEAD"), "ref: refs/heads/main\n")
+		writeFile(t, filepath.Join(root, ".git", "refs", "heads", "main"), "not-a-sha\n")
+		if got := resolveGitSHA(root); got != "" {
+			t.Fatalf("got %q, want empty", got)
+		}
+	})
+	t.Run("non-hex packed ref", func(t *testing.T) {
+		root := t.TempDir()
+		writeFile(t, filepath.Join(root, ".git", "HEAD"), "ref: refs/heads/main\n")
+		writeFile(t, filepath.Join(root, ".git", "packed-refs"), "deadbeef refs/heads/main\n")
+		if got := resolveGitSHA(root); got != "" {
+			t.Fatalf("got %q, want empty", got)
+		}
+	})
+}
+
+func TestFreezeBundleRejectsSymlinkedOutDir(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlinks are POSIX-only")
+	}
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "README.md"), "# x\n")
+	outside := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "data"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(root, "data", "link")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := FreezeBundle(BundleOptions{Root: root, OutDir: filepath.Join(root, "data", "link", "out")}); err == nil {
+		t.Fatal("an out dir behind a symlink must be rejected")
+	}
+}

@@ -85,7 +85,7 @@ async function decide(decision) {
   const res = await fetch("/plan/decision", {
     method: "POST",
     headers,
-    body: JSON.stringify({ slug: current.slug, decision, note: document.getElementById("note").value })
+    body: JSON.stringify({ slug: current.slug, revision: current.revision, decision, note: document.getElementById("note").value })
   });
   const data = await res.json();
   banner.style.display = "block";
