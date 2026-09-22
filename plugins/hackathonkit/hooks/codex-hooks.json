@@ -1,5 +1,5 @@
 {
-  "description": "Hackathon Agent Kit session lifecycle hooks: context injection, session event capture and learning handoff. Every hook is best-effort and never blocks a session.",
+  "description": "Hackathon Agent Kit session lifecycle hooks: context injection, session event capture and learning handoff. Every hook is best-effort: failures are logged to stderr and the hook exits 0, so a hook never blocks a session.",
   "hooks": {
     "SessionStart": [
       {

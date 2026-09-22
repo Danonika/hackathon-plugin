@@ -2,6 +2,7 @@
 .git
 .gitignore
 .env*
+!.env.example
 bin
 data
 logs
@@ -9,3 +10,4 @@ evals
 .agents/skills
 **/*.md
 !README.md
+!**/README.md

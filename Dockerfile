@@ -7,11 +7,13 @@ RUN CGO_ENABLED=0 go build -buildvcs=false -trimpath -o /out/hackathonkit-mcp ./
 RUN CGO_ENABLED=0 go build -buildvcs=false -trimpath -o /out/hackathonkit-demo-api ./cmd/demo-api
 
 FROM alpine:3.24.2 AS runtime-base
-RUN apk add --no-cache ca-certificates && adduser -D -u 1000 hackathonkit
+ARG HACKATHONKIT_UID=1000
+ARG HACKATHONKIT_GID=1000
+RUN apk add --no-cache ca-certificates && addgroup -g "${HACKATHONKIT_GID}" hackathonkit && adduser -D -u "${HACKATHONKIT_UID}" -G hackathonkit hackathonkit
 WORKDIR /workspace
-RUN mkdir -p /workspace/configs /workspace/logs /workspace/evals /workspace/data/input /workspace/data/artifacts /workspace/data/index /workspace/data/judge-bundles && chown -R 1000:1000 /workspace
+RUN mkdir -p /workspace/configs /workspace/logs /workspace/evals /workspace/data/input /workspace/data/artifacts /workspace/data/index /workspace/data/judge-bundles && chown -R "${HACKATHONKIT_UID}:${HACKATHONKIT_GID}" /workspace
 ENV HACKATHONKIT_REPO_ROOT=/workspace
-USER 1000:1000
+USER ${HACKATHONKIT_UID}:${HACKATHONKIT_GID}
 
 FROM runtime-base AS hackathonkit-mcp
 COPY --from=build /out/hackathonkit-mcp /usr/local/bin/hackathonkit-mcp
@@ -28,4 +30,5 @@ ENTRYPOINT ["hackathonkit-demo-api"]
 FROM golang:1.27-alpine3.24 AS quality
 RUN apk add --no-cache git
 WORKDIR /workspace
+ENV HACKATHONKIT_REPO_ROOT=/workspace
 ENTRYPOINT ["sh", "scripts/quality-gate.sh"]

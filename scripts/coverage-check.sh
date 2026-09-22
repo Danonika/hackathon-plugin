@@ -43,6 +43,12 @@ if [ -z "$TOTAL" ]; then
   echo "[coverage] could not read a total from the coverage profile" >&2
   exit 1
 fi
+case "$TOTAL" in
+  ''|*[!0-9.]*)
+    echo "[coverage] malformed coverage total: '$TOTAL'" >&2
+    exit 1
+    ;;
+esac
 echo "[coverage] total ${TOTAL}% (target ${TARGET}%)"
 
 if ! awk -v total="$TOTAL" -v target="$TARGET" 'BEGIN { exit (total + 0 >= target + 0) ? 0 : 1 }'; then

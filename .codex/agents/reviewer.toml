@@ -1,6 +1,8 @@
 #:schema https://developers.openai.com/codex/config-schema.json
 
 model_reasoning_effort = "high"
+# read-only forbids writes; the no-tests/no-builds guarantee is an instruction
+# to this agent, not a sandbox enforcement, so it is stated explicitly below.
 sandbox_mode = "read-only"
 
 developer_instructions = """

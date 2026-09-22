@@ -1,9 +1,14 @@
 #!/usr/bin/env sh
 # Validate the skill catalog against docs/SKILL-STANDARD.md.
 set -e
-ROOT="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
+SELF="$0"
+case "$SELF" in
+  */*) ;;
+  *) SELF=$(command -v -- "$SELF" 2>/dev/null || echo "$SELF") ;;
+esac
+ROOT="$(CDPATH= cd -- "$(dirname -- "$SELF")/.." && pwd)"
 
-if [ -x "$ROOT/bin/hackathonkit-mcp" ]; then
+if [ -f "$ROOT/bin/hackathonkit-mcp" ] && [ -x "$ROOT/bin/hackathonkit-mcp" ]; then
   "$ROOT/bin/hackathonkit-mcp" --repo-root "$ROOT" --validate-skills
   exit $?
 fi

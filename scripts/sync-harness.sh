@@ -8,7 +8,10 @@ case "$SELF" in
 esac
 ROOT="$(CDPATH= cd -- "$(dirname -- "$SELF")/.." && pwd)"
 
-sh "$ROOT/scripts/sync-skills.sh"
+if ! sh "$ROOT/scripts/sync-skills.sh"; then
+  echo "[sync-harness] sync-skills.sh failed" >&2
+  exit 1
+fi
 
 # Claude Code reads project skills from .claude/skills. Mirror atomically so a
 # failed copy cannot leave the mirror missing or partial.
@@ -33,6 +36,7 @@ rm -rf "$CLAUDE_OLD"
 trap - EXIT INT TERM
 
 MISSING=0
+INVALID=0
 for f in \
   AGENTS.md \
   .codex/AGENTS.md \
@@ -65,11 +69,11 @@ json_valid() {
 for f in .claude-plugin/plugin.json .claude-plugin/marketplace.json .opencode/opencode.json plugins/hackathonkit/hooks/codex-hooks.json; do
   if ! json_valid "$ROOT/$f"; then
     echo "[sync-harness] invalid JSON manifest: $f" >&2
-    MISSING=$((MISSING + 1))
+    INVALID=$((INVALID + 1))
   fi
 done
-if [ "$MISSING" -ne 0 ]; then
-  echo "[sync-harness] $MISSING adapter file(s) missing or invalid" >&2
+if [ "$MISSING" -ne 0 ] || [ "$INVALID" -ne 0 ]; then
+  echo "[sync-harness] $MISSING adapter file(s) missing, $INVALID manifest(s) invalid" >&2
   exit 1
 fi
 

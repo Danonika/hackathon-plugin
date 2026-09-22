@@ -66,4 +66,4 @@ if command -v codex >/dev/null 2>&1; then
   fi
 fi
 
-echo "[repair] done. Run scripts/doctor.sh to verify."
+echo "[repair] done. Run $ROOT/scripts/doctor.sh to verify."

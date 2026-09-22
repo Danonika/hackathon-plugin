@@ -131,5 +131,10 @@ else
     echo "[smoke] MCP handshake FAILED: no result payload detected" >&2
     exit 1
   fi
+  JSON_LINES=$(printf '%s\n' "$OUT" | grep -c '"jsonrpc"' || true)
+  if [ "$JSON_LINES" != "3" ]; then
+    echo "[smoke] MCP handshake FAILED: stdout is not JSON-RPC only" >&2
+    exit 1
+  fi
 fi
 echo "[smoke] MCP handshake ok: initialize, tools/list, system.context (stdout is JSON-RPC only)"

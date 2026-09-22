@@ -20,7 +20,7 @@ for arg in "$@"; do
       ;;
     *)
       echo "[docker-check] unknown argument: $arg" >&2
-      exit 2
+      exit 64
       ;;
   esac
 done
@@ -140,7 +140,7 @@ docker compose run --rm -T hackathonkit-mcp --selftest >/dev/null
 
 if [ "$MODE" = "full" ]; then
   echo "[docker-check] quality gate in the Go-enabled image"
-  docker compose --profile quality run --rm quality
+  docker compose --profile quality run --rm -T quality
 fi
 
 echo "[docker-check] MCP handshake over compose"

@@ -1,5 +1,7 @@
 #:schema https://developers.openai.com/codex/config-schema.json
 
+# High effort is deliberate but bounded: keep each isolated pass short and
+# stop after the scoped questions rather than exploring indefinitely.
 model_reasoning_effort = "high"
 sandbox_mode = "read-only"
 

@@ -8,7 +8,7 @@ esac
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$SELF")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 
-if [ -x "$REPO_ROOT/bin/hackathonkit-mcp" ]; then
+if [ -f "$REPO_ROOT/bin/hackathonkit-mcp" ] && [ -x "$REPO_ROOT/bin/hackathonkit-mcp" ]; then
   exec "$REPO_ROOT/bin/hackathonkit-mcp" --repo-root "$REPO_ROOT"
 fi
 

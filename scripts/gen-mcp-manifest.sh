@@ -8,6 +8,7 @@ if [ -z "$ROOT" ] || [ ! -d "$ROOT" ]; then
   echo "[mcp-manifest] repository root not found: '$ROOT'" >&2
   exit 1
 fi
+ROOT="$(CDPATH= cd -- "$ROOT" && pwd)"
 if [ ! -f "$TEMPLATE" ]; then
   echo "[mcp-manifest] template not found: $TEMPLATE" >&2
   exit 1
@@ -24,15 +25,17 @@ trap 'rm -f "$TMP"' EXIT INT TERM
 ROOT_JSON="$(json_escape "$ROOT")" LAUNCHER_JSON="$(json_escape "hackathonkit-mcp-launcher.sh")" awk '
   BEGIN { root = ENVIRON["ROOT_JSON"]; launcher = ENVIRON["LAUNCHER_JSON"] }
   {
-    for (n = 0; n < 50; n++) {
-      i = index($0, "{{REPO_ROOT}}")
-      if (i == 0) break
-      $0 = substr($0, 1, i - 1) root substr($0, i + 13)
+    pos = 1
+    while ((i = index(substr($0, pos), "{{REPO_ROOT}}")) > 0) {
+      start = pos + i - 1
+      $0 = substr($0, 1, start - 1) root substr($0, start + 13)
+      pos = start + length(root)
     }
-    for (n = 0; n < 50; n++) {
-      i = index($0, "{{MCP_LAUNCHER}}")
-      if (i == 0) break
-      $0 = substr($0, 1, i - 1) launcher substr($0, i + 16)
+    pos = 1
+    while ((i = index(substr($0, pos), "{{MCP_LAUNCHER}}")) > 0) {
+      start = pos + i - 1
+      $0 = substr($0, 1, start - 1) launcher substr($0, start + 16)
+      pos = start + length(launcher)
     }
     print
   }

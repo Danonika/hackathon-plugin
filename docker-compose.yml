@@ -24,7 +24,7 @@ services:
       TELEGRAM_ALLOWED_CHAT_IDS: ${TELEGRAM_ALLOWED_CHAT_IDS:-}
       POSTGRES_DSN: postgres://hackathonkit:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@postgres:5432/hackathonkit?sslmode=disable
       MINIO_ENDPOINT: minio:9000
-      MINIO_ACCESS_KEY: hackathonkit
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-hackathonkit}
       MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD:?set MINIO_ROOT_PASSWORD in .env}
       MINIO_BUCKET: hackathonkit
     # data/logs/evals are shared read-write with demo-api by design: the MCP
@@ -89,8 +89,14 @@ services:
     volumes:
       - pgdata:/var/lib/postgresql/data
 
+  # Reserved for future caching; nothing consumes it yet, so it is optional.
   redis:
     image: redis:7.4.7-alpine
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
     ports:
       - "127.0.0.1:6379:6379"
 

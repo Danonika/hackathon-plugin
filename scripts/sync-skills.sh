@@ -9,7 +9,16 @@ if [ ! -d "$SRC" ]; then
   exit 1
 fi
 
-COUNT_SRC=$(find "$SRC" -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')
+count_dirs() {
+  count=0
+  for entry in "$1"/*/; do
+    [ -d "$entry" ] || continue
+    count=$((count + 1))
+  done
+  printf '%s' "$count"
+}
+
+COUNT_SRC=$(count_dirs "$SRC")
 
 # Build the mirror in a temporary directory and swap it in, so consumers never
 # observe a missing or half-populated mirror when the copy fails.
@@ -22,7 +31,7 @@ rm -rf "$TMP"
 mkdir -p "$TMP"
 cp -R "$SRC/." "$TMP/"
 
-COUNT_DST=$(find "$TMP" -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')
+COUNT_DST=$(count_dirs "$TMP")
 FILES_SRC=$(find "$SRC" -type f | wc -l | tr -d ' ')
 FILES_DST=$(find "$TMP" -type f | wc -l | tr -d ' ')
 SKILLS_SRC=$(find "$SRC" -name SKILL.md | wc -l | tr -d ' ')

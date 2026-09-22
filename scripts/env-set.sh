@@ -64,8 +64,9 @@ fi
 TMP=$(mktemp "$FILE.tmp.XXXXXX" 2>/dev/null || echo "$FILE.tmp.$$")
 trap 'rm -f "$TMP"' EXIT INT TERM
 
+INPUT="$FILE"
 if [ ! -f "$FILE" ]; then
-  (umask 077 && : > "$FILE")
+  INPUT=/dev/null
 fi
 
 # The key is matched literally (no regex) and the value travels through the
@@ -90,7 +91,7 @@ trap 'rm -rf "$LOCK"' EXIT INT TERM
   }
   { print }
   END { if (!done) print k "=" v }
-' "$FILE" > "$TMP")
+' "$INPUT" > "$TMP")
 
 mv "$TMP" "$FILE"
 chmod "$MODE" "$FILE" 2>/dev/null || true

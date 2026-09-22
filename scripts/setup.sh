@@ -15,6 +15,10 @@ while [ $# -gt 0 ]; do
       ;;
     --profile=*)
       PROFILE="${1#*=}"
+      if [ -z "$PROFILE" ]; then
+        echo "[setup] --profile= requires a value (core or full)" >&2
+        exit 1
+      fi
       shift
       ;;
     -h|--help)

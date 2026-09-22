@@ -29,6 +29,9 @@ for arg in "$@"; do
 done
 
 CODEX_FAIL=0
+if ! command -v codex >/dev/null 2>&1; then
+  echo "[uninstall] codex CLI not found; skipping plugin/marketplace removal"
+fi
 if command -v codex >/dev/null 2>&1; then
   if [ "$APPLY" = "1" ]; then
     if ! codex plugin remove hackathonkit >/dev/null 2>&1; then
