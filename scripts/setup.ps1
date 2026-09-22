@@ -6,8 +6,16 @@ if ($Profile -notin @("core", "full")) {
   Write-Error "[setup] invalid profile: $Profile (expected core or full)"
   exit 1
 }
+if (-not $PSCommandPath) {
+  Write-Error "[setup] PSCommandPath is empty; run this script as a file, not dot-sourced"
+  exit 1
+}
 $root = Split-Path -Parent (Split-Path -Parent $PSCommandPath)
 Set-Location -LiteralPath $root
+if ((Get-Location).Path -ne $root) {
+  Write-Error "[setup] could not enter the repository root: $root"
+  exit 1
+}
 Write-Host "[setup] repository root: $root (profile: $Profile)"
 
 if (-not (Test-Path -LiteralPath ".env")) {

@@ -58,6 +58,7 @@
 <header>
   <h1>Hackathon Agent Kit</h1>
   <span class="muted" id="mode-badge">mode: …</span>
+  <input id="token" type="password" placeholder="X-HackathonKit-Token (when configured)" autocomplete="off">
   <a class="muted" href="/fly-viz" style="color:#93c5fd">Fly 3D</a>
   <a class="muted" href="/fly-brain/" target="_blank" rel="noopener noreferrer" style="color:#93c5fd">реальный мозг 139k (flybrain, MIT)</a>
   <span class="status" id="status">connecting…</span>
@@ -112,8 +113,18 @@ async function j(url, opts) {
   return r.json();
 }
 
+let TOKEN = sessionStorage.getItem('hackathonkitToken') || '';
+
+function tokenHeader() {
+  const field = document.getElementById('token');
+  TOKEN = (field && field.value.trim()) || TOKEN;
+  if (TOKEN) sessionStorage.setItem('hackathonkitToken', TOKEN);
+  return TOKEN ? { 'X-HackathonKit-Token': TOKEN } : {};
+}
+
 async function setMode(mode) {
-  await j('/routing', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ mode }) });
+  const headers = Object.assign({ 'Content-Type': 'application/json' }, tokenHeader());
+  await j('/routing', { method: 'POST', headers, body: JSON.stringify({ mode }) });
   refresh();
 }
 

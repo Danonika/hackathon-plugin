@@ -59,6 +59,12 @@ func (r *Router) WithBrain(path string) *Router {
 func (r *Router) loadBrain() *MBrain {
 	brainMu.Lock()
 	defer brainMu.Unlock()
+	return r.loadBrainLocked()
+}
+
+// loadBrainLocked is the lock-free body of loadBrain for callers that already
+// hold brainMu.
+func (r *Router) loadBrainLocked() *MBrain {
 	if r.brain != nil {
 		return r.brain
 	}
@@ -93,7 +99,9 @@ func (r *Router) saveBrain(brain *MBrain) error {
 }
 
 func (r *Router) Dopamine() DopamineStats {
-	brain := r.loadBrain()
+	brainMu.Lock()
+	defer brainMu.Unlock()
+	brain := r.loadBrainLocked()
 	if brain == nil {
 		return DopamineStats{}
 	}
@@ -211,7 +219,9 @@ func (r *Router) mbCategoryScores(ctx context.Context, task string) (map[string]
 	if !ok {
 		return nil, false
 	}
+	brainMu.Lock()
 	scores, _, ok := brain.scores(vec)
+	brainMu.Unlock()
 	return scores, ok
 }
 
@@ -220,10 +230,13 @@ func (r *Router) applyDopamine(ctx context.Context, ev FeedbackEvent) bool {
 	if brain == nil || r.embedder == nil {
 		return false
 	}
+	// Embed outside the lock: the embedder can be a network client.
 	vec, ok := r.embedTask(ctx, ev.Task)
 	if !ok {
 		return false
 	}
+	brainMu.Lock()
+	defer brainMu.Unlock()
 	_, code, ok := brain.scores(vec)
 	if !ok || code == nil {
 		return false
@@ -257,9 +270,7 @@ func (r *Router) applyDopamine(ctx context.Context, ev FeedbackEvent) bool {
 	default:
 		return false
 	}
-	brainMu.Lock()
 	r.brain = brain
-	brainMu.Unlock()
 	_ = r.saveBrain(brain)
 	return true
 }

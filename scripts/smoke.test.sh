@@ -33,7 +33,8 @@ write_responder() {
   marker="$2"
   cat > "$path" <<EOF
 #!/usr/bin/env sh
-printf '%s\n' "$marker" >> "\$MARKER"
+count=\$(cat | wc -l | tr -d ' ')
+printf '%s %s stdin=%s\n' "$marker" "\$*" "\$count" >> "\$MARKER"
 printf '%s\n' \\
 '{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-06-18"}}' \\
 '{"jsonrpc":"2.0","id":2,"result":{"tools":[]}}' \\
@@ -56,8 +57,8 @@ if run_smoke --compose >/dev/null 2>&1; then
 else
   check "--compose exits 0" 0 "non-zero exit"
 fi
-check "--compose used docker" "$(grep -q '^docker$' "$TMP/marker" 2>/dev/null && echo 1 || echo 0)" "$(cat "$TMP/marker" 2>/dev/null)"
-check "--compose skipped the local binary" "$(grep -q '^binary$' "$TMP/marker" 2>/dev/null && echo 0 || echo 1)"
+check "--compose used docker" "$(grep -q '^docker .*stdin=3' "$TMP/marker" 2>/dev/null && echo 1 || echo 0)" "$(cat "$TMP/marker" 2>/dev/null)"
+check "--compose skipped the local binary" "$(grep -q '^binary ' "$TMP/marker" 2>/dev/null && echo 0 || echo 1)"
 
 # --binary uses the local binary and never Docker.
 rm -f "$TMP/marker"
@@ -66,13 +67,13 @@ if run_smoke --binary >/dev/null 2>&1; then
 else
   check "--binary exits 0" 0 "non-zero exit"
 fi
-check "--binary used the local binary" "$(grep -q '^binary$' "$TMP/marker" 2>/dev/null && echo 1 || echo 0)"
-check "--binary skipped docker" "$(grep -q '^docker$' "$TMP/marker" 2>/dev/null && echo 0 || echo 1)"
+check "--binary used the local binary" "$(grep -q '^binary .*stdin=3' "$TMP/marker" 2>/dev/null && echo 1 || echo 0)"
+check "--binary skipped docker" "$(grep -q '^docker ' "$TMP/marker" 2>/dev/null && echo 0 || echo 1)"
 
 # --auto prefers the local binary.
 rm -f "$TMP/marker"
 run_smoke --auto >/dev/null 2>&1 || true
-check "--auto prefers the local binary" "$(grep -q '^binary$' "$TMP/marker" 2>/dev/null && echo 1 || echo 0)"
+check "--auto prefers the local binary" "$(grep -q '^binary ' "$TMP/marker" 2>/dev/null && echo 1 || echo 0)"
 
 # --compose without docker fails loudly.
 rm -f "$TMP/marker"

@@ -80,6 +80,13 @@ func runCheck(ctx context.Context, root string, spec checkSpec) Check {
 	cmd := exec.CommandContext(runCtx, spec.command[0], spec.command[1:]...)
 	cmd.Dir = root
 	cmd.Env = buildEnv()
+	configureProcessGroup(cmd)
+	cmd.Cancel = func() error {
+		killProcessGroup(cmd)
+		return cmd.Process.Kill()
+	}
+	// Bound the wait even when a grandchild keeps stdout/stderr open.
+	cmd.WaitDelay = 10 * time.Second
 	output, err := cmd.CombinedOutput()
 	check.DurationMS = time.Since(start).Milliseconds()
 	check.Output = tail(string(output), 2000)

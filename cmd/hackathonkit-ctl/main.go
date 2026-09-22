@@ -196,32 +196,53 @@ func cmdWorktree(args []string) error {
 		if len(args) < 2 {
 			return fmt.Errorf("usage: hackathonkit-ctl worktree create <slug>")
 		}
-		slug := slugify(args[1])
-		dir := filepath.Join(base, slug)
-		if err := os.MkdirAll(base, 0o755); err != nil {
+		dir, err := addWorktree(root, slugify(args[1]))
+		if err != nil {
 			return err
-		}
-		if _, err := os.Stat(dir); err == nil {
-			return fmt.Errorf("worktree already exists: %s", dir)
-		}
-		branch := "hackathonkit/" + slug
-		if err := runGit(root, "worktree", "add", "-b", branch, dir); err != nil {
-			// Branch may already exist; retry without creating it.
-			if err := runGit(root, "worktree", "add", dir, branch); err != nil {
-				return err
-			}
 		}
 		fmt.Println(dir)
 		return nil
 	case "remove":
 		if len(args) < 2 {
-			return fmt.Errorf("usage: hackathonkit-ctl worktree remove <slug>")
+			return fmt.Errorf("usage: hackathonkit-ctl worktree remove <slug> [--force]")
+		}
+		force := false
+		for _, arg := range args[2:] {
+			if arg == "--force" {
+				force = true
+			}
 		}
 		dir := filepath.Join(base, slugify(args[1]))
-		return runGit(root, "worktree", "remove", "--force", dir)
+		if force {
+			return runGit(root, "worktree", "remove", "--force", dir)
+		}
+		if err := runGit(root, "worktree", "remove", dir); err != nil {
+			return fmt.Errorf("%w (use --force to discard local changes)", err)
+		}
+		return nil
 	default:
 		return fmt.Errorf("unknown worktree subcommand %q", args[0])
 	}
+}
+
+// addWorktree creates a git worktree for a run, retrying without -b when the
+// branch already exists (the same behaviour the `worktree create` command had).
+func addWorktree(root, name string) (string, error) {
+	base := filepath.Join(root, "data", "worktrees")
+	dir := filepath.Join(base, name)
+	if err := os.MkdirAll(base, 0o755); err != nil {
+		return "", err
+	}
+	if _, err := os.Stat(dir); err == nil {
+		return "", fmt.Errorf("worktree already exists: %s", dir)
+	}
+	branch := "hackathonkit/" + name
+	if err := runGit(root, "worktree", "add", "-b", branch, dir); err != nil {
+		if err := runGit(root, "worktree", "add", dir, branch); err != nil {
+			return "", err
+		}
+	}
+	return dir, nil
 }
 
 func newCommand(name string, args ...string) *exec.Cmd {
@@ -294,11 +315,8 @@ func cmdRun(args []string) error {
 	worktree := ""
 	dir := root
 	if *useWorktree {
-		wtDir := filepath.Join(root, "data", "worktrees", name)
-		if err := os.MkdirAll(filepath.Dir(wtDir), 0o755); err != nil {
-			return err
-		}
-		if err := runGit(root, "worktree", "add", "-b", "hackathonkit/"+name, wtDir); err != nil {
+		wtDir, err := addWorktree(root, name)
+		if err != nil {
 			return err
 		}
 		worktree = wtDir
@@ -308,6 +326,9 @@ func cmdRun(args []string) error {
 	if err := store.UpsertSession(ctx, control.Session{
 		ID: sessionID, Root: root, Kind: "agent", Task: *task, Status: "active", Worktree: worktree,
 	}); err != nil {
+		if worktree != "" {
+			_ = runGit(root, "worktree", "remove", "--force", worktree)
+		}
 		return err
 	}
 	_ = store.AppendEvent(ctx, control.Event{SessionID: sessionID, Type: "agent_start", Payload: map[string]any{"task": *task, "dir": dir}})

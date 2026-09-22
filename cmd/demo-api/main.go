@@ -80,10 +80,8 @@ func newHandler(root string, mgr *config.Manager, meta metadata.Recorder, token 
 			http.Error(w, "static page missing", http.StatusInternalServerError)
 			return
 		}
-		quoted, _ := json.Marshal(token)
-		rendered := strings.ReplaceAll(string(page), `"__HACKATHONKIT_DEMO_TOKEN__"`, string(quoted))
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		_, _ = w.Write([]byte(rendered))
+		_, _ = w.Write(page)
 	})
 	mux.HandleFunc("/fly-model-list", func(w http.ResponseWriter, r *http.Request) {
 		base := filepath.Join(root, "data", "fly-viz", "neuromechfly")
@@ -181,7 +179,7 @@ func newHandler(root string, mgr *config.Manager, meta metadata.Recorder, token 
 			return
 		}
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		_, _ = w.Write([]byte(strings.ReplaceAll(string(page), "__HACKATHONKIT_DEMO_TOKEN__", token)))
+		_, _ = w.Write(page)
 	})
 	mux.HandleFunc("/plan/api/latest", func(w http.ResponseWriter, r *http.Request) {
 		plan, ok := plans.Latest(root)
@@ -199,12 +197,7 @@ func newHandler(root string, mgr *config.Manager, meta metadata.Recorder, token 
 			writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"error": "method not allowed"})
 			return
 		}
-		if !originAllowed(r) {
-			writeJSON(w, http.StatusForbidden, map[string]any{"error": "forbidden origin"})
-			return
-		}
-		if token != "" && subtle.ConstantTimeCompare([]byte(r.Header.Get("X-HackathonKit-Token")), []byte(token)) != 1 {
-			writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "missing or invalid X-HackathonKit-Token"})
+		if !authorizeMutation(w, r, token) {
 			return
 		}
 		var body struct {
@@ -257,12 +250,7 @@ func newHandler(root string, mgr *config.Manager, meta metadata.Recorder, token 
 		case http.MethodGet:
 			writeJSON(w, http.StatusOK, mgr.Routing())
 		case http.MethodPost:
-			if !originAllowed(r) {
-				writeJSON(w, http.StatusForbidden, map[string]any{"error": "forbidden origin"})
-				return
-			}
-			if token != "" && r.Header.Get("X-HackathonKit-Token") != token {
-				writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "missing or invalid X-HackathonKit-Token"})
+			if !authorizeMutation(w, r, token) {
 				return
 			}
 			var body struct {
@@ -430,6 +418,28 @@ func listFiles(mgr *config.Manager, relDir string) ([]fileInfo, error) {
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Path < out[j].Path })
 	return out, err
+}
+
+// authorizeMutation guards state-changing endpoints. With a configured token
+// the header must match (constant time); without one, browser-driven mutations
+// still require a loopback Origin so a random page cannot POST to the daemon.
+func authorizeMutation(w http.ResponseWriter, r *http.Request, token string) bool {
+	if !originAllowed(r) {
+		writeJSON(w, http.StatusForbidden, map[string]any{"error": "forbidden origin"})
+		return false
+	}
+	if token == "" {
+		if r.Header.Get("Origin") == "" {
+			writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "set HACKATHONKIT_DEMO_TOKEN or send a loopback Origin header"})
+			return false
+		}
+		return true
+	}
+	if subtle.ConstantTimeCompare([]byte(r.Header.Get("X-HackathonKit-Token")), []byte(token)) != 1 {
+		writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "missing or invalid X-HackathonKit-Token"})
+		return false
+	}
+	return true
 }
 
 func originAllowed(r *http.Request) bool {

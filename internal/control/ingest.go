@@ -12,10 +12,11 @@ import (
 )
 
 type IngestResult struct {
-	Sessions int `json:"sessions"`
-	Events   int `json:"events"`
-	Files    int `json:"files"`
-	Risk     int `json:"risk_updated"`
+	Sessions int      `json:"sessions"`
+	Events   int      `json:"events"`
+	Files    int      `json:"files"`
+	Risk     int      `json:"risk_updated"`
+	Rotated  []string `json:"rotated,omitempty"`
 }
 
 // Ingest replays the append-only JSONL streams into SQLite using per-file byte
@@ -33,9 +34,12 @@ func (s *Store) Ingest(ctx context.Context, root string) (IngestResult, error) {
 		{"fly-feedback", filepath.Join(root, "logs", "fly-feedback.jsonl"), s.handleFlyFeedbackRecord},
 	}
 	for _, source := range jsonl {
-		count, err := s.ingestJSONL(ctx, source.name, source.path, source.handle)
+		count, rotated, err := s.ingestJSONL(ctx, source.name, source.path, source.handle)
 		if err != nil {
 			return res, err
+		}
+		if rotated {
+			res.Rotated = append(res.Rotated, source.name)
 		}
 		if count > 0 {
 			res.Files++
@@ -63,37 +67,39 @@ func (s *Store) Ingest(ctx context.Context, root string) (IngestResult, error) {
 	return res, nil
 }
 
-func (s *Store) ingestJSONL(ctx context.Context, name, path string, handle func(context.Context, map[string]any) error) (int, error) {
+func (s *Store) ingestJSONL(ctx context.Context, name, path string, handle func(context.Context, map[string]any) error) (int, bool, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return 0, nil
+			return 0, false, nil
 		}
-		return 0, err
+		return 0, false, err
 	}
 	defer f.Close()
 	info, err := f.Stat()
 	if err != nil {
-		return 0, err
+		return 0, false, err
 	}
 	offset, err := s.Cursor(ctx, name)
 	if err != nil {
-		return 0, err
+		return 0, false, err
 	}
+	rotated := false
 	if offset > info.Size() {
 		offset = 0
+		rotated = true
 	}
 	// Read only the tail after the cursor: these logs grow unbounded.
 	if _, err := f.Seek(offset, io.SeekStart); err != nil {
-		return 0, err
+		return 0, false, err
 	}
 	data, err := io.ReadAll(f)
 	if err != nil {
-		return 0, err
+		return 0, false, err
 	}
 	chunk := data
 	if len(chunk) == 0 {
-		return 0, nil
+		return 0, false, nil
 	}
 	count := 0
 	consumed := 0
@@ -121,17 +127,17 @@ func (s *Store) ingestJSONL(ctx context.Context, name, path string, handle func(
 			if lastGood > 0 {
 				_ = s.SetCursor(ctx, name, offset+int64(lastGood))
 			}
-			return count, err
+			return count, false, err
 		}
 		count++
 		lastGood = consumed
 	}
 	if consumed > 0 {
 		if err := s.SetCursor(ctx, name, offset+int64(consumed)); err != nil {
-			return count, err
+			return count, false, err
 		}
 	}
-	return count, nil
+	return count, rotated, nil
 }
 
 func (s *Store) handleSessionRecord(ctx context.Context, rec map[string]any) error {

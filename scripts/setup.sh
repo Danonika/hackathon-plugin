@@ -71,16 +71,25 @@ mkdir -p "$ROOT/logs" "$ROOT/evals" "$ROOT/data/artifacts" "$ROOT/data/index" "$
 
 RUNTIME="binary"
 if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
-  RUNTIME="docker"
-  docker compose -f "$ROOT/docker-compose.yml" build hackathonkit-mcp
-  docker compose -f "$ROOT/docker-compose.yml" up -d postgres redis minio
-  echo "[setup] MCP image built, infrastructure started"
-else
-  echo "[setup] docker engine unavailable; building local binaries instead"
+  if docker compose -f "$ROOT/docker-compose.yml" build hackathonkit-mcp &&
+    docker compose -f "$ROOT/docker-compose.yml" up -d postgres redis minio; then
+    RUNTIME="docker"
+    echo "[setup] MCP image built, infrastructure started"
+  else
+    echo "[setup] docker path failed; falling back to local binaries" >&2
+  fi
+fi
+
+if [ "$RUNTIME" = "binary" ]; then
+  if ! command -v go >/dev/null 2>&1; then
+    echo "[setup] no docker engine and no Go toolchain; install Go or start Docker" >&2
+    exit 1
+  fi
+  echo "[setup] building local binaries"
   mkdir -p "$ROOT/bin"
-  go build -o bin/hackathonkit-mcp ./cmd/hackathonkit-mcp
-  go build -o bin/hackathonkit-demo-api ./cmd/demo-api
-  go build -o bin/hackathonkit-ctl ./cmd/hackathonkit-ctl
+  (cd "$ROOT" && go build -o bin/hackathonkit-mcp ./cmd/hackathonkit-mcp)
+  (cd "$ROOT" && go build -o bin/hackathonkit-demo-api ./cmd/demo-api)
+  (cd "$ROOT" && go build -o bin/hackathonkit-ctl ./cmd/hackathonkit-ctl)
   echo "[setup] local binaries built in bin/"
 fi
 

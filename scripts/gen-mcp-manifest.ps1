@@ -28,7 +28,7 @@ $rootJson = $rootJson.Substring(1, $rootJson.Length - 2)
 $manifest = $template.Replace("{{REPO_ROOT}}", $rootJson).Replace("{{MCP_LAUNCHER}}", "hackathonkit-mcp-launcher.cmd")
 
 $manifestPath = Join-Path $Root "plugins\hackathonkit\.mcp.json"
-$manifestTmp = "$manifestPath.tmp"
+$manifestTmp = "$manifestPath.tmp.$PID"
 try {
   [System.IO.File]::WriteAllText($manifestTmp, $manifest, (New-Object System.Text.UTF8Encoding($false)))
   if ((Get-Content -LiteralPath $manifestTmp -Raw) -match "\{\{") {

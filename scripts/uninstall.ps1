@@ -40,6 +40,22 @@ foreach ($rel in $targets) {
     $Failures++
     continue
   }
+  if ($rel -in @(".agents\skills", ".claude\skills")) {
+    # Shared skill directories: remove only the skills this plugin ships so
+    # user-authored skills survive.
+    $src = Join-Path $root "plugins\hackathonkit\skills"
+    if (-not (Test-Path -LiteralPath $src)) { continue }
+    foreach ($skill in Get-ChildItem -LiteralPath $src -Directory) {
+      $skillTarget = Join-Path $target $skill.Name
+      if ($Yes) {
+        try { if (Test-Path -LiteralPath $skillTarget) { Remove-Item -LiteralPath $skillTarget -Recurse -Force -ErrorAction Stop } }
+        catch { Write-Warning "[uninstall] failed to remove ${rel}\$($skill.Name): $($_.Exception.Message)"; $Failures++ }
+      } else {
+        Write-Host "would remove: $rel\$($skill.Name)"
+      }
+    }
+    continue
+  }
   if ($Yes) {
     try {
       if (Test-Path -LiteralPath $target) { Remove-Item -LiteralPath $target -Recurse -Force -ErrorAction Stop }

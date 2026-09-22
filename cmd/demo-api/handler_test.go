@@ -94,9 +94,13 @@ func TestStaticPages(t *testing.T) {
 		}
 	}
 
-	planPage := doRequest(t, h, http.MethodGet, "/plan", "", nil)
-	if body := planPage.Body.String(); !strings.Contains(body, `"s3cret"`) || strings.Contains(body, "__HACKATHONKIT_DEMO_TOKEN__") {
-		t.Fatalf("plan page token was not substituted")
+	// The token must never be baked into the served pages: operators enter it
+	// in the page and it is kept in sessionStorage.
+	for _, path := range []string{"/", "/plan", "/control", "/fly-viz"} {
+		page := doRequest(t, h, http.MethodGet, path, "", nil)
+		if body := page.Body.String(); strings.Contains(body, "s3cret") || strings.Contains(body, "__HACKATHONKIT_DEMO_TOKEN__") {
+			t.Fatalf("GET %s leaks or embeds the demo token", path)
+		}
 	}
 
 	rec := doRequest(t, h, http.MethodGet, "/does-not-exist", "", nil)
@@ -341,7 +345,7 @@ func TestPlanDecisionApprovalWriteFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 	writeTestFile(t, filepath.Join(approvalPath(root, "broken-plan"), "keep"), "x")
-	rec := doRequest(t, h, http.MethodPost, "/plan/decision", `{"decision":"approve"}`, nil)
+	rec := doRequest(t, h, http.MethodPost, "/plan/decision", `{"decision":"approve"}`, map[string]string{"Origin": "http://127.0.0.1:8787"})
 	if rec.Code != http.StatusInternalServerError {
 		t.Fatalf("decision with blocked approval path = %d, want 500: %s", rec.Code, rec.Body.String())
 	}
@@ -651,5 +655,19 @@ func TestPlanDecisionRevisionGuard(t *testing.T) {
 	rec = doRequest(t, h, http.MethodPost, "/plan/decision", `{"slug":"rev-plan","decision":"approve","revision":3}`, map[string]string{"X-HackathonKit-Token": "s3cret"})
 	if rec.Code != http.StatusOK {
 		t.Fatalf("matching revision = %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestMutationWithoutTokenRequiresOrigin(t *testing.T) {
+	root := t.TempDir()
+	h := testHandler(root, config.NewManager(root), metadata.Disabled{}, "")
+	if err := plans.Save(root, plans.Plan{Slug: "origin-plan", Stages: plans.DefaultStages, Revision: 1}); err != nil {
+		t.Fatal(err)
+	}
+	if rec := doRequest(t, h, http.MethodPost, "/plan/decision", `{"decision":"approve"}`, nil); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("header-less POST = %d, want 401", rec.Code)
+	}
+	if rec := doRequest(t, h, http.MethodPost, "/plan/decision", `{"decision":"approve"}`, map[string]string{"Origin": "http://127.0.0.1:8787"}); rec.Code != http.StatusOK {
+		t.Fatalf("loopback-origin POST = %d, want 200: %s", rec.Code, rec.Body.String())
 	}
 }

@@ -41,15 +41,24 @@ if (Test-Path -LiteralPath $binary) {
     if (-not $Quiet) { Write-Host "[smoke] no MCP runtime available (build bin/ or start docker)" }
     exit 1
   }
-  Push-Location $root
+  $inFile = [System.IO.Path]::GetTempFileName()
+  $outFile = [System.IO.Path]::GetTempFileName()
   try {
-    $output = $requests | docker compose -f (Join-Path $root "docker-compose.yml") run --rm -T hackathonkit-mcp 2>$null
-    if ($LASTEXITCODE -ne 0) {
-      if (-not $Quiet) { Write-Host "[smoke] docker compose exited with code $LASTEXITCODE" }
+    Set-Content -LiteralPath $inFile -Value $requests -NoNewline
+    $proc = Start-Process -FilePath "docker" -ArgumentList @("compose", "-f", (Join-Path $root "docker-compose.yml"), "run", "--rm", "-T", "hackathonkit-mcp") `
+      -WorkingDirectory $root -RedirectStandardInput $inFile -RedirectStandardOutput $outFile -PassThru -NoNewWindow
+    if (-not $proc.WaitForExit(120000)) {
+      $proc.Kill()
+      if (-not $Quiet) { Write-Host "[smoke] docker compose timed out after 120s" }
       exit 1
     }
+    if ($proc.ExitCode -ne 0) {
+      if (-not $Quiet) { Write-Host "[smoke] docker compose exited with code $($proc.ExitCode)" }
+      exit 1
+    }
+    $output = Get-Content -LiteralPath $outFile
   } finally {
-    Pop-Location
+    Remove-Item -LiteralPath $inFile, $outFile -Force -ErrorAction SilentlyContinue
   }
 }
 

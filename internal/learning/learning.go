@@ -136,6 +136,15 @@ func (s *Store) Record(ctx context.Context, in RecordInput) (RecordResult, error
 		return RecordResult{}, fmt.Errorf("invalid scope %q: expected project or global", in.Scope)
 	}
 
+	// Embed before taking the lock: the embedder can be a network client and
+	// must not block other store operations while it runs.
+	var vector []float64
+	if s.embedder != nil {
+		if v, err := s.embed(ctx, trigger+" "+insight); err == nil {
+			vector = v
+		}
+	}
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -183,14 +192,12 @@ func (s *Store) Record(ctx context.Context, in RecordInput) (RecordResult, error
 		doc.Learnings = append(doc.Learnings, l)
 		result.Learning = l
 	}
-	if s.embedder != nil {
-		if vector, err := s.embed(ctx, trigger+" "+insight); err == nil {
-			for i := range doc.Learnings {
-				if doc.Learnings[i].ID == result.Learning.ID {
-					doc.Learnings[i].Vector = vector
-					result.Learning.Vector = vector
-					break
-				}
+	if vector != nil {
+		for i := range doc.Learnings {
+			if doc.Learnings[i].ID == result.Learning.ID {
+				doc.Learnings[i].Vector = vector
+				result.Learning.Vector = vector
+				break
 			}
 		}
 	}

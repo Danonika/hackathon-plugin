@@ -35,6 +35,29 @@ function looksLikeRepo(dir) {
   }
 }
 
+// Environment-supplied roots are untrusted: require this repo's own marker.
+function isHackathonKitRepo(dir) {
+  if (!looksLikeRepo(dir)) return false;
+  try {
+    return fs.existsSync(path.join(dir, "plugins", "hackathonkit", "scripts", "hooks.js"));
+  } catch (_) {
+    return false;
+  }
+}
+
+// Never execute a binary that another user could replace.
+function safeBinary(root, name) {
+  try {
+    const bin = path.join(root, "bin", name);
+    const st = fs.statSync(bin);
+    if (!st.isFile()) return "";
+    if (st.mode & 0o002) return "";
+    return bin;
+  } catch (_) {
+    return "";
+  }
+}
+
 function findRepoUp(start) {
   let dir = start;
   for (let i = 0; i < 8; i += 1) {
@@ -53,11 +76,13 @@ function findRepoUp(start) {
 function repoRoot() {
   const candidates = [];
   if (process.env.HACKATHONKIT_REPO_ROOT) {
-    candidates.push(path.resolve(process.env.HACKATHONKIT_REPO_ROOT));
+    const envRoot = path.resolve(process.env.HACKATHONKIT_REPO_ROOT);
+    if (isHackathonKitRepo(envRoot)) candidates.push(envRoot);
   }
   candidates.push(findRepoUp(process.cwd()));
   if (process.env.PLUGIN_ROOT) {
-    candidates.push(path.resolve(process.env.PLUGIN_ROOT, "..", ".."));
+    const pluginRoot = path.resolve(process.env.PLUGIN_ROOT, "..", "..");
+    if (isHackathonKitRepo(pluginRoot)) candidates.push(pluginRoot);
   }
   for (const candidate of candidates) {
     if (looksLikeRepo(candidate)) return candidate;
@@ -221,14 +246,13 @@ function binaryContext() {
       ? ["hackathonkit-mcp.exe", "hackathonkit-mcp"]
       : ["hackathonkit-mcp", "hackathonkit-mcp.exe"];
   for (const name of names) {
-    const bin = path.join(ROOT, "bin", name);
+    const bin = safeBinary(ROOT, name);
+    if (!bin) continue;
     try {
-      if (fs.existsSync(bin) && fs.statSync(bin).isFile()) {
-        return execFileSync(bin, ["--repo-root", ROOT, "--session-context"], {
-          timeout: 15000,
-          encoding: "utf8",
-        });
-      }
+      return execFileSync(bin, ["--repo-root", ROOT, "--session-context"], {
+        timeout: 15000,
+        encoding: "utf8",
+      });
     } catch (_) {}
   }
   try {

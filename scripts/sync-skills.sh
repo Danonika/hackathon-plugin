@@ -20,8 +20,12 @@ mkdir -p "$TMP"
 cp -R "$SRC/." "$TMP/"
 
 COUNT_DST=$(find "$TMP" -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')
-if [ "$COUNT_SRC" != "$COUNT_DST" ]; then
-  echo "[sync-skills] skill count mismatch: $COUNT_SRC source, $COUNT_DST copied" >&2
+FILES_SRC=$(find "$SRC" -type f | wc -l | tr -d ' ')
+FILES_DST=$(find "$TMP" -type f | wc -l | tr -d ' ')
+SKILLS_SRC=$(find "$SRC" -name SKILL.md | wc -l | tr -d ' ')
+SKILLS_DST=$(find "$TMP" -name SKILL.md | wc -l | tr -d ' ')
+if [ "$COUNT_SRC" != "$COUNT_DST" ] || [ "$FILES_SRC" != "$FILES_DST" ] || [ "$SKILLS_SRC" != "$SKILLS_DST" ]; then
+  echo "[sync-skills] mirror mismatch: dirs $COUNT_SRC/$COUNT_DST files $FILES_SRC/$FILES_DST SKILL.md $SKILLS_SRC/$SKILLS_DST" >&2
   exit 1
 fi
 

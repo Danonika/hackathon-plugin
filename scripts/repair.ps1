@@ -14,6 +14,7 @@ Write-Host "[repair] repository root: $root"
 $global:LASTEXITCODE = 0
 & (Join-Path $root "scripts\sync-harness.ps1")
 if ($LASTEXITCODE -ne 0) { Write-Error "[repair] sync-harness failed"; exit 1 }
+$global:LASTEXITCODE = 0
 & (Join-Path $root "scripts\gen-mcp-manifest.ps1") -Root $root
 if ($LASTEXITCODE -ne 0) { Write-Error "[repair] manifest generation failed"; exit 1 }
 New-Item -ItemType Directory -Force -Path (Join-Path $root "logs"), (Join-Path $root "evals"), (Join-Path $root "data\artifacts"), (Join-Path $root "data\index"), (Join-Path $root "data\control"), (Join-Path $root "data\judge-bundles") | Out-Null
@@ -43,7 +44,8 @@ if (-not (Test-Path $bin) -and $runtime -eq "binary") {
     if ($LASTEXITCODE -ne 0) { Write-Error "[repair] go build hackathonkit-ctl failed"; exit 1 }
     Write-Host "[repair] rebuilt local binaries in bin/"
   } else {
-    Write-Warning "[repair] no Go toolchain and no docker engine; MCP runtime unavailable"
+    Write-Error "[repair] no Go toolchain and no docker engine; MCP runtime unavailable"
+    exit 1
   }
 }
 

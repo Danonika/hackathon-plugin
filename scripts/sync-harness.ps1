@@ -25,8 +25,17 @@ New-Item -ItemType Directory -Force -Path $ClaudeTmp | Out-Null
 try {
   Get-ChildItem -LiteralPath (Join-Path $Root "plugins\hackathonkit\skills") -Force |
     Copy-Item -Destination $ClaudeTmp -Recurse -Force
-  if (Test-Path -LiteralPath $ClaudeSkills) { Remove-Item -LiteralPath $ClaudeSkills -Recurse -Force }
-  Move-Item -LiteralPath $ClaudeTmp -Destination $ClaudeSkills -Force
+  # Move the live mirror aside before the swap so a failure cannot leave it
+  # missing or half-populated.
+  $ClaudeOld = "$ClaudeSkills.old.$PID"
+  if (Test-Path -LiteralPath $ClaudeSkills) { Move-Item -LiteralPath $ClaudeSkills -Destination $ClaudeOld -Force }
+  try {
+    Move-Item -LiteralPath $ClaudeTmp -Destination $ClaudeSkills -Force
+  } catch {
+    if (Test-Path -LiteralPath $ClaudeOld) { Move-Item -LiteralPath $ClaudeOld -Destination $ClaudeSkills -Force }
+    throw
+  }
+  if (Test-Path -LiteralPath $ClaudeOld) { Remove-Item -LiteralPath $ClaudeOld -Recurse -Force }
 } finally {
   if (Test-Path -LiteralPath $ClaudeTmp) { Remove-Item -LiteralPath $ClaudeTmp -Recurse -Force -ErrorAction SilentlyContinue }
 }
@@ -47,7 +56,7 @@ $Required = @(
 $Missing = 0
 foreach ($f in $Required) {
   if (-not (Test-Path (Join-Path $Root $f))) {
-    Write-Error "[sync-harness] missing adapter file: $f"
+    Write-Warning "[sync-harness] missing adapter file: $f"
     $Missing++
   }
 }
