@@ -87,6 +87,9 @@ Check "session hooks" (Test-Path -LiteralPath $hooksFile) $(if (Test-Path -Liter
 $verifyCmd = Join-Path $root "plugins\hackathonkit\commands\verify.md"
 Check "verify command" (Test-Path -LiteralPath $verifyCmd) $(if (Test-Path -LiteralPath $verifyCmd) { "/verify runs 7 checks incl. coverage" } else { "missing plugins/hackathonkit/commands/verify.md; run scripts/repair.ps1" })
 
+$verifyPrompt = Join-Path (Join-Path $HOME ".codex") "prompts\verify.md"
+Check "verify prompt (codex)" (Test-Path -LiteralPath $verifyPrompt) $(if (Test-Path -LiteralPath $verifyPrompt) { "installed in $HOME\.codex\prompts" } else { "not installed; run scripts/verify-prompt.ps1 install" })
+
 $agentCount = 0
 $agentsDir = Join-Path $root ".codex\agents"
 if (Test-Path -LiteralPath $agentsDir) {

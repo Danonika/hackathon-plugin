@@ -72,6 +72,13 @@ if command -v codex >/dev/null 2>&1; then
   fi
 fi
 
+# Remove the /verify custom prompt this installer placed for Codex.
+if [ "$APPLY" = "1" ]; then
+  sh "$ROOT/scripts/verify-prompt.sh" remove >/dev/null 2>&1 || true
+else
+  echo "would remove: $HOME/.codex/prompts/verify.md (if unmodified)"
+fi
+
 FAILURES=0
 for rel in \
   plugins/hackathonkit/.mcp.json \

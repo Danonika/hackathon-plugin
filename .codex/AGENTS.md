@@ -42,9 +42,10 @@ go run ./cmd/hackathonkit-ctl tui
 scripts/doctor.sh
 ```
 
-Before claiming work is done, run `/verify` (copy `.codex/prompts/verify.md` to
-`~/.codex/prompts/` once) or `scripts/quality-gate.sh`: it runs the seven gate checks
-including **test coverage** (default 80%) and reports each one.
+Before claiming work is done, run `/verify` or `scripts/quality-gate.sh`: it runs the
+seven gate checks including **test coverage** (default 80%) and reports each one.
+`scripts/setup.sh`/`repair.sh` install the prompt to `~/.codex/prompts/`; otherwise
+copy `.codex/prompts/verify.md` there once.
 
 Windows: use the `.ps1` scripts and `hackathonkit-mcp-launcher.cmd`.
 

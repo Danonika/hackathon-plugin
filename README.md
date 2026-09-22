@@ -2,7 +2,7 @@
 
 Local Codex plugin backed by a typed MCP capability layer. Codex is the main reasoning engine, Skills define domain workflows, the local MCP server exposes deterministic and AI-powered capabilities, and the experimental Fly router recommends capability routes while Codex keeps the final decision.
 
-Status: v0.16.29. MCP runtime (41 tools), 29 standard-compliant skills (validator-enforced), Go test coverage enforced at an 80% gate, session hooks, durable learnings, Codex subagents, four harness adapters, a full control plane (SQLite store, daemon, TUI, worktrees, agent runs, risk scoring, session handoff), staged build plans, PDF/XLSX processing, Fly v2 (keyword + embeddings + kNN memory + mushroom-body learning + LLM classifier), Postgres/MinIO backends, demo dashboard, install profiles/repair, a quality gate with a Go-enabled Docker target, a Fly A/B benchmark, plan review, security review, a clean-checkout rehearsal command, a resource-aware planner (API resource questionnaire, provider probes, per-track variants), a Telegram integration capability for built projects and the evaluation subsystem (deterministic aggregation, calibration, loop decisions and bundle freezing) are in place.
+Status: v0.16.30. MCP runtime (41 tools), 29 standard-compliant skills (validator-enforced), Go test coverage enforced at an 80% gate, session hooks, durable learnings, Codex subagents, four harness adapters, a full control plane (SQLite store, daemon, TUI, worktrees, agent runs, risk scoring, session handoff), staged build plans, PDF/XLSX processing, Fly v2 (keyword + embeddings + kNN memory + mushroom-body learning + LLM classifier), Postgres/MinIO backends, demo dashboard, install profiles/repair, a quality gate with a Go-enabled Docker target, a Fly A/B benchmark, plan review, security review, a clean-checkout rehearsal command, a resource-aware planner (API resource questionnaire, provider probes, per-track variants), a Telegram integration capability for built projects and the evaluation subsystem (deterministic aggregation, calibration, loop decisions and bundle freezing) are in place.
 
 ## Contents
 
@@ -578,9 +578,9 @@ Sample dataset: `data/input/sample-telemetry.csv` (72 hourly readings with two p
 
 The plugin ships `/verify` (canonical source `plugins/hackathonkit/commands/verify.md`):
 
-- **Claude Code**: declared via `"commands"` in `.claude-plugin/plugin.json`.
-- **OpenCode**: mirrored to `.opencode/commands/verify.md` by `scripts/sync-harness.sh` (also `.claude/commands/verify.md` for repo-local use).
-- **Codex**: `.codex/prompts/verify.md`; copy it to `~/.codex/prompts/` to use `/verify`.
+- **Claude Code**: declared via `"commands"` in `.claude-plugin/plugin.json`, so it travels with the plugin install.
+- **OpenCode / project Claude**: `scripts/setup.sh` (via `scripts/sync-harness.sh`) mirrors it to `.opencode/commands/verify.md` and `.claude/commands/verify.md`.
+- **Codex**: Codex plugins can bundle skills, MCP servers and hooks but not slash commands, so `scripts/setup.sh`/`repair.sh` install `.codex/prompts/verify.md` into `$CODEX_HOME/prompts/` (default `~/.codex/prompts/`); `scripts/uninstall.sh` removes it.
 - **Cursor**: the rule in `.cursor/rules/hackathonkit.mdc` tells the agent to run the gate before claiming done.
 
 `/verify` runs `scripts/quality-gate.sh` (seven checks: gofmt, build, vet, test, **coverage**, selftest, skills), reads the `quality.gate` evidence and reports every check by name. `/verify --target N` overrides the coverage threshold for that run (`HACKATHONKIT_COVERAGE_TARGET`). A failed, stale or missing gate blocks a `verified` claim; coverage below target fails the gate.

@@ -4,6 +4,11 @@
 set -e
 ROOT="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
 CMD="$ROOT/plugins/hackathonkit/commands/verify.md"
+TMPHOME="$(mktemp -d)"
+cleanup_vc_test() { rm -rf "$TMPHOME"; }
+trap cleanup_vc_test 0
+trap 'cleanup_vc_test; exit 130' INT
+trap 'cleanup_vc_test; exit 143' TERM
 FAIL=0
 
 check() {
@@ -61,6 +66,22 @@ for mirror in "$ROOT/.opencode/commands/verify.md" "$ROOT/.claude/commands/verif
     check "mirror $rel matches the canonical file" 0 "missing or stale; run scripts/sync-harness.sh"
   fi
 done
+
+# The Codex prompt installer places /verify in $CODEX_HOME/prompts.
+check "setup installs the Codex prompt" "$(grep -q 'verify-prompt.sh' "$ROOT/scripts/setup.sh" 2>/dev/null && echo 1 || echo 0)"
+CODEX_HOME="$TMPHOME" sh "$ROOT/scripts/verify-prompt.sh" install >/dev/null 2>&1
+check "prompt installer writes the Codex prompt" "$([ -f "$TMPHOME/prompts/verify.md" ] && echo 1 || echo 0)"
+if CODEX_HOME="$TMPHOME" sh "$ROOT/scripts/verify-prompt.sh" status >/dev/null 2>&1; then
+  check "prompt installer reports installed" 1
+else
+  check "prompt installer reports installed" 0 "status failed after install"
+fi
+printf '\ncustom edit\n' >> "$TMPHOME/prompts/verify.md"
+CODEX_HOME="$TMPHOME" sh "$ROOT/scripts/verify-prompt.sh" remove >/dev/null 2>&1
+check "prompt installer preserves a user-modified prompt" "$([ -f "$TMPHOME/prompts/verify.md" ] && echo 1 || echo 0)"
+CODEX_HOME="$TMPHOME" sh "$ROOT/scripts/verify-prompt.sh" install >/dev/null 2>&1
+CODEX_HOME="$TMPHOME" sh "$ROOT/scripts/verify-prompt.sh" remove >/dev/null 2>&1
+check "prompt installer removes an unmodified prompt" "$([ -f "$TMPHOME/prompts/verify.md" ] && echo 0 || echo 1)"
 
 if [ "$FAIL" -ne 0 ]; then
   echo "[verify-command-test] $FAIL assertion(s) failed"
