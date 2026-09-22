@@ -5,11 +5,11 @@ Durable state for resuming after `/compact` or in a new session. Read this and
 
 ## Where we are
 
-- Latest release: **v0.16.16**, pushed. Previous: v0.13.0–v0.16.15.
+- Latest release: **v0.16.17**, pushed. Previous: v0.13.0–v0.16.16.
 - Scan 2 register: **408/416 fixed** (8 lows annotated reviewed-intentional).
 - Scan 3 (final verification, 421 findings): all 5 criticals + 29 highs fixed
-  (v0.16.14); 53 mediums fixed (v0.16.15–v0.16.16). **Current backlog:
-  150 S3 mediums + 184 S3 lows** (S3-M*/S3-L* in `docs/REVIEW-BACKLOG.md`).
+  (v0.16.14); 90 mediums fixed (v0.16.15–v0.16.17). **Current backlog:
+  113 S3 mediums + 184 S3 lows** (S3-M*/S3-L* in `docs/REVIEW-BACKLOG.md`).
 - Regenerate historical findings with `ocr scan`.
 - Every release passed: gofmt/build/vet, `go test ./...`, coverage ≥80%,
   quality gate 7/7, hooks + env-set + smoke tests, Windows cross-vet, and
