@@ -40,14 +40,22 @@ const SPEECH = {
     "This hackathon is mine!",
     "First place? Obviously.",
     "I'm the best here!",
-    "Sweet victory!"
+    "Sweet victory!",
+    "I came, I saw, I buzzed.",
+    "The other teams can go home.",
+    "Judge, blink twice if you're impressed.",
+    "Jury, are you taking notes?",
+    "My 4133 neurons all say: winner."
   ],
   pain: [
     "I need this job.",
     "I have a family at home.",
     "Please, give me one more chance.",
     "I should work harder.",
-    "Don't give up on me."
+    "Don't give up on me.",
+    "I need this job more than you need this demo.",
+    "Don't fire me — I just learned to walk.",
+    "I can't go back to the dumpster."
   ],
   idle: 'I can do better'
 };
