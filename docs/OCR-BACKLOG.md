@@ -4,28 +4,30 @@ Source: `ocr scan` - 420 findings across 126 files.
 
 Workflow: fix one at a time, commit each, push, then re-run OCR against the commit. `[ ]` = open, `[x]` = fixed.
 
+Progress: **16 of 359** fixed and verified (`prior revision..prior revision` -> 0 OCR findings). Commits v0.16.32..v0.16.50.
+
 - Actionable: **359** | Skipped (fly frontend being replaced): **61**
 
 ## CRITICAL
 
-- [ ] **OCR-001** `scripts/repair.sh:50` _bug_
+- [x] **OCR-001** `scripts/repair.sh:50` _bug_
   `mktemp` creates files with mode 0600, and when `go build -o <file>` writes into an *existing* file it does not change that file's mode. The three `mv` calls therefore install binaries with mode 0600, i.e. without the execute bit. Consequences: the `[ ! -x ... ]` guard at the top stays true on every subsequent run (permanent rebuild loop), and the MCP/demo runtime cannot be executed. Add an explicit `chmod` before (or after) the move.
 
-- [ ] **OCR-002** `scripts/sync-skills.ps1:127` _bug_
+- [x] **OCR-002** `scripts/sync-skills.ps1:127` _bug_
   Cleanup in `sync-skills.ps1` deletes artifacts without verifying ownership: the lock is removed unconditionally in `finally` (it may have been evicted and re-acquired by another run), and the orphan sweep deletes every `.tmp.*`/`.old.*`/`.lock.stale.*` directory by name only (the embedded PID is ignored), so a concurrent instance's in-progress temp directory or live-mirror backup can be destroyed. Record an owner token inside the lock and restrict cleanup to artifacts this run owns (or skip names whose PID is a live process).
 
 ## HIGH
 
-- [ ] **OCR-003** `.codex/agents/evaluator.toml:15` _security_
+- [x] **OCR-003** `.codex/agents/evaluator.toml:15` _security_
   `network_access` is not a documented top-level Codex config key — network access is configured inside the `[sandbox_workspace_write]` table. At top level (and with `sandbox_mode = "read-only"`) this key is likely an unknown field that is silently ignored by the parser (or rejected by the schema). If ignored, the header comment's claim that "network access is disabled explicitly" is false and the agent can still reach the network while ingesting attacker-controllable artifacts. Verify against the config schema; if the key is not honoured in read-only mode, remove the false claim and document the residual risk instead of asserting an explicit denial. The same pattern appears in both `evaluator.toml` and `reviewer.toml`.
 
-- [ ] **OCR-004** `.codex/config.toml:27` _bug_
+- [x] **OCR-004** `.codex/config.toml:27` _bug_
   `git rev-parse --show-toplevel` is evaluated in the Codex process cwd, but per this file's own comment Codex loads this config from any subdirectory. The `|| echo .` fallback then resolves to `<cwd>/../../..` — a directory unrelated to the repo root. Because the launcher `exec`s whatever binary it finds at the derived root, an unresolved root is also an arbitrary-code-execution vector (see H31/M10 in docs/REVIEW-BACKLOG.md). Pin an absolute repo root the way the generated `plugins/hackathonkit/.mcp.json` does, or make the launcher fail clearly when the root cannot be resolved.
 
-- [ ] **OCR-005** `.dockerignore:4` _security_
+- [x] **OCR-005** `.dockerignore:4` _security_
   `.env*` is anchored at the build-context root: in `.dockerignore`, `*` does not cross `/` and patterns are matched against the full path relative to the context root (that's why Docker's own docs use `*/temp*` and `*/*/temp*`). So nested secret files such as `plugins/x/.env`, `cmd/api/.env.local` or `web/.env.production` are NOT excluded and will be shipped to the builder through the `COPY . .` step. The presence of `!**/.env.example` right below shows nested env files were intended to be covered. Use `**/.env*` so all depths are matched.
 
-- [ ] **OCR-006** `cmd/fly-train/main.go:165` _bug_
+- [x] **OCR-006** `cmd/fly-train/main.go:165` _bug_
   The feedback rebuild wires the router differently from every live call site: `cmd/hackathonkit-mcp/main.go:279` (and `cmd/fly-bench/main.go:111`) use `WithEmbeddings(fly.NewChainEmbedder(oa, fly.NewHashEncoder(512)), …, cfg.OpenAI.EmbeddingModel+"+hash512")`, while this path passes the raw `*openai.Client` and the bare model name. Two consequences:
   
   1. `AddFeedback` stamps the memory file with `r.modelTag` (= `cfg.OpenAI.EmbeddingModel`), but the live router compares `mem.Model != r.modelTag` before using a stored vector (`memoryCategoryScores`) and prunes vectors whose model tag differs. Every vector written by this rebuild is therefore treated as stale/incompatible by the running router — the rebuild reports success but contributes no knn signal (and is wiped on the next live feedback).
@@ -33,38 +35,38 @@ Workflow: fix one at a time, commit each, push, then re-run OCR against the comm
   
   Pass the same `fly.Embedder` (and the `+hash512` tag) that the live router uses, e.g. change the parameter to the chain embedder built in `run`.
 
-- [ ] **OCR-007** `cmd/hackathonkit-ctl/tui.go:64` _bug_
+- [x] **OCR-007** `cmd/hackathonkit-ctl/tui.go:64` _bug_
   `gen` is dropped on the Sessions-failure path: the returned `loadedMsg` has `gen == 0`, so the supersession check in `applyLoaded` (`msg.gen != 0 && msg.gen < m.gen`) never discards it. A stale/failing in-flight load can therefore overwrite `m.err` even after a newer load already succeeded (e.g. an old request times out and clobbers the fresh result, blanking the view). Carry `gen` on the error path and compare unconditionally — the initial load uses `gen == 0` and `m.gen == 0`, so `msg.gen < m.gen` still lets it through.
 
-- [ ] **OCR-008** `internal/learning/learning.go:430` _bug_
+- [x] **OCR-008** `internal/learning/learning.go:430` _bug_
   The unlock callback removes `lockPath` unconditionally, without verifying that this process still owns it. If the lock was reclaimed as stale by another process (which then created its own lock file) while this process was still in its critical section, `unlock()` deletes the *rival's* lock. Two writers can then run load-modify-save concurrently and lose an update. The lock file already records the owner PID on creation — use it to make the removal conditional (e.g. read the file back and only remove when it still contains this PID/token).
 
-- [ ] **OCR-009** `internal/learning/learning.go:436` _bug_
+- [x] **OCR-009** `internal/learning/learning.go:436` _bug_
   Stale-lock reclamation is based solely on the lock file's mtime, which is never refreshed while the lock is held. Any writer whose load-modify-save takes longer than 30s (large store, slow disk/NFS, suspended process) has its lock deleted by a peer, so two processes can enter the critical section simultaneously. The owner PID written into the lock is available but never consulted — check that the recorded process is actually gone (or refresh the mtime via a heartbeat) before reclaiming.
 
-- [ ] **OCR-010** `internal/routing/fly/embed.go:152` _bug_
+- [x] **OCR-010** `internal/routing/fly/embed.go:152` _bug_
   When every centroid mismatches the task-vector dimension, the function returns `false` but leaves `r.centroids` populated, so the embedding signal is permanently disabled for the process lifetime and the poisoned cache is never rebuilt.
   
   Reachability: the production `ChainEmbedder` returns 512-dim `HashEncoder` vectors when the primary (e.g. 1536-dim OpenAI) fails, and 1536-dim vectors once it recovers — under a single shared `modelTag`. If the exemplar batch ever falls back, `buildCentroids` persists a self-consistent `Dims: 512` cache that `cacheDimsMatch` happily accepts (both on load and on later restarts). Subsequent task vectors are 1536-dim, every centroid is skipped here, `sims` stays empty, and `ensureCentroids` keeps returning the bad cache forever (it is never cleared), so routing silently loses the embedding signal with no recovery path.
   
   Consider invalidating the cached centroids when all of them are dimension-mismatched (and not re-accepting the on-disk cache) so a rebuild can happen.
 
-- [ ] **OCR-011** `internal/routing/fly/hash_encoder.go:101` _bug_
+- [x] **OCR-011** `internal/routing/fly/hash_encoder.go:101` _bug_
   The fallback result is returned without validating its length, unlike the primary path which explicitly rejects `len(vectors) != len(texts)`. A misbehaving fallback therefore silently yields a vector/label count mismatch that the primary contract forbids; callers such as `embed.go` zip vectors with their inputs, so this can drop or misalign records without any error. Apply the same check here.
 
-- [ ] **OCR-012** `internal/tools/data.go:107` _bug_
+- [x] **OCR-012** `internal/tools/data.go:107` _bug_
   The prefix/suffix fallback contradicts its own documented invariant. `strings.HasSuffix(lower, needle)` matches ANY header ending in the needle, so a request for column `id` still silently binds to an unrelated header such as `grid` — exactly the case the comment claims to prevent. Also, when one header matches by prefix and a *different* header matches by suffix, the code returns `prefixMatch` (or falls through to `suffixMatch`) instead of refusing the ambiguity, so a column that is genuinely ambiguous is selected silently. Only matches where prefix and suffix point at the same column should be accepted; a distinct-header prefix/suffix pair should yield -1.
 
-- [ ] **OCR-013** `scripts/doctor.ps1:176` _bug_
+- [x] **OCR-013** `scripts/doctor.ps1:176` _bug_
   Both the `scripts\plugin-check.ps1` invocation and the `scripts\smoke.ps1` MCP-handshake check reset `$global:LASTEXITCODE = 0` immediately before the call and then trust `$LASTEXITCODE` (the plugin check also lacks a `Test-Path` guard, and the smoke `$null -eq $smokeExit` fallback is dead because the pre-reset guarantees a non-null value). A missing script or a script that throws/early-returns without calling `exit` therefore leaves the stale `0` and the check silently passes. Add a `Test-Path` guard (as used for other helpers) and/or capture `$?` right after the invocation (or drop the pre-reset) so failures are detected.
 
-- [ ] **OCR-014** `scripts/doctor.sh:35` _bug_
+- [x] **OCR-014** `scripts/doctor.sh:35` _bug_
   `set -e` (line 2) makes an unguarded assignment-from-command-substitution fatal: if `python3` exits non-zero (import error, killed, unexpected interpreter failure), the whole doctor script aborts here with python's status and every remaining check is silently skipped. All other substitutions in this file are protected (`|| true`, `|| echo ...`), only this one is not. Guard it so a parse failure degrades to the `unknown`/`missing` state instead of killing the run.
 
-- [ ] **OCR-015** `scripts/e2e-fly.ps1:21` _bug_
+- [x] **OCR-015** `scripts/e2e-fly.ps1:21` _bug_
   `Call`/`Mcp` blindly dereference `.result.content[0].text` and re-parse it, assuming every response is a well-formed success envelope. A JSON-RPC error response (which has `.error` and no `.result`) or a malformed/empty output yields `$null` for `$env`, and all downstream `$ctx.status`/`$ctx.data...` accesses silently evaluate to `$null`, producing confusing "FAIL ... mode=" results instead of a clear diagnostic. Validate the response (check for `.error`, non-empty `.result.content` and `.text`) and emit an explicit error/exit when the transport-level call fails.
 
-- [ ] **OCR-016** `scripts/e2e-fly.ps1:69` _test_
+- [x] **OCR-016** `scripts/e2e-fly.ps1:69` _test_
   The PAM and PPL1 assertions both use `-ge` (>=) while their labels claim the counter was *incremented*. If the reward/feedback or correction/pain path is broken and the counter never advances, these checks still pass (0 >= 0), and when `fly-brain.json` is absent both values default to 0 so the comparison is trivially true. Use a strict `-gt` comparison (with a meaningful failure detail) for both the 'PAM incremented (reward)' and 'PPL1 incremented (pain)' checks so a non-incrementing counter is actually detected.
 
 - [ ] **OCR-017** `scripts/env-set.sh:103` _bug_
