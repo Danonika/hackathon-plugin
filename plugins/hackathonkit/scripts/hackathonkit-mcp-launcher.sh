@@ -17,6 +17,14 @@ fi
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$SELF")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 
+# The launcher execs whatever binary sits under the derived root, so refuse to
+# run unless that root really is a Hackathon Agent Kit checkout (guards an unresolved or
+# wrong root from a cwd-relative caller).
+if [ ! -f "$REPO_ROOT/plugins/hackathonkit/scripts/hooks.js" ] && [ ! -f "$REPO_ROOT/go.mod" ]; then
+  echo "Hackathon Agent Kit launcher: '$REPO_ROOT' does not look like the Hackathon Agent Kit repository root" >&2
+  exit 1
+fi
+
 if [ -f "$REPO_ROOT/bin/hackathonkit-mcp" ] && [ -x "$REPO_ROOT/bin/hackathonkit-mcp" ]; then
   exec "$REPO_ROOT/bin/hackathonkit-mcp" --repo-root "$REPO_ROOT" "$@"
 fi
