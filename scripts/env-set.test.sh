@@ -135,3 +135,24 @@ if [ "$FAIL" -ne 0 ]; then
   exit 1
 fi
 echo "[env-set-test] all assertions passed"
+
+# Lock ownership: a live peer lock is preserved; a dead-pid lock is reclaimed.
+LOCKDIR="$TMP/lock.env"
+printf 'A=1\n' > "$LOCKDIR"
+mkdir "$LOCKDIR.lock"
+printf '%s' "$$" > "$LOCKDIR.lock/pid"
+if sh "$HELPER" "$LOCKDIR" A 2 >/dev/null 2>&1; then
+  check "live lock blocks a second writer" 0 "expected non-zero exit"
+else
+  check "live lock blocks a second writer" 1
+fi
+check "live lock preserved" "$([ -d "$LOCKDIR.lock" ] && echo 1)" "peer lock was deleted"
+rm -rf "$LOCKDIR.lock"
+mkdir "$LOCKDIR.lock"
+printf '%s' "999999" > "$LOCKDIR.lock/pid"
+if sh "$HELPER" "$LOCKDIR" A 3 >/dev/null 2>&1; then
+  check "dead-pid lock reclaimed" "$(grep -q '^A=3$' "$LOCKDIR" && echo 1)" "got: $(cat "$LOCKDIR")"
+else
+  check "dead-pid lock reclaimed" 0 "writer aborted"
+fi
+check "reclaimed lock cleaned up" "$([ ! -d "$LOCKDIR.lock" ] && echo 1)" "lock left behind"

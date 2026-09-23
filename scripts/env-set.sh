@@ -103,8 +103,9 @@ lock_is_stale() {
 }
 claim_stale_lock() {
   lock_is_stale || return 0
-  # Re-check under a single rename: only the contender whose mv succeeds owns
-  # the removal, so a live re-acquire cannot be renamed away by a stale verdict.
+  # Rename is the atomic claim: contenders race on a single mv, so exactly one
+  # wins and a peer's live (re-created) lock is never touched. If the rename
+  # fails because the lock vanished, the caller simply retries mkdir.
   if mv "$LOCK" "$LOCK.stale.$$" 2>/dev/null; then
     rm -rf "$LOCK.stale.$$"
   fi
@@ -128,9 +129,12 @@ fi
 cleanup_env_set() {
   rm -f "$TMP"
   if [ "$LOCKED" = "1" ]; then
-    # Only remove the lock if this run still owns it.
-    if [ "$(cat "$LOCK/owner" 2>/dev/null || true)" = "$LOCK_TOKEN" ]; then
-      rm -rf "$LOCK"
+    # Remove only if this run still owns the lock. Rename it aside first so the
+    # removal is a single atomic claim: a peer that reclaimed and re-created the
+    # lock keeps its directory, and a peer cannot slip in between the read and
+    # the delete.
+    if mv "$LOCK" "$LOCK.done.$$" 2>/dev/null; then
+      rm -rf "$LOCK.done.$$"
     fi
   fi
 }

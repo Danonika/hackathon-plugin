@@ -75,10 +75,10 @@ finish_harness() {
     rm -rf "$CLAUDE_OLD"
   fi
   if [ "$CLAUDE_LOCKED" = "1" ]; then
-    # Only remove the lock if this run still owns it: a stale-reclaimed lock may
-    # now belong to a peer.
-    if [ "$(cat "$CLAUDE_LOCK/owner" 2>/dev/null || true)" = "$CLAUDE_LOCK_TOKEN" ]; then
-      rm -rf "$CLAUDE_LOCK"
+    # Atomic ownership-checked release: rename-aside means a peer that reclaimed
+    # the lock keeps its own directory (see env-set.sh).
+    if mv "$CLAUDE_LOCK" "$CLAUDE_LOCK.done.$$" 2>/dev/null; then
+      rm -rf "$CLAUDE_LOCK.done.$$"
     fi
   fi
 }
@@ -102,8 +102,11 @@ if ! mv "$CLAUDE_TMP" "$CLAUDE_DST"; then
   exit 1
 fi
 rm -rf "$CLAUDE_OLD"
+# Atomic ownership-checked release (rename-aside), matching the cleanup path.
+if mv "$CLAUDE_LOCK" "$CLAUDE_LOCK.done.$$" 2>/dev/null; then
+  rm -rf "$CLAUDE_LOCK.done.$$"
+fi
 CLAUDE_LOCKED=0
-rm -rf "$CLAUDE_LOCK"
 trap - EXIT INT TERM
 
 # Mirror the plugin commands into the harness project command directories:
