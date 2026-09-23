@@ -18,8 +18,9 @@ if (!fs.existsSync(launcher)) {
 }
 
 const result = isWindows
-  // .cmd/.bat files are not executable on their own under Node; they must be
-  // launched through the command interpreter.
+  // .cmd/.bat files are not executable on their own under Node; launch through
+  // the command interpreter. Pass the cmd file and args as separate argv
+  // elements (not one pre-joined string) so libuv quotes spaces correctly.
   ? spawnSync(process.env.ComSpec || "cmd.exe", ["/d", "/s", "/c", launcher, ...process.argv.slice(2)], { stdio: "inherit" })
   : spawnSync("sh", [launcher, ...process.argv.slice(2)], { stdio: "inherit" });
 

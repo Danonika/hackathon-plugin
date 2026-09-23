@@ -17,6 +17,9 @@ need_python() {
 need_python
 
 CONFIG="$ROOT/.codex/config.toml"
+# Capture the tracked config BEFORE any generator run so the untouched assertion
+# can actually catch a regression.
+BEFORE_HASH=$(python3 -c 'import hashlib,sys;print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "$CONFIG")
 
 # Root-level keys must be parsed as top-level, not swallowed by the server table
 # (TOML table scoping: a key after [mcp_servers.hackathonkit] belongs to that table).
@@ -54,16 +57,29 @@ print("ok" if d.get("approval_policy") == "on-request" else "lost")
 check "generator writes an absolute launcher path" "$(printf '%s' "$USER_ARGS" | head -1 | grep -q "^root|/" && echo 1)" "got: $USER_ARGS"
 check "generator preserves user keys" "$(printf '%s' "$USER_ARGS" | grep -q "^ok$" && echo 1)" "got: $USER_ARGS"
 
-# Re-running must not duplicate the managed block.
+# Re-running must not duplicate the managed block and must be byte-stable.
+HASH_ONE=$(python3 -c 'import hashlib,sys;print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "$WORK/codexhome/config.toml")
 CODEX_HOME="$WORK/codexhome" sh "$ROOT/scripts/gen-codex-config.sh" "$WORK" >/dev/null 2>&1
+HASH_TWO=$(python3 -c 'import hashlib,sys;print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "$WORK/codexhome/config.toml")
 COUNT=$(grep -c "hackathonkit-mcp (managed by" "$WORK/codexhome/config.toml" || true)
 check "generator is idempotent" "$([ "$COUNT" = "2" ] && echo 1)" "marker lines: $COUNT"
+check "generator output is byte-stable" "$([ "$HASH_ONE" = "$HASH_TWO" ] && echo 1)" "rerun changed the file"
 
-# The tracked project config must be unchanged by a generator run. Compare the
-# file hash before/after rather than git state, so a dirty working tree does not
-# cause a false failure.
-BEFORE_HASH=$(python3 -c 'import hashlib,sys;print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "$CONFIG")
-CODEX_HOME="$WORK/codexhome" sh "$ROOT/scripts/gen-codex-config.sh" "$WORK" >/dev/null 2>&1
+# A hand-written hackathonkit table without markers must be refused, not overwritten.
+printf '[mcp_servers.hackathonkit]\ncommand = "custom"\n' > "$WORK/codexhome/handwritten.toml"
+mkdir -p "$WORK/hand"
+if CODEX_HOME="$WORK/hand" sh -c 'mkdir -p "$CODEX_HOME"; cp "$1" "$CODEX_HOME/config.toml"; sh "$2" "$3"' sh "$WORK/codexhome/handwritten.toml" "$ROOT/scripts/gen-codex-config.sh" "$WORK" >/dev/null 2>&1; then
+  check "hand-written table refused" 0 "generator overwrote a hand-written table"
+else
+  check "hand-written table refused" 1
+fi
+
+# --remove strips the managed block and keeps user content.
+CODEX_HOME="$WORK/codexhome" sh "$ROOT/scripts/gen-codex-config.sh" --remove >/dev/null 2>&1
+check "remove drops the managed block" "$(grep -q "hackathonkit-mcp (managed by" "$WORK/codexhome/config.toml" && echo 0 || echo 1)" "block still present"
+check "remove keeps user keys" "$(grep -q 'approval_policy = "on-request"' "$WORK/codexhome/config.toml" && echo 1)" "user key lost"
+
+# The tracked project config must be unchanged by every generator run above.
 AFTER_HASH=$(python3 -c 'import hashlib,sys;print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "$CONFIG")
 check "tracked config untouched" "$([ "$BEFORE_HASH" = "$AFTER_HASH" ] && echo 1)" "generator modified a tracked file"
 

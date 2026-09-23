@@ -88,6 +88,15 @@ else
   echo "would remove: $HOME/.codex/prompts/*.md (unmodified prompts only)"
 fi
 
+# Remove the managed hackathonkit block from the user-level Codex config.
+if [ -f "$ROOT/scripts/gen-codex-config.sh" ]; then
+  if [ "$APPLY" = "1" ]; then
+    sh "$ROOT/scripts/gen-codex-config.sh" --remove >/dev/null 2>&1 || true
+  else
+    echo "would remove: the managed hackathonkit block in \${CODEX_HOME:-$HOME/.codex}/config.toml"
+  fi
+fi
+
 # Remove generated artifacts. FAILURES accumulates across every removal loop.
 for rel in \
   plugins/hackathonkit/.mcp.json \

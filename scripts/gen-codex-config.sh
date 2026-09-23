@@ -6,8 +6,28 @@
 # cwd-relative; this writes the machine-specific override to the user config,
 # which Codex applies with higher precedence. Never rewrites a tracked file.
 #
+# The block is delimited by markers and replaced on every run (idempotent).
+# `scripts/uninstall.sh` can remove it again.
+#
 # Usage: scripts/gen-codex-config.sh [repo-root]
 set -e
+# Usage: scripts/gen-codex-config.sh [repo-root]
+#        scripts/gen-codex-config.sh --remove
+set -e
+if [ "$1" = "--remove" ]; then
+  CODEX_DIR="${CODEX_HOME:-$HOME/.codex}"
+  DEST="$CODEX_DIR/config.toml"
+  BEGIN="# >>> hackathonkit-mcp (managed by scripts/gen-codex-config.sh) <<<"
+  END="# <<< hackathonkit-mcp (managed by scripts/gen-codex-config.sh) >>>"
+  [ -f "$DEST" ] || { echo "[codex-config] no user config to clean at $DEST"; exit 0; }
+  TMP=$(mktemp "$CODEX_DIR/config.toml.tmp.XXXXXX")
+  trap 'rm -f "$TMP"' EXIT
+  awk -v begin="$BEGIN" -v end="$END" '$0==begin{inside=1;next} inside&&$0==end{inside=0;next} !inside{print}' "$DEST" > "$TMP"
+  chmod "$(stat -c '%a' "$DEST" 2>/dev/null || stat -f '%Lp' "$DEST" 2>/dev/null || echo 600)" "$TMP" 2>/dev/null || true
+  mv "$TMP" "$DEST"
+  echo "[codex-config] removed the managed hackathonkit block from $DEST"
+  exit 0
+fi
 ROOT="${1:-$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)}"
 
 if [ -z "$ROOT" ] || [ ! -d "$ROOT" ]; then
@@ -31,28 +51,54 @@ toml_escape() {
 }
 
 mkdir -p "$CODEX_DIR"
+
+# Refuse to touch a hand-written hackathonkit table: we cannot safely merge it.
+if [ -f "$DEST" ] && ! grep -qF "$BEGIN" "$DEST" && grep -qE '^\[mcp_servers\.hackathonkit\]' "$DEST"; then
+  echo "[codex-config] $DEST already defines [mcp_servers.hackathonkit] without the managed markers." >&2
+  echo "[codex-config] Remove or rename that table, then re-run; refusing to overwrite it." >&2
+  exit 1
+fi
+
+# Preserve the destination mode when it exists (it may hold credentials); a new
+# file is private.
+MODE="600"
+if [ -f "$DEST" ]; then
+  MODE=$(stat -c '%a' "$DEST" 2>/dev/null || stat -f '%Lp' "$DEST" 2>/dev/null || true)
+  [ -n "$MODE" ] || MODE="600"
+fi
+
 TMP=$(mktemp "$CODEX_DIR/config.toml.tmp.XXXXXX")
 cleanup() { rm -f "$TMP"; }
 trap cleanup EXIT
 trap 'cleanup; exit 130' INT
 trap 'cleanup; exit 143' TERM
 
-# Preserve user content while replacing our managed block (if present).
+# Drop a complete managed block (BEGIN..END). A lone BEGIN with no END means a
+# previously interrupted write: drop from BEGIN to EOF so it cannot corrupt the
+# file on the next run.
 if [ -f "$DEST" ]; then
   awk -v begin="$BEGIN" -v end="$END" '
     $0 == begin { inside = 1; next }
-    $0 == end { inside = 0; next }
+    inside && $0 == end { inside = 0; next }
     !inside { print }
   ' "$DEST" > "$TMP"
 else
   : > "$TMP"
 fi
 
+# Strip trailing blank lines left by the previous block so repeated runs are
+# byte-stable (the block is appended with a single leading blank line).
+awk 'BEGIN{b=""} /^[[:blank:]]*$/{b=b $0 "\n"; next} {printf "%s%s\n", b, $0; b=""} END{}' "$TMP" > "$TMP.trim"
+mv "$TMP.trim" "$TMP"
+
 {
-  printf '\n%s\n' "$BEGIN"
+  printf '%s\n' "$BEGIN"
   printf '[mcp_servers.hackathonkit]\n'
   printf 'command = "sh"\n'
   printf 'args = ["%s"]\n' "$(toml_escape "$LAUNCHER")"
+  # Mirror the committed budgets so the override does not silently shorten them.
+  printf 'startup_timeout_sec = 180\n'
+  printf 'tool_timeout_sec = 180\n'
   printf '%s\n' "$END"
 } >> "$TMP"
 
@@ -63,6 +109,6 @@ if command -v python3 >/dev/null 2>&1; then
   fi
 fi
 
-chmod 0644 "$TMP"
+chmod "$MODE" "$TMP"
 mv "$TMP" "$DEST"
 echo "[codex-config] pinned hackathonkit MCP to $LAUNCHER in $DEST"
