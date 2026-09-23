@@ -32,6 +32,8 @@ if command -v codex >/dev/null 2>&1; then
         fi
       fi
     elif command -v python3 >/dev/null 2>&1; then
+      # Guard the substitution: under `set -e` a python3 failure would abort the
+      # whole doctor run instead of degrading to "unknown".
       PLUGIN_STATE=$(printf '%s' "$PLUGIN_JSON" | python3 -c '
 import json, sys
 raw = sys.stdin.read()
@@ -48,7 +50,7 @@ for entry in data.get("installed", []):
     if isinstance(entry, dict) and entry.get("name") == "hackathonkit":
         state = "disabled" if entry.get("enabled") is False else "enabled"
 print(state)
-' 2>/dev/null)
+' 2>/dev/null || true)
       if [ -z "$PLUGIN_STATE" ]; then
         PLUGIN_STATE=unknown
       fi
