@@ -105,6 +105,15 @@ func (c *ChainEmbedder) Embed(ctx context.Context, texts []string) ([][]float64,
 			}
 			return nil, err
 		}
+		if len(vectors) != len(texts) {
+			// Callers zip vectors with their inputs, so a count mismatch must
+			// not be returned as success.
+			err := fmt.Errorf("fallback returned %d vectors for %d texts", len(vectors), len(texts))
+			if primaryErr != nil {
+				return nil, fmt.Errorf("primary embedder failed: %w; %v", primaryErr, err)
+			}
+			return nil, err
+		}
 		return vectors, nil
 	}
 	if primaryErr != nil {
