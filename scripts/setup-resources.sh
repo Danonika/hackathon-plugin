@@ -108,8 +108,16 @@ fi
 if [ "$POSTGRES" = 1 ] && ! set_key POSTGRES_DSN "$(read_secret 'POSTGRES_DSN (empty to skip)')"; then
   POSTGRES=0
 fi
-if [ "$MINIO" = 1 ] && ! set_key MINIO_ENDPOINT "$(read_secret 'MINIO_ENDPOINT (empty to skip)')"; then
-  MINIO=0
+if [ "$MINIO" = 1 ]; then
+  # MinIO needs all three keys; claim it only when the full set was stored,
+  # otherwise resources.json would advertise a provider that cannot authenticate.
+  if ! set_key MINIO_ENDPOINT "$(read_secret 'MINIO_ENDPOINT (empty to skip)')"; then
+    MINIO=0
+  elif ! set_key MINIO_ACCESS_KEY "$(read_secret 'MINIO_ACCESS_KEY (empty to skip)')"; then
+    MINIO=0
+  elif ! set_key MINIO_SECRET_KEY "$(read_secret 'MINIO_SECRET_KEY (empty to skip)')"; then
+    MINIO=0
+  fi
 fi
 
 SPEC="openai_api=$([ "$OPENAI" = 1 ] && echo true || echo false)"
