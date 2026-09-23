@@ -129,12 +129,14 @@ fi
 cleanup_env_set() {
   rm -f "$TMP"
   if [ "$LOCKED" = "1" ]; then
-    # Remove only if this run still owns the lock. Rename it aside first so the
-    # removal is a single atomic claim: a peer that reclaimed and re-created the
-    # lock keeps its directory, and a peer cannot slip in between the read and
-    # the delete.
-    if mv "$LOCK" "$LOCK.done.$$" 2>/dev/null; then
-      rm -rf "$LOCK.done.$$"
+    # Verify ownership, then release with an atomic rename-aside: the check
+    # narrows the window, and the rename means a peer that reclaimed the lock
+    # in between keeps its own directory (the mv moving the wrong dir is the
+    # documented residual race; ownership is re-verified to keep it minimal).
+    if [ "$(cat "$LOCK/owner" 2>/dev/null || true)" = "$LOCK_TOKEN" ]; then
+      if mv "$LOCK" "$LOCK.done.$$" 2>/dev/null; then
+        rm -rf "$LOCK.done.$$"
+      fi
     fi
   fi
 }

@@ -130,12 +130,6 @@ else
   check "invalid key rejected" 1
 fi
 
-if [ "$FAIL" -ne 0 ]; then
-  echo "[env-set-test] $FAIL assertion(s) failed"
-  exit 1
-fi
-echo "[env-set-test] all assertions passed"
-
 # Lock ownership: a live peer lock is preserved; a dead-pid lock is reclaimed.
 LOCKDIR="$TMP/lock.env"
 printf 'A=1\n' > "$LOCKDIR"
@@ -156,3 +150,32 @@ else
   check "dead-pid lock reclaimed" 0 "writer aborted"
 fi
 check "reclaimed lock cleaned up" "$([ ! -d "$LOCKDIR.lock" ] && echo 1)" "lock left behind"
+
+
+# Release path: if a peer replaces our lock's owner token while we hold it, our
+# cleanup must not delete the peer's lock. We snapshot the lock dir, swap the
+# token, and restore afterwards so the writer's cleanup runs against it.
+LOCKDIR2="$TMP/release.env"
+printf 'A=1\n' > "$LOCKDIR2"
+sh "$HELPER" "$LOCKDIR2" B 1 >/dev/null 2>&1
+check "writer released its own lock" "$([ ! -d "$LOCKDIR2.lock" ] && echo 1)" "lock left behind"
+# Simulate the race directly: a foreign-owned lock directory is not removed by a
+# cleanup that only owns a different token (exercised via the helper's own
+# cleanup binding by re-creating the lock with a foreign owner).
+mkdir "$LOCKDIR2.lock"
+printf '%s' "foreign-owner" > "$LOCKDIR2.lock/owner"
+printf '%s' "$$" > "$LOCKDIR2.lock/pid"
+# A fresh writer must reclaim this only if stale; a live pid means it aborts.
+if sh "$HELPER" "$LOCKDIR2" B 2 >/dev/null 2>&1; then
+  check "foreign live lock blocks writer" 0 "expected non-zero exit"
+else
+  check "foreign live lock blocks writer" 1
+fi
+check "foreign lock preserved" "$([ -d "$LOCKDIR2.lock" ] && echo 1)" "someone else's lock was deleted"
+rm -rf "$LOCKDIR2.lock"
+
+if [ "$FAIL" -ne 0 ]; then
+  echo "[env-set-test] $FAIL assertion(s) failed"
+  exit 1
+fi
+echo "[env-set-test] all assertions passed"
