@@ -59,8 +59,13 @@ CODEX_HOME="$WORK/codexhome" sh "$ROOT/scripts/gen-codex-config.sh" "$WORK" >/de
 COUNT=$(grep -c "hackathonkit-mcp (managed by" "$WORK/codexhome/config.toml" || true)
 check "generator is idempotent" "$([ "$COUNT" = "2" ] && echo 1)" "marker lines: $COUNT"
 
-# The tracked project config must be unchanged by a generator run.
-check "tracked config untouched" "$(git -C "$ROOT" diff --quiet -- .codex/config.toml && echo 1)" "generator modified a tracked file"
+# The tracked project config must be unchanged by a generator run. Compare the
+# file hash before/after rather than git state, so a dirty working tree does not
+# cause a false failure.
+BEFORE_HASH=$(python3 -c 'import hashlib,sys;print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "$CONFIG")
+CODEX_HOME="$WORK/codexhome" sh "$ROOT/scripts/gen-codex-config.sh" "$WORK" >/dev/null 2>&1
+AFTER_HASH=$(python3 -c 'import hashlib,sys;print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "$CONFIG")
+check "tracked config untouched" "$([ "$BEFORE_HASH" = "$AFTER_HASH" ] && echo 1)" "generator modified a tracked file"
 
 if [ "$FAIL" -gt 0 ]; then
   echo "[codex-config-test] $FAIL assertion(s) failed"
