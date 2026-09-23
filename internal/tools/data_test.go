@@ -61,8 +61,9 @@ func TestColumnIndexRejectsEmptyAndAmbiguous(t *testing.T) {
 	if got := tbl.columnIndex(""); got != -1 {
 		t.Fatalf("empty name = %d, want -1", got)
 	}
-	if got := tbl.columnIndex("id"); got != 1 {
-		t.Fatalf("unique prefix match = %d, want 1", got)
+	// Partial matches are refused: "id" must not bind to "id_value" or "grid".
+	if got := tbl.columnIndex("id"); got != -1 {
+		t.Fatalf("partial match = %d, want -1", got)
 	}
 	if got := tbl.columnIndex("value"); got != 2 {
 		t.Fatalf("exact name = %d, want 2", got)
@@ -83,7 +84,7 @@ func TestColumnIndexFallback(t *testing.T) {
 		want int
 	}{
 		{"timestamp", 0},
-		{"measured", 1},
+		{"measured value", 1},
 		{"note", 2},
 		{"absent", -1},
 	}
