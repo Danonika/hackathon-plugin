@@ -76,7 +76,8 @@ $requests = @(
 $stderrPath = Join-Path $temp "stderr.txt"
 $codePath = Join-Path $temp "exitcode.txt"
 $out = @()
-$exitCode = 0
+$exitCode = -1
+$exitCodeError = ""
 $stderrText = ""
 try {
   # Run in a job so a hung server cannot block the check forever.
@@ -85,7 +86,8 @@ try {
     Set-Location -LiteralPath $workDir
     $payload | & $exe @exeArgs 2>$errPath
     # $LASTEXITCODE does not survive Receive-Job; persist it for the caller.
-    Set-Content -LiteralPath $codePath -Value $LASTEXITCODE -ErrorAction SilentlyContinue
+    $code = if ($null -eq $LASTEXITCODE) { "" } else { "$LASTEXITCODE" }
+    Set-Content -LiteralPath $codePath -Value $code -ErrorAction Stop
   } -ArgumentList $cmd, $argList, $requests, $temp, $stderrPath, $codePath
   if (-not (Wait-Job $job -Timeout 120)) {
     Stop-Job $job -ErrorAction SilentlyContinue
@@ -96,10 +98,20 @@ try {
   }
   $out = @(Receive-Job $job)
   if ($job.State -ne "Completed") {
-    $exitCode = 1
-  } elseif (Test-Path -LiteralPath $codePath) {
+    $exitCodeError = "the job did not complete (state: $($job.State))"
+  } elseif (-not (Test-Path -LiteralPath $codePath)) {
+    # Missing side file: do not assume success.
+    $exitCodeError = "the job did not report an exit code"
+  } else {
     $captured = Get-Content -LiteralPath $codePath -ErrorAction SilentlyContinue | Select-Object -First 1
-    if ($null -ne $captured -and "$captured".Trim() -ne "") { $exitCode = [int]$captured }
+    $parsed = 0
+    if ($null -eq $captured -or "$captured".Trim() -eq "") {
+      $exitCodeError = "the job reported an empty exit code"
+    } elseif (-not [int]::TryParse("$captured".Trim(), [ref]$parsed)) {
+      $exitCodeError = "the job reported a non-numeric exit code: '$captured'"
+    } else {
+      $exitCode = $parsed
+    }
   }
   Remove-Job $job -Force -ErrorAction SilentlyContinue
 } finally {
@@ -109,6 +121,11 @@ try {
   Remove-Item -LiteralPath $temp -Recurse -Force -ErrorAction SilentlyContinue
 }
 
+if ($exitCodeError) {
+  Write-Host "[plugin-check] FAIL: MCP command result could not be verified: $exitCodeError"
+  if ($stderrText) { Write-Host "[plugin-check] server stderr: $stderrText" }
+  exit 1
+}
 if ($exitCode -ne 0) {
   Write-Host "[plugin-check] FAIL: MCP command exited with code $exitCode"
   if ($stderrText) { Write-Host "[plugin-check] server stderr: $stderrText" }
