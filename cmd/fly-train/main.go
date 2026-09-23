@@ -74,7 +74,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	}
 	if *model == "knn" {
 		// --model knn ignores --dataset: rebuild feedback memory regardless.
-		if err := rebuildFromFeedback(root, cfg, client, stdout); err != nil {
+		if err := rebuildFromFeedback(root, cfg, embedder, stdout); err != nil {
 			fmt.Fprintln(stderr, "fly-train:", err)
 			return 1
 		}
@@ -153,7 +153,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	return 0
 }
 
-func rebuildFromFeedback(root string, cfg config.File, client *openai.Client, stdout io.Writer) error {
+func rebuildFromFeedback(root string, cfg config.File, embedder fly.Embedder, stdout io.Writer) error {
 	feedbackPath := filepath.Join(root, "logs", "fly-feedback.jsonl")
 	f, err := os.Open(feedbackPath)
 	if err != nil {
@@ -161,8 +161,11 @@ func rebuildFromFeedback(root string, cfg config.File, client *openai.Client, st
 	}
 	defer f.Close()
 	seen := map[string]bool{}
+	// Must match the live router (cmd/hackathonkit-mcp, cmd/fly-bench): same chain
+	// embedder and the same "+hash512" model tag, otherwise the rebuilt vectors
+	// are treated as stale and contribute no knn signal.
 	router := fly.NewRouter(cfg.Routing).
-		WithEmbeddings(client, filepath.Join(root, "data", "index", "fly-embeddings.json"), cfg.OpenAI.EmbeddingModel).
+		WithEmbeddings(embedder, filepath.Join(root, "data", "index", "fly-embeddings.json"), cfg.OpenAI.EmbeddingModel+"+hash512").
 		WithMemory(filepath.Join(root, "data", "index", "fly-memory.json")).
 		WithBrain(filepath.Join(root, "data", "index", "fly-brain.json"))
 	scanner := bufio.NewScanner(f)

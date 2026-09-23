@@ -4,10 +4,11 @@ name = "reviewer"
 description = "Read-only review of changes for quality and risk; never runs builds, tests, or network fetches."
 # model is left to the harness default by design; pin it here to freeze behavior.
 model_reasoning_effort = "high"
-# Read-only blocks filesystem writes. The reviewer ingests attacker-controllable
-# evidence, so command execution and network are denied by configuration instead
-# of resting on prompt compliance: `never` removes command execution as an
-# approval option and the read-only sandbox leaves network access off by default.
+# Read-only blocks filesystem writes. `approval_policy = "never"` removes command
+# execution as an approval option. Residual risk (documented, not enforced by
+# config): read-only does not itself deny outbound network, and there is no
+# top-level Codex key to do so for this sandbox mode -- containment of untrusted
+# evidence must not rely on that.
 sandbox_mode = "read-only"
 approval_policy = "never"
 

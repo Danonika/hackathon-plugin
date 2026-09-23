@@ -83,37 +83,11 @@ func (t *table) columnIndex(name string) int {
 		}
 	}
 	needle := strings.ToLower(name)
-	// Prefer prefix/suffix matches before a loose contains, so "id" does not
-	// silently bind to an unrelated header such as "grid". Ambiguity is still
-	// refused: two headers sharing the prefix return -1.
-	prefixMatch, suffixMatch := -1, -1
-	for i, h := range t.Headers {
-		lower := strings.ToLower(strings.TrimSpace(h))
-		if strings.HasPrefix(lower, needle) {
-			if prefixMatch == -1 {
-				prefixMatch = i
-			} else {
-				prefixMatch = -2
-			}
-		}
-		if strings.HasSuffix(lower, needle) {
-			if suffixMatch == -1 {
-				suffixMatch = i
-			} else {
-				suffixMatch = -2
-			}
-		}
-	}
-	if prefixMatch == -2 || suffixMatch == -2 {
-		// Ambiguous prefix/suffix matches are refused, as documented.
-		return -1
-	}
-	if prefixMatch >= 0 {
-		return prefixMatch
-	}
-	if suffixMatch >= 0 {
-		return suffixMatch
-	}
+	// Only an exact (case-insensitive) header binds. Prefix/suffix/contains
+	// fallbacks each risk binding a column to an unrelated header (e.g. "id"
+	// matching "grid" or "user_id"), and combining them would silently pick a
+	// column the caller never named, so ambiguous or partial matches are
+	// refused instead.
 	match := -1
 	for i, h := range t.Headers {
 		if strings.Contains(strings.ToLower(h), needle) {

@@ -9,14 +9,17 @@ import (
 	"crypto/sha1"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"math"
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -417,23 +420,66 @@ func (s *Store) embed(ctx context.Context, text string) ([]float64, error) {
 // lockFile serializes load-modify-save across processes sharing this path.
 const lockStaleAfter = 30 * time.Second
 
+// lockOwnerPID reads the pid recorded in an existing lock file, or 0 when it is
+// absent/unreadable/malformed.
+func lockOwnerPID(lockPath string) int {
+	data, err := os.ReadFile(lockPath)
+	if err != nil {
+		return 0
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(data)))
+	if err != nil || pid <= 0 {
+		return 0
+	}
+	return pid
+}
+
+// processAlive reports whether pid is a live process. A permission error still
+// means the process exists.
+func processAlive(pid int) bool {
+	if pid <= 0 {
+		return false
+	}
+	proc, err := os.FindProcess(pid)
+	if err != nil {
+		return false
+	}
+	err = proc.Signal(syscall.Signal(0))
+	return err == nil || errors.Is(err, syscall.EPERM)
+}
+
 func (s *Store) lockFile() (func(), error) {
 	lockPath := s.path + ".lock"
 	if err := os.MkdirAll(filepath.Dir(lockPath), 0o755); err != nil {
 		return nil, err
 	}
+	mine := os.Getpid()
 	for i := 0; i < 50; i++ {
 		f, err := os.OpenFile(lockPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
 		if err == nil {
-			fmt.Fprintf(f, "%d\n", os.Getpid())
+			fmt.Fprintf(f, "%d\n", mine)
 			f.Close()
-			return func() { _ = os.Remove(lockPath) }, nil
+			return func() {
+				// Only remove a lock this process still owns: it may have been
+				// reclaimed as stale and re-acquired by a peer.
+				if lockOwnerPID(lockPath) == mine {
+					_ = os.Remove(lockPath)
+				}
+			}, nil
 		}
 		if !os.IsExist(err) {
 			return nil, err
 		}
-		// Reclaim a lock whose owner died between create and remove.
-		if info, statErr := os.Stat(lockPath); statErr == nil && time.Since(info.ModTime()) > lockStaleAfter {
+		// Reclaim a lock only when its owner process is actually gone, or when
+		// no pid was recorded and the file is older than the stale window.
+		// mtime alone would evict a slow-but-live holder.
+		owner := lockOwnerPID(lockPath)
+		if owner != 0 {
+			if !processAlive(owner) {
+				_ = os.Remove(lockPath)
+				continue
+			}
+		} else if info, statErr := os.Stat(lockPath); statErr == nil && time.Since(info.ModTime()) > lockStaleAfter {
 			_ = os.Remove(lockPath)
 			continue
 		}

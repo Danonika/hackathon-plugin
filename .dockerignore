@@ -1,8 +1,9 @@
 .github
 .git
 .gitignore
-.env*
-!/.env.example
+# Match .env at any depth: patterns without `**/` are anchored at the context
+# root, so nested secret files would otherwise be copied into the build.
+**/.env*
 !**/.env.example
 bin
 data

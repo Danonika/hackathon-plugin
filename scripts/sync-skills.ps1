@@ -40,10 +40,13 @@ if (-not (Test-Path -LiteralPath $lockParent)) {
   New-Item -ItemType Directory -Force -Path $lockParent | Out-Null
 }
 $locked = $false
+# Owner token written inside the lock; cleanup only removes a lock this run owns.
+$lockToken = "$PID-$([System.Guid]::NewGuid().ToString('N'))"
 for ($i = 0; $i -lt 100; $i++) {
   try {
     New-Item -ItemType Directory -Path $lock -ErrorAction Stop | Out-Null
     Set-Content -LiteralPath (Join-Path $lock "pid") -Value $PID -ErrorAction SilentlyContinue
+    Set-Content -LiteralPath (Join-Path $lock "owner") -Value $lockToken -ErrorAction SilentlyContinue
     $locked = $true
     break
   } catch {
@@ -54,10 +57,12 @@ for ($i = 0; $i -lt 100; $i++) {
         $holder = Get-Content -LiteralPath $pidFile -ErrorAction SilentlyContinue | Select-Object -First 1
       }
       $stale = $false
-      if ($holder) {
+      $holderPid = 0
+      if ($holder -and [int]::TryParse("$holder", [ref]$holderPid) -and $holderPid -gt 0) {
         # Only evict when the owning process is gone; a slow-but-live copy must
-        # not have its lock stolen.
-        if (-not (Get-Process -Id ([int]$holder) -ErrorAction SilentlyContinue)) { $stale = $true }
+        # not have its lock stolen. An unparseable pid falls through to the age
+        # check rather than throwing.
+        if (-not (Get-Process -Id $holderPid -ErrorAction SilentlyContinue)) { $stale = $true }
       } else {
         $age = (Get-Date) - (Get-Item -LiteralPath $lock -Force).LastWriteTime
         if ($age.TotalSeconds -gt 60) { $stale = $true }
@@ -66,6 +71,7 @@ for ($i = 0; $i -lt 100; $i++) {
         $stalePath = "$lock.stale.$PID"
         try {
           Move-Item -LiteralPath $lock -Destination $stalePath -Force -ErrorAction Stop
+          # The stale lock was renamed atomically: only the winner proceeds.
           Remove-Item -LiteralPath $stalePath -Recurse -Force -ErrorAction SilentlyContinue
         } catch {}
         continue
@@ -87,10 +93,20 @@ if (-not (Test-Path -LiteralPath $dst)) {
     Move-Item -LiteralPath $recover.FullName -Destination $dst -Force
   }
 }
-# Sweep orphaned temp/stale-swap directories from crashed runs.
+# Sweep orphaned temp/stale-swap directories left by crashed runs, but never
+# remove artifacts that a live process still owns: the embedded PID is checked.
+function Remove-IfOrphaned([System.IO.DirectoryInfo]$Dir) {
+  $m = [regex]::Match($Dir.Name, '\.(?:tmp|old|lock\.stale)\.(\d+)$')
+  if (-not $m.Success) { return }
+  $owner = 0
+  if ([int]::TryParse($m.Groups[1].Value, [ref]$owner) -and $owner -gt 0) {
+    if (Get-Process -Id $owner -ErrorAction SilentlyContinue) { return }
+  }
+  Remove-Item -LiteralPath $Dir.FullName -Recurse -Force -ErrorAction SilentlyContinue
+}
 Get-ChildItem -LiteralPath (Split-Path -Parent $dst) -Directory -Force -ErrorAction SilentlyContinue |
   Where-Object { $_.Name -like "$(Split-Path -Leaf $dst).tmp.*" -or $_.Name -like "$(Split-Path -Leaf $dst).old.*" -or $_.Name -like "$(Split-Path -Leaf $dst).lock.stale.*" } |
-  ForEach-Object { Remove-Item -LiteralPath $_.FullName -Recurse -Force -ErrorAction SilentlyContinue }
+  ForEach-Object { Remove-IfOrphaned $_ }
 
 # Build the mirror in a temporary directory and swap it in, so consumers never
 # observe a missing or half-populated mirror when the copy fails.
@@ -124,7 +140,15 @@ try {
   }
 } finally {
   if (Test-Path -LiteralPath $tmp) { Remove-Item -LiteralPath $tmp -Recurse -Force -ErrorAction SilentlyContinue }
-  if (Test-Path -LiteralPath $lock) { Remove-Item -LiteralPath $lock -Recurse -Force -ErrorAction SilentlyContinue }
+  # Remove the lock only if this run still owns it: a stale-reclaimed lock may
+  # now belong to another process.
+  if (Test-Path -LiteralPath $lock) {
+    $ownerFile = Join-Path $lock "owner"
+    $owner = Get-Content -LiteralPath $ownerFile -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($owner -eq $lockToken) {
+      Remove-Item -LiteralPath $lock -Recurse -Force -ErrorAction SilentlyContinue
+    }
+  }
 }
 Write-Host "[sync-skills] mirrored $count of $srcCount skills to .agents/skills"
 exit 0

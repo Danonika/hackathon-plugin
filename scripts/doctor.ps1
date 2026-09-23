@@ -173,13 +173,22 @@ if ($codex) {
   Check "hackathonkit plugin" ($pluginInstalled -and $pluginEnabled) $pluginDetail
 
   if ($pluginInstalled -and $pluginEnabled) {
-    $global:LASTEXITCODE = 0
-    $checkOutput = & (Join-Path $root "scripts\plugin-check.ps1") *>&1
-    if ($LASTEXITCODE -eq 0) {
-      Check "plugin runtime" $true "installed plugin starts MCP from a foreign cwd"
+    $pluginCheckPath = Join-Path $root "scripts\plugin-check.ps1"
+    if (-not (Test-Path -LiteralPath $pluginCheckPath)) {
+      Check "plugin runtime" $false "scripts/plugin-check.ps1 is missing"
     } else {
-      $reason = ($checkOutput | Where-Object { $_ } | Select-Object -Last 1)
-      Check "plugin runtime" $false "$reason"
+      # Do not pre-set $LASTEXITCODE: a missing/failed check would then look
+      # successful. Capture $? immediately after the call as well.
+      $checkOutput = & $pluginCheckPath *>&1
+      $ok = $?
+      $pluginExit = $LASTEXITCODE
+      if ($ok -and $pluginExit -eq 0) {
+        Check "plugin runtime" $true "installed plugin starts MCP from a foreign cwd"
+      } else {
+        $reason = ($checkOutput | Where-Object { $_ } | Select-Object -Last 1)
+        if (-not $reason) { $reason = "plugin-check failed (exit $pluginExit)" }
+        Check "plugin runtime" $false "$reason"
+      }
     }
   } else {
     Write-Host ("[info] {0,-22} skipped (plugin not installed or disabled)" -f "plugin runtime")
@@ -197,10 +206,12 @@ $smokePath = Join-Path $root "scripts\smoke.ps1"
 if (-not (Test-Path -LiteralPath $smokePath)) {
   Check "mcp handshake" $false "scripts/smoke.ps1 is missing"
 } else {
-  $global:LASTEXITCODE = 0
+  # No pre-set $LASTEXITCODE: capture the real result (and $? as a backstop for
+  # a script that early-returns without calling exit).
   & $smokePath -Quiet
+  $smokeOk = $?
   $smokeExit = $LASTEXITCODE
-  if ($null -eq $smokeExit) { $smokeExit = if ($?) { 0 } else { 1 } }
+  if (-not $smokeOk) { $smokeExit = 1 }
   Check "mcp handshake" ($smokeExit -eq 0) "initialize / tools/list / system.context"
 }
 
