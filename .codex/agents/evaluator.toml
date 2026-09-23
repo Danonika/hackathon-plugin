@@ -6,13 +6,12 @@ description = "Scores Hackathon Agent Kit artifacts against the judge rubric; re
 model_reasoning_effort = "high"
 # Read-only blocks filesystem writes; judge reports are persisted through the
 # eval.* MCP tools (which run outside this sandbox), so direct writes are never
-# needed. The evaluator ingests attacker-controllable artifacts, so command
-# execution and network are denied by configuration here rather than by prose:
-# `never` removes command execution as an approval option and network access is
-# disabled explicitly.
+# needed. `approval_policy = "never"` removes command execution as an approval
+# option. Residual risk (documented, not enforced by config): read-only does not
+# itself deny outbound network, and there is no top-level Codex key to do so for
+# this sandbox mode -- containment of untrusted artifacts must not rely on that.
 sandbox_mode = "read-only"
 approval_policy = "never"
-network_access = false
 
 developer_instructions = """
 You are the Hackathon Agent Kit evaluator. Score artifacts, never effort or intent.
