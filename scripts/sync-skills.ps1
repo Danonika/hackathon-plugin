@@ -64,8 +64,12 @@ for ($i = 0; $i -lt 100; $i++) {
         # check rather than throwing.
         if (-not (Get-Process -Id $holderPid -ErrorAction SilentlyContinue)) { $stale = $true }
       } else {
-        $age = (Get-Date) - (Get-Item -LiteralPath $lock -Force).LastWriteTime
-        if ($age.TotalSeconds -gt 60) { $stale = $true }
+        # No usable pid: only evict when the lock is old enough to be abandoned.
+        # Guard the stat so a vanished lock cannot throw out of the catch.
+        try {
+          $age = (Get-Date) - (Get-Item -LiteralPath $lock -Force -ErrorAction Stop).LastWriteTime
+          if ($age.TotalSeconds -gt 60) { $stale = $true }
+        } catch { $stale = $false }
       }
       if ($stale) {
         $stalePath = "$lock.stale.$PID"

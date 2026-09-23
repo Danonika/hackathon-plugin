@@ -445,8 +445,17 @@ func (s *Store) lockFile() (func(), error) {
 	for i := 0; i < 50; i++ {
 		f, err := os.OpenFile(lockPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
 		if err == nil {
-			fmt.Fprintf(f, "%d\n", mine)
-			f.Close()
+			// The pid record is load-bearing: unlock() only removes a lock whose
+			// pid matches, so a failed write would leave an unremovable lock.
+			if _, werr := fmt.Fprintf(f, "%d\n", mine); werr != nil {
+				f.Close()
+				_ = os.Remove(lockPath)
+				return nil, fmt.Errorf("write learning lock %s: %w", lockPath, werr)
+			}
+			if cerr := f.Close(); cerr != nil {
+				_ = os.Remove(lockPath)
+				return nil, fmt.Errorf("close learning lock %s: %w", lockPath, cerr)
+			}
 			return func() {
 				// Only remove a lock this process still owns: it may have been
 				// reclaimed as stale and re-acquired by a peer.
