@@ -158,11 +158,12 @@ func (r *Router) embeddingCategoryScores(ctx context.Context, task string) (map[
 		sims[cat] = cosine(taskVec, centroid)
 	}
 	if len(sims) == 0 {
-		// Every centroid mismatched the task vector: the cached centroids are
-		// unusable for this embedder (e.g. a hash-encoder fallback persisted
-		// under the primary model tag). Drop them and remove the on-disk cache,
-		// otherwise buildCentroids would immediately re-accept the same cache
-		// and keep the embedding signal disabled for the process lifetime.
+		// Every centroid mismatched the task vector. This may be a genuinely
+		// stale cache (e.g. a hash-encoder fallback persisted under the primary
+		// model tag) or a transient dimension change from the chain embedder.
+		// Drop the in-memory copy and the on-disk cache, then rebuild once so a
+		// legitimate change recovers instead of disabling the embedding signal
+		// for the process lifetime.
 		r.mu.Lock()
 		r.centroids = nil
 		cachePath := r.cachePath
@@ -172,7 +173,19 @@ func (r *Router) embeddingCategoryScores(ctx context.Context, task string) (map[
 				log.Printf("fly: cannot drop stale embedding cache %s: %v", cachePath, err)
 			}
 		}
-		return nil, false
+		rebuilt, ok := r.ensureCentroids(ctx)
+		if !ok {
+			return nil, false
+		}
+		for cat, centroid := range rebuilt {
+			if len(centroid) != len(taskVec) {
+				continue
+			}
+			sims[cat] = cosine(taskVec, centroid)
+		}
+		if len(sims) == 0 {
+			return nil, false
+		}
 	}
 	// Keep the relative ranking of the categories, but cap each score by how
 	// similar the category is in absolute terms, so a field of mediocre

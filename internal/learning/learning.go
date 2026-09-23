@@ -432,9 +432,7 @@ func lockOwnerPID(lockPath string) int {
 	return pid
 }
 
-// processAlive reports whether pid is a live process. A permission error still
-// means the process exists. The platform-specific signal handling lives in
-// proc_unix.go / proc_windows.go.
+// processAlive is implemented per platform in proc_unix.go / proc_windows.go.
 
 func (s *Store) lockFile() (func(), error) {
 	lockPath := s.path + ".lock"
