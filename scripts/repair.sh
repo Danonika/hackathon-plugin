@@ -47,9 +47,13 @@ if { [ ! -x "$ROOT/bin/hackathonkit-mcp" ] || [ ! -x "$ROOT/bin/hackathonkit-dem
       echo "[repair] go build failed" >&2
       exit 1
     }
+    # mktemp creates 0600 files and `go build -o <existing file>` keeps that
+    # mode, so an explicit chmod is required before the binaries are usable.
+    chmod 0755 "$MCP_TMP" "$DEMO_TMP" "$CTL_TMP"
     mv "$MCP_TMP" "$ROOT/bin/hackathonkit-mcp"
     mv "$DEMO_TMP" "$ROOT/bin/hackathonkit-demo-api"
     mv "$CTL_TMP" "$ROOT/bin/hackathonkit-ctl"
+    chmod 0755 "$ROOT/bin/hackathonkit-mcp" "$ROOT/bin/hackathonkit-demo-api" "$ROOT/bin/hackathonkit-ctl"
     echo "[repair] rebuilt local binaries in bin/"
   else
     echo "[repair] no Go toolchain and no docker engine; MCP runtime unavailable" >&2
