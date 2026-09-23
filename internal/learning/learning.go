@@ -9,7 +9,6 @@ import (
 	"crypto/sha1"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"log"
 	"math"
@@ -19,7 +18,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 )
 
@@ -435,18 +433,8 @@ func lockOwnerPID(lockPath string) int {
 }
 
 // processAlive reports whether pid is a live process. A permission error still
-// means the process exists.
-func processAlive(pid int) bool {
-	if pid <= 0 {
-		return false
-	}
-	proc, err := os.FindProcess(pid)
-	if err != nil {
-		return false
-	}
-	err = proc.Signal(syscall.Signal(0))
-	return err == nil || errors.Is(err, syscall.EPERM)
-}
+// means the process exists. The platform-specific signal handling lives in
+// proc_unix.go / proc_windows.go.
 
 func (s *Store) lockFile() (func(), error) {
 	lockPath := s.path + ".lock"
