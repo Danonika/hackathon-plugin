@@ -1,0 +1,4 @@
+interface:
+  display_name: "Verify"
+  short_description: "Run the seven-check gate incl. coverage and report every check."
+  default_prompt: "Use $verify to run the gate and report all seven checks before I claim this done."

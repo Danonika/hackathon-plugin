@@ -1,0 +1,4 @@
+interface:
+  display_name: "Build"
+  short_description: "Execute the current plan stage with real tools and stage evidence."
+  default_prompt: "Use $build to execute the current stage end to end and update the plan."

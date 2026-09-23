@@ -1,0 +1,4 @@
+interface:
+  display_name: "Evaluate"
+  short_description: "Freeze, judge, calibrate and rank; bounded rounds; compare decides."
+  default_prompt: "Use $evaluate to score the frozen demo and run bounded improvement rounds."

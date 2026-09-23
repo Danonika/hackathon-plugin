@@ -1,0 +1,4 @@
+interface:
+  display_name: "Plan"
+  short_description: "Create or update the staged S0-S6 build plan with a mandatory scenario."
+  default_prompt: "Use $plan to turn this task into an S0-S6 plan with gates and timeboxes."
