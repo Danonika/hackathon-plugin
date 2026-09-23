@@ -83,11 +83,10 @@ func (t *table) columnIndex(name string) int {
 		}
 	}
 	needle := strings.ToLower(name)
-	// Only an exact (case-insensitive) header binds. Prefix/suffix/contains
-	// fallbacks each risk binding a column to an unrelated header (e.g. "id"
-	// matching "grid" or "user_id"), and combining them would silently pick a
-	// column the caller never named, so ambiguous or partial matches are
-	// refused instead.
+	// An exact (case-insensitive) header always wins above. Otherwise fall back
+	// to a unique substring match: a partial match may bind a column the caller
+	// never named (e.g. "id" matching "grid"), which is why an ambiguous
+	// substring match is refused rather than silently resolved.
 	match := -1
 	for i, h := range t.Headers {
 		if strings.Contains(strings.ToLower(h), needle) {
