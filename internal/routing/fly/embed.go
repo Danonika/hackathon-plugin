@@ -158,6 +158,13 @@ func (r *Router) embeddingCategoryScores(ctx context.Context, task string) (map[
 		sims[cat] = cosine(taskVec, centroid)
 	}
 	if len(sims) == 0 {
+		// Every centroid mismatched the task vector: the cached centroids are
+		// unusable for this embedder (e.g. a hash-encoder fallback persisted
+		// under the primary model tag). Drop them so the next call rebuilds
+		// instead of disabling the embedding signal for the process lifetime.
+		r.mu.Lock()
+		r.centroids = nil
+		r.mu.Unlock()
 		return nil, false
 	}
 	// Keep the relative ranking of the categories, but cap each score by how
