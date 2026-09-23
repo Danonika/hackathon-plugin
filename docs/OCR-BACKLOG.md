@@ -4,7 +4,7 @@ Source: `ocr scan` - 420 findings across 126 files.
 
 Workflow: fix one at a time, commit each, push, then re-run OCR against the commit. `[ ]` = open, `[x]` = fixed.
 
-Progress: **24 of 359** fixed (all criticals + all highs). Commits v0.16.32..v0.16.56.
+Progress: **24 of 359** fixed (all criticals + all 24 actionable highs) and verified against pushed commits. Commits v0.16.32..v0.16.59. Next: OCR-025 (medium/bug).
 
 - Actionable: **359** | Skipped (fly frontend being replaced): **61**
 
