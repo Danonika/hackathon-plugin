@@ -4,7 +4,7 @@ Source: `ocr scan` - 420 findings across 126 files.
 
 Workflow: fix one at a time, commit each, push, then re-run OCR against the commit. `[ ]` = open, `[x]` = fixed.
 
-Progress: **16 of 359** fixed and verified (`prior revision..prior revision` -> 0 OCR findings). Commits v0.16.32..v0.16.50.
+Progress: **24 of 359** fixed (all criticals + all highs). Commits v0.16.32..v0.16.56.
 
 - Actionable: **359** | Skipped (fly frontend being replaced): **61**
 
@@ -69,28 +69,28 @@ Progress: **16 of 359** fixed and verified (`prior revision..prior revision` -> 
 - [x] **OCR-016** `scripts/e2e-fly.ps1:69` _test_
   The PAM and PPL1 assertions both use `-ge` (>=) while their labels claim the counter was *incremented*. If the reward/feedback or correction/pain path is broken and the counter never advances, these checks still pass (0 >= 0), and when `fly-brain.json` is absent both values default to 0 so the comparison is trivially true. Use a strict `-gt` comparison (with a meaningful failure detail) for both the 'PAM incremented (reward)' and 'PPL1 incremented (pain)' checks so a non-incrementing counter is actually detected.
 
-- [ ] **OCR-017** `scripts/env-set.sh:103` _bug_
+- [x] **OCR-017** `scripts/env-set.sh:103` _bug_
   The stale-lock reclamation is not atomic with respect to acquisition, contradicting the comment. `lock_is_stale` is evaluated once, then the lock is claimed with a separate `mv`. Two contenders A and B can both observe the same stale lock: A renames/remove it and successfully `mkdir`s the lock (writes its pid), then B (which already decided it was stale) performs `mv "$LOCK" "$LOCK.stale.$$"`, renaming A's *live* lock away and deleting it, after which B's `mkdir` also succeeds. Both processes then believe they hold the lock and the losing writer's `mv "$TMP" "$FILE"` silently clobbers the winner's output. Additionally, `kill -0 "$holder"` can report a dead lock as live due to PID reuse, causing a false 'another writer holds' abort. Re-verify the lock is still stale immediately before the rename (or make the claim conditional on the pid file still matching), and re-check staleness inside the acquisition loop.
 
-- [ ] **OCR-018** `scripts/env-set.sh:134` _security_
+- [x] **OCR-018** `scripts/env-set.sh:134` _security_
   `enc()` only wraps a value in quotes when it matches `[ \t#"'$`\\\r\n]`. Values that contain shell metacharacters but none of those characters (e.g. `;`, `&`, `|`, `<`, `>`, `(`, `)`, `*`, `?`, `!`, `{`, `}`, `~`) are emitted completely unquoted. For a value like `hello;malicious` the resulting line `KEY=hello;malicious` executes `malicious` when the .env file is later sourced (`. .env`). Values such as `a&&b` or `a|sh` are equally dangerous. Since the file exists precisely to be sourced, this is a command-injection vector. Use a default-deny test: quote unless the value consists solely of a known-safe character set.
 
-- [ ] **OCR-019** `scripts/plugin-check.ps1:100` _bug_
+- [x] **OCR-019** `scripts/plugin-check.ps1:100` _bug_
   False-PASS risk in exit-code capture: `$exitCode` is initialised to 0 and is only overwritten when the side file exists *and* contains a non-empty, parseable value. If the job completes but `Set-Content` silently fails (`-ErrorAction SilentlyContinue`), or `$LASTEXITCODE` is `$null` (e.g. the plugin command resolves to a script that never sets it), the file is missing/empty and the check wrongly reports success. Also `[int]$captured` throws a terminating error on any non-numeric content, aborting the script without the intended FAIL message. Treat a missing/empty/unparseable exit code as a failure and use a non-throwing parse.
 
-- [ ] **OCR-020** `scripts/plugin-check.sh:128` _security_
+- [x] **OCR-020** `scripts/plugin-check.sh:128` _security_
   The tree-containment validation only runs for absolute commands. A relative `command` is merely `os.path.join`ed and executed as-is, with no `realpath` resolution and no prefix check. A manifest containing `"command": "../../evil"` (or `./bin/mcp` where `bin` is a symlink out of the tree) therefore resolves outside the plugin tree and is still executed, defeating the guard added for the absolute case. Apply the same realpath + containment check to the relative branch.
 
-- [ ] **OCR-021** `scripts/setup-resources.sh:111` _bug_
+- [x] **OCR-021** `scripts/setup-resources.sh:111` _bug_
   Incomplete credentials are still claimed. `resources.defs` (internal/resources/resources.go:31) declares MinIO as `MINIO_ENDPOINT`, `MINIO_ACCESS_KEY`, `MINIO_SECRET_KEY`, but only the endpoint is ever prompted/stored. Answering "yes" here writes a partial set to .env and records `minio=true`, so `configs/resources.json` advertises a provider that cannot authenticate (it will always report `missing_keys`) — the exact invariant the block comment at the top claims to guarantee. Collect all required keys, or downgrade `MINIO` when any of them is skipped.
 
-- [ ] **OCR-022** `scripts/sync-skills.ps1:60` _bug_
+- [x] **OCR-022** `scripts/sync-skills.ps1:60` _bug_
   Two problems here: (1) `[int]$holder` performs a conversion that throws on malformed pid content; because it runs inside the `catch` block, the exception is not caught by that catch and propagates under `$ErrorActionPreference = "Stop"`, aborting the script while an unowned/partial lock state is left behind. (2) When the pid file is absent or unreadable (its `Set-Content` uses `SilentlyContinue`, so a live run may legitimately have no pid file) the code falls back to the 60s age check, which *will evict a slow-but-live copy* — the exact scenario the comment above claims to prevent. Also note that a dead holder's PID can be reused by an unrelated process, in which case the lock is never evicted and the acquire loop spins until failure. Parse defensively and avoid age-only eviction of a lock that this process may still hold.
 
-- [ ] **OCR-023** `scripts/uninstall.ps1:69` _bug_
+- [x] **OCR-023** `scripts/uninstall.ps1:69` _bug_
   The `& install-prompts.ps1 remove` invocation is unguarded. If the child script is missing or throws, `$ErrorActionPreference = "Stop"` turns it into a terminating error that aborts the whole uninstaller (leaving targets and codex state partially removed). Worse, `install-prompts.ps1` reports failures via `exit 1`, which does NOT throw — it just sets `$LASTEXITCODE`, so a failed prompt removal is silently ignored and never counted in `$Failures`. Wrap the call in a Test-Path + try/catch and fold the result into failure accounting (initialise `$Failures` before this block so it can be incremented here).
 
-- [ ] **OCR-024** `scripts/verify-command.test.sh:37` _test_
+- [x] **OCR-024** `scripts/verify-command.test.sh:37` _test_
   `grep -q 'pattern' file1 file2 file3` succeeds if ANY of the three files contains the phrase, so this check passes even when only plan.md has the instruction and research.md/build.md do not — contradicting its own "commands state the agent runs the tools" label. Assert each command independently (loop over the files) so a missing instruction in one file is actually caught.
 
 ## MEDIUM
