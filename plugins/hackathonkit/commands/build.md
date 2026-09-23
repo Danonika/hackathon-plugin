@@ -7,7 +7,7 @@ argument-hint: "[task or stage]"
 
 Build: $ARGUMENTS
 
-The agent selects and runs the tools; the user never has to name them.
+The agent selects and runs the tools itself; do not ask the user to name them.
 
 1. `$task-router` picks the minimal capability set for the task (it calls
    `routing.fly_recommend` only when `system.context` reports `routing_mode: fly`).

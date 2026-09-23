@@ -65,13 +65,28 @@ $targets = @(
   "bin"
 )
 # Remove the /verify custom prompt this installer placed for Codex.
+$Failures = 0
 if ($Yes) {
-  & (Join-Path $root "scripts\install-prompts.ps1") remove | Out-Null
+  $promptsScript = Join-Path $root "scripts\install-prompts.ps1"
+  if (-not (Test-Path -LiteralPath $promptsScript)) {
+    Write-Warning "[uninstall] install-prompts.ps1 is missing; cannot remove the Codex prompts"
+  } else {
+    try {
+      & $promptsScript remove | Out-Null
+      # A child `exit 1` does not throw; it only sets $LASTEXITCODE.
+      if ($LASTEXITCODE -ne 0) {
+        Write-Warning "[uninstall] prompt removal reported a failure (exit $LASTEXITCODE)"
+        $Failures++
+      }
+    } catch {
+      Write-Warning "[uninstall] prompt removal failed: $($_.Exception.Message)"
+      $Failures++
+    }
+  }
 } else {
   Write-Host "would remove: $HOME\.codex\prompts\*.md (unmodified prompts only)"
 }
 
-$Failures = 0
 foreach ($rel in $targets) {
   $target = Join-Path $root $rel
   $rootPrefix = $root.TrimEnd([System.IO.Path]::DirectorySeparatorChar, '/', '\') + [System.IO.Path]::DirectorySeparatorChar

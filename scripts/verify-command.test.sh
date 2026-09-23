@@ -33,8 +33,11 @@ for cmd in $COMMANDS; do
   fi
 done
 
-# The commands tell the agent to run the work itself (not the user).
-check "commands state the agent runs the tools" "$(grep -q 'do not ask the user' "$CMDS_DIR/plan.md" "$CMDS_DIR/research.md" "$CMDS_DIR/build.md" 2>/dev/null && echo 1 || echo 0)"
+# The commands tell the agent to run the work itself (not the user). Assert per
+# file: `grep -q pattern f1 f2 f3` would pass if only one file matched.
+for cmd in plan research build; do
+  check "$cmd states the agent runs the tools" "$(grep -q 'do not ask the user' "$CMDS_DIR/$cmd.md" 2>/dev/null && echo 1 || echo 0)" "missing instruction in $cmd.md"
+done
 check "verify runs the quality gate" "$(grep -q 'quality-gate.sh' "$CMDS_DIR/verify.md" 2>/dev/null && echo 1 || echo 0)"
 check "verify enforces coverage" "$(grep -q 'coverage' "$CMDS_DIR/verify.md" 2>/dev/null && echo 1 || echo 0)"
 check "verify documents --target" "$(grep -q -- '--target' "$CMDS_DIR/verify.md" 2>/dev/null && echo 1 || echo 0)"

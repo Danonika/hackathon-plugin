@@ -54,15 +54,24 @@ for ($i = 0; $i -lt 100; $i++) {
       $holder = $null
       $pidFile = Join-Path $lock "pid"
       if (Test-Path -LiteralPath $pidFile) {
-        $holder = Get-Content -LiteralPath $pidFile -ErrorAction SilentlyContinue | Select-Object -First 1
+        try {
+          $holder = Get-Content -LiteralPath $pidFile -Force -ErrorAction Stop | Select-Object -First 1
+        } catch { $holder = $null }
       }
       $stale = $false
       $holderPid = 0
-      if ($holder -and [int]::TryParse("$holder", [ref]$holderPid) -and $holderPid -gt 0) {
+      if ($holder -and [int]::TryParse(("$holder").Trim(), [ref]$holderPid) -and $holderPid -gt 0) {
         # Only evict when the owning process is gone; a slow-but-live copy must
         # not have its lock stolen. An unparseable pid falls through to the age
-        # check rather than throwing.
-        if (-not (Get-Process -Id $holderPid -ErrorAction SilentlyContinue)) { $stale = $true }
+        # check rather than throwing. A dead pid later recycled by an unrelated
+        # process can leave the lock pinned, in which case the age check applies
+        # only when the lock also looks abandoned.
+        if (-not (Get-Process -Id $holderPid -ErrorAction SilentlyContinue)) {
+          try {
+            $agePid = (Get-Date) - (Get-Item -LiteralPath $lock -Force -ErrorAction Stop).LastWriteTime
+            if ($agePid.TotalSeconds -gt 60) { $stale = $true }
+          } catch { $stale = $true }
+        }
       } else {
         # No usable pid: only evict when the lock is old enough to be abandoned.
         # Guard the stat so a vanished lock cannot throw out of the catch.
