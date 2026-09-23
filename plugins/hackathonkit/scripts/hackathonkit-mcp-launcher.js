@@ -18,7 +18,9 @@ if (!fs.existsSync(launcher)) {
 }
 
 const result = isWindows
-  ? spawnSync(launcher, process.argv.slice(2), { stdio: "inherit" })
+  // .cmd/.bat files are not executable on their own under Node; they must be
+  // launched through the command interpreter.
+  ? spawnSync(process.env.ComSpec || "cmd.exe", ["/d", "/s", "/c", launcher, ...process.argv.slice(2)], { stdio: "inherit" })
   : spawnSync("sh", [launcher, ...process.argv.slice(2)], { stdio: "inherit" });
 
 if (result.error) {

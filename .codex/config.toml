@@ -15,10 +15,11 @@ web_search = "disabled"
 # Instructions for this project live in AGENTS.md: `persistent_instructions` is not
 # a Codex 0.156 config key, so it would be ignored here.
 
-# Fallback MCP registration (no plugin required). The `args` path is rewritten
-# to an absolute launcher path by scripts/gen-codex-config.sh (run by
-# scripts/setup.sh); the committed value below is the repo-root-relative
-# fallback, so `sh` must be run from the repository root unless you ran setup.
+# Fallback MCP registration (no plugin required). The committed value below is
+# repo-root-relative, so start Codex from the repository root, or run
+# scripts/setup.sh: scripts/gen-codex-config.sh then writes an absolute launcher
+# path to the USER config ($CODEX_HOME/config.toml), which Codex applies with
+# higher precedence and which works from any working directory.
 # POSIX only: on Windows `sh` is unavailable, so run scripts/setup.ps1, which
 # generates plugins/hackathonkit/.mcp.json with the .cmd launcher, or replace
 # `command`/`args` below manually.
