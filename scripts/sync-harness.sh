@@ -25,6 +25,7 @@ fi
 CLAUDE_DST="$ROOT/.claude/skills"
 CLAUDE_LOCK="$CLAUDE_DST.lock"
 CLAUDE_LOCKED=0
+CLAUDE_LOCK_TOKEN="$$.$(date +%s 2>/dev/null || echo 0)"
 claude_lock_stale() {
   [ -d "$CLAUDE_LOCK" ] || return 1
   holder=$(cat "$CLAUDE_LOCK/pid" 2>/dev/null || true)
@@ -36,18 +37,21 @@ claude_lock_stale() {
   mtime=$(stat -c %Y "$CLAUDE_LOCK" 2>/dev/null || stat -f %m "$CLAUDE_LOCK" 2>/dev/null || echo "$now")
   [ $((now - mtime)) -ge 30 ]
 }
-if claude_lock_stale; then
-  # Claim the stale lock atomically so a live re-acquire is never deleted.
+claim_claude_lock() {
+  claude_lock_stale || return 0
   if mv "$CLAUDE_LOCK" "$CLAUDE_LOCK.stale.$$" 2>/dev/null; then
     rm -rf "$CLAUDE_LOCK.stale.$$"
   fi
-fi
+}
+claim_claude_lock
 for _ in 1 2 3 4 5 6 7 8 9 10; do
   if mkdir "$CLAUDE_LOCK" 2>/dev/null; then
     printf '%s' "$$" > "$CLAUDE_LOCK/pid" 2>/dev/null || true
+    printf '%s' "$CLAUDE_LOCK_TOKEN" > "$CLAUDE_LOCK/owner" 2>/dev/null || true
     CLAUDE_LOCKED=1
     break
   fi
+  claim_claude_lock
   sleep 1
 done
 if [ "$CLAUDE_LOCKED" != "1" ]; then
@@ -71,7 +75,11 @@ finish_harness() {
     rm -rf "$CLAUDE_OLD"
   fi
   if [ "$CLAUDE_LOCKED" = "1" ]; then
-    rm -rf "$CLAUDE_LOCK"
+    # Only remove the lock if this run still owns it: a stale-reclaimed lock may
+    # now belong to a peer.
+    if [ "$(cat "$CLAUDE_LOCK/owner" 2>/dev/null || true)" = "$CLAUDE_LOCK_TOKEN" ]; then
+      rm -rf "$CLAUDE_LOCK"
+    fi
   fi
 }
 trap finish_harness EXIT

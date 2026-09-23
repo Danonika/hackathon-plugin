@@ -84,6 +84,7 @@ fi
 # environment, so backslashes and other escape sequences survive unchanged.
 LOCK="$FILE.lock"
 LOCKED=0
+LOCK_TOKEN="$$.$(date +%s 2>/dev/null || echo 0)"
 lock_is_stale() {
   [ -d "$LOCK" ] || return 1
   holder=$(cat "$LOCK/pid" 2>/dev/null || true)
@@ -100,19 +101,24 @@ lock_is_stale() {
   mtime=$(stat -c %Y "$LOCK" 2>/dev/null || stat -f %m "$LOCK" 2>/dev/null || echo "$now")
   [ $((now - mtime)) -ge 30 ]
 }
-if lock_is_stale; then
-  # Claim the stale lock atomically: only one contender can rename it away, so
-  # a live re-acquire is never deleted from under its owner.
+claim_stale_lock() {
+  lock_is_stale || return 0
+  # Re-check under a single rename: only the contender whose mv succeeds owns
+  # the removal, so a live re-acquire cannot be renamed away by a stale verdict.
   if mv "$LOCK" "$LOCK.stale.$$" 2>/dev/null; then
     rm -rf "$LOCK.stale.$$"
   fi
-fi
+}
+claim_stale_lock
 for _ in 1 2 3 4 5 6 7 8 9 10; do
   if mkdir "$LOCK" 2>/dev/null; then
     printf '%s' "$$" > "$LOCK/pid" 2>/dev/null || true
+    printf '%s' "$LOCK_TOKEN" > "$LOCK/owner" 2>/dev/null || true
     LOCKED=1
     break
   fi
+  # A peer may have removed/re-created the lock; re-evaluate staleness each pass.
+  claim_stale_lock
   sleep 1
 done
 if [ "$LOCKED" != "1" ]; then
@@ -122,7 +128,10 @@ fi
 cleanup_env_set() {
   rm -f "$TMP"
   if [ "$LOCKED" = "1" ]; then
-    rm -rf "$LOCK"
+    # Only remove the lock if this run still owns it.
+    if [ "$(cat "$LOCK/owner" 2>/dev/null || true)" = "$LOCK_TOKEN" ]; then
+      rm -rf "$LOCK"
+    fi
   fi
 }
 on_signal_env_set() { cleanup_env_set; exit 130; }
