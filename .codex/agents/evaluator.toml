@@ -6,10 +6,11 @@ description = "Scores Hackathon Agent Kit artifacts against the judge rubric; re
 model_reasoning_effort = "high"
 # Read-only blocks filesystem writes; judge reports are persisted through the
 # eval.* MCP tools (which run outside this sandbox), so direct writes are never
-# needed. `approval_policy = "never"` removes command execution as an approval
-# option. Residual risk (documented, not enforced by config): read-only does not
-# itself deny outbound network, and there is no top-level Codex key to do so for
-# this sandbox mode -- containment of untrusted artifacts must not rely on that.
+# needed. `approval_policy = "never"` means the agent cannot obtain approval to
+# escape the sandbox. Residual risk (documented, not enforced by config):
+# read-only does not deny read/process execution or outbound network, and there
+# is no top-level Codex key to deny them for this sandbox mode -- containment of
+# untrusted artifacts must not rely on the sandbox.
 sandbox_mode = "read-only"
 approval_policy = "never"
 
