@@ -37,8 +37,11 @@ else
   check "non-numeric version rejected" 1
 fi
 
-# Valid bump updates every target.
-sh "$WORK/scripts/set-version.sh" "2.0.0" >/dev/null 2>&1
+# A valid bump: tolerate a non-zero exit so an unexpected failure is reported by
+# the assertions below rather than aborting the suite under `set -e`.
+if sh "$WORK/scripts/set-version.sh" "2.0.0" >/dev/null 2>&1; then :; else
+  check "set-version.sh 2.0.0 exited 0" 0 "non-zero exit"
+fi
 check "main.go bumped" "$([ "$(version_of "$WORK/cmd/hackathonkit-mcp/main.go")" = "2.0.0" ] && echo 1)" "got $(version_of "$WORK/cmd/hackathonkit-mcp/main.go")"
 check "plugin.json bumped" "$(grep -q '"version": "2.0.0"' "$WORK/.claude-plugin/plugin.json" && echo 1)"
 check "marketplace bumped" "$(grep -q '"version": "2.0.0"' "$WORK/.claude-plugin/marketplace.json" && echo 1)"
@@ -47,8 +50,19 @@ check "guide bumped" "$(grep -q 'Версия плагина: \*\*2.0.0\*\*' "$W
 
 # Idempotent: running again with the same version changes nothing.
 before=$(cat "$WORK/.claude-plugin/plugin.json")
-sh "$WORK/scripts/set-version.sh" >/dev/null 2>&1
+if sh "$WORK/scripts/set-version.sh" >/dev/null 2>&1; then :; else
+  check "set-version.sh re-run exited 0" 0 "non-zero exit"
+fi
 check "idempotent" "$([ "$before" = "$(cat "$WORK/.claude-plugin/plugin.json")" ] && echo 1)"
+
+# The guide file being absent must not fail the sync.
+mv "$WORK/docs/HACKATHON-GUIDE.md" "$WORK/docs/HACKATHON-GUIDE.md.bak"
+if sh "$WORK/scripts/set-version.sh" "2.0.1" >/dev/null 2>&1; then
+  check "absent guide tolerated" 1
+else
+  check "absent guide tolerated" 0 "non-zero exit"
+fi
+mv "$WORK/docs/HACKATHON-GUIDE.md.bak" "$WORK/docs/HACKATHON-GUIDE.md"
 
 # A drifted manifest (pattern no longer matches) must fail loudly.
 printf '{ "version" : "9.9.9" }\n' > "$WORK/.claude-plugin/plugin.json"

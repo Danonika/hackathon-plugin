@@ -75,7 +75,7 @@ if [ -f "$GUIDE" ]; then
     sed -i.bak "s/Версия плагина: \*\*[0-9][0-9.]*\*\*/Версия плагина: **$VERSION**/" "$GUIDE"
     rm -f "$GUIDE.bak"
   fi
-  if ! grep -q "Версия плагина: \*\*$VERSION\*\*" "$GUIDE"; then
+  if ! grep -Fq "Версия плагина: **$VERSION**" "$GUIDE"; then
     echo "[set-version] failed to update $GUIDE (expected 'Версия плагина: **$VERSION**')" >&2
     exit 1
   fi
