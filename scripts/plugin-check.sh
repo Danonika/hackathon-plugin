@@ -117,17 +117,16 @@ requests = "\n".join([
 ]) + "\n"
 
 command = server["command"]
-# The manifest is executed: a tampered absolute `command` must not launch an
-# arbitrary binary outside the installed plugin tree.
-if os.path.isabs(command):
-    real_command = os.path.realpath(command)
-    if not (real_command == source or real_command.startswith(source + os.sep)):
-        print("[plugin-check] refusing to execute a command outside the plugin tree: %s" % command, file=sys.stderr)
-        sys.exit(1)
-    command = real_command
-else:
-    # A relative command must resolve against the plugin, not the temp cwd.
-    command = os.path.join(source, command)
+# The manifest is executed, so the resolved binary must stay inside the installed
+# plugin tree -- for relative and absolute commands alike. A relative command
+# resolves against the plugin (not the temp cwd), then both branches are
+# realpath-resolved and containment-checked.
+candidate = os.path.join(source, command)
+real_command = os.path.realpath(candidate)
+if not (real_command == source or real_command.startswith(source + os.sep)):
+    print("[plugin-check] refusing to execute a command outside the plugin tree: %s (resolved to %s)" % (command, real_command), file=sys.stderr)
+    sys.exit(1)
+command = real_command
 cmd = [command] + [str(arg) for arg in args]
 with tempfile.TemporaryDirectory(prefix="hackathonkit-plugin-check-") as tmp:
     try:
