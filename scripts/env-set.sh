@@ -126,19 +126,24 @@ if [ "$LOCKED" != "1" ]; then
   echo "env-set: another writer holds $LOCK; aborting" >&2
   exit 1
 fi
-cleanup_env_set() {
-  rm -f "$TMP"
-  if [ "$LOCKED" = "1" ]; then
-    # Verify ownership, then release with an atomic rename-aside: the check
-    # narrows the window, and the rename means a peer that reclaimed the lock
-    # in between keeps its own directory (the mv moving the wrong dir is the
-    # documented residual race; ownership is re-verified to keep it minimal).
-    if [ "$(cat "$LOCK/owner" 2>/dev/null || true)" = "$LOCK_TOKEN" ]; then
-      if mv "$LOCK" "$LOCK.done.$$" 2>/dev/null; then
-        rm -rf "$LOCK.done.$$"
-      fi
+release_lock() {
+  [ "$LOCKED" = "1" ] || return 0
+  # Verify ownership, then release with an atomic rename-aside. If the owner file
+  # is unreadable (written best-effort), fall back to the pid so a genuine owner
+  # still releases; a peer's live lock is unaffected either way.
+  owner=$(cat "$LOCK/owner" 2>/dev/null || true)
+  pid_owner=$(cat "$LOCK/pid" 2>/dev/null || true)
+  if [ "$owner" = "$LOCK_TOKEN" ] || { [ -z "$owner" ] && [ "$pid_owner" = "$$" ]; }; then
+    if mv "$LOCK" "$LOCK.done.$$" 2>/dev/null; then
+      rm -rf "$LOCK.done.$$"
     fi
   fi
+  LOCKED=0
+}
+
+cleanup_env_set() {
+  rm -f "$TMP"
+  release_lock
 }
 on_signal_env_set() { cleanup_env_set; exit 130; }
 trap cleanup_env_set EXIT

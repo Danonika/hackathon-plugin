@@ -60,6 +60,18 @@ if [ "$CLAUDE_LOCKED" != "1" ]; then
 fi
 CLAUDE_TMP="$CLAUDE_DST.tmp.$$"
 CLAUDE_OLD=""
+release_claude_lock() {
+  [ "$CLAUDE_LOCKED" = "1" ] || return 0
+  owner=$(cat "$CLAUDE_LOCK/owner" 2>/dev/null || true)
+  pid_owner=$(cat "$CLAUDE_LOCK/pid" 2>/dev/null || true)
+  if [ "$owner" = "$CLAUDE_LOCK_TOKEN" ] || { [ -z "$owner" ] && [ "$pid_owner" = "$$" ]; }; then
+    if mv "$CLAUDE_LOCK" "$CLAUDE_LOCK.done.$$" 2>/dev/null; then
+      rm -rf "$CLAUDE_LOCK.done.$$"
+    fi
+  fi
+  CLAUDE_LOCKED=0
+}
+
 finish_harness() {
   rm -rf "$CLAUDE_TMP"
   if [ -n "$CLAUDE_OLD" ] && [ -d "$CLAUDE_OLD" ] && [ ! -d "$CLAUDE_DST" ]; then
@@ -74,15 +86,7 @@ finish_harness() {
   if [ -n "$CLAUDE_OLD" ] && [ -d "$CLAUDE_DST" ]; then
     rm -rf "$CLAUDE_OLD"
   fi
-  if [ "$CLAUDE_LOCKED" = "1" ]; then
-    # Verify ownership, then release with an atomic rename-aside so a peer that
-    # reclaimed the lock in between keeps its own directory.
-    if [ "$(cat "$CLAUDE_LOCK/owner" 2>/dev/null || true)" = "$CLAUDE_LOCK_TOKEN" ]; then
-      if mv "$CLAUDE_LOCK" "$CLAUDE_LOCK.done.$$" 2>/dev/null; then
-        rm -rf "$CLAUDE_LOCK.done.$$"
-      fi
-    fi
-  fi
+  release_claude_lock
 }
 trap finish_harness EXIT
 trap 'finish_harness; exit 130' INT
@@ -104,13 +108,7 @@ if ! mv "$CLAUDE_TMP" "$CLAUDE_DST"; then
   exit 1
 fi
 rm -rf "$CLAUDE_OLD"
-# Verify ownership, then release with an atomic rename-aside (see finish_harness).
-if [ "$(cat "$CLAUDE_LOCK/owner" 2>/dev/null || true)" = "$CLAUDE_LOCK_TOKEN" ]; then
-  if mv "$CLAUDE_LOCK" "$CLAUDE_LOCK.done.$$" 2>/dev/null; then
-    rm -rf "$CLAUDE_LOCK.done.$$"
-  fi
-fi
-CLAUDE_LOCKED=0
+release_claude_lock
 trap - EXIT INT TERM
 
 # Mirror the plugin commands into the harness project command directories:
