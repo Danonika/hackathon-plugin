@@ -14,8 +14,11 @@ You (the agent) run the workflow; the user only states the task or runs a comman
 not ask the user to name skills or tools. When a skill triggers, execute the MCP tools
 listed in its `tools:` frontmatter yourself.
 
-- Commands the user can run: `/plan [task]`, `/research [question]`, `/build [stage]`,
-  `/evaluate`, `/verify` (and `/verify --target N`). Each maps to the skills/tools below.
+- Explicit skills the user can invoke: `$plan`, `$research`, `$build`, `$evaluate`,
+  `$verify` (Codex CLI: `/skills` or `$`; ChatGPT app: `@`). Codex 0.117+ removed custom
+  slash commands, so these are skills, not prompts; without a command, infer the workflow.
+- If the Hackathon Agent Kit MCP server is available, call `system.context` before planning and back
+  every claim with a tool result or a file; when the server is unavailable, say so.
 - Without a command, infer it: multi-step work -> `$build-planner`; unfamiliar theme ->
   `$theme-research`; any tool task -> `$task-router`; then the matching domain skill.
 - Always finish a stage with `plan.update` evidence and `/verify` before claiming done.

@@ -7,10 +7,9 @@ model_reasoning_effort = "high"
 # Read-only blocks filesystem writes. The reviewer ingests attacker-controllable
 # evidence, so command execution and network are denied by configuration instead
 # of resting on prompt compliance: `never` removes command execution as an
-# approval option and network access is disabled explicitly.
+# approval option and the read-only sandbox leaves network access off by default.
 sandbox_mode = "read-only"
 approval_policy = "never"
-network_access = false
 
 developer_instructions = """
 You are the Hackathon Agent Kit reviewer. Review like an owner, from a fresh context.

@@ -8,11 +8,10 @@ model_reasoning_effort = "high"
 # eval.* MCP tools (which run outside this sandbox), so direct writes are never
 # needed. The evaluator ingests attacker-controllable artifacts, so command
 # execution and network are denied by configuration here rather than by prose:
-# `never` removes command execution as an approval option and network access is
-# disabled explicitly.
+# `never` removes command execution as an approval option and the read-only
+# sandbox leaves network access off by default.
 sandbox_mode = "read-only"
 approval_policy = "never"
-network_access = false
 
 developer_instructions = """
 You are the Hackathon Agent Kit evaluator. Score artifacts, never effort or intent.
