@@ -36,6 +36,7 @@ jobs:
           sh scripts/smoke.test.sh
           sh scripts/verify-command.test.sh
           sh scripts/set-version.test.sh
+          sh scripts/codex-config.test.sh
       - name: quality gate
         run: ./scripts/quality-gate.sh
       - name: clean-checkout rehearsal

@@ -99,6 +99,7 @@ if [ "$PROFILE" = "core" ]; then
 fi
 
 sh "$ROOT/scripts/gen-mcp-manifest.sh" "$ROOT"
+sh "$ROOT/scripts/gen-codex-config.sh" "$ROOT"
 
 # Pre-create writable mount points as the host user so the non-root
 # containers can write logs and artifacts through the bind mounts.
