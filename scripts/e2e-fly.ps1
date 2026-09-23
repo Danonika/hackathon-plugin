@@ -18,8 +18,22 @@ function Mcp([string]$payload) {
 function Call([string]$id, [string]$tool, [string]$argsJson) {
   $req = '{"jsonrpc":"2.0","id":' + $id + ',"method":"tools/call","params":{"name":"' + $tool + '","arguments":' + $argsJson + '}}'
   $raw = Mcp $req
-  $env = ($raw | ConvertFrom-Json).result.content[0].text | ConvertFrom-Json
-  return $env
+  if (-not $raw) {
+    Check "mcp call $tool" $false "no response from the MCP binary"
+    return $null
+  }
+  $rpc = $null
+  try { $rpc = $raw | ConvertFrom-Json } catch { $rpc = $null }
+  if ($null -eq $rpc -or $rpc.error -or -not $rpc.result -or -not $rpc.result.content -or $rpc.result.content.Count -eq 0 -or -not $rpc.result.content[0].text) {
+    $why = if ($rpc -and $rpc.error) { $rpc.error.message } else { "malformed JSON-RPC response" }
+    Check "mcp call $tool" $false $why
+    return $null
+  }
+  try { return ($rpc.result.content[0].text | ConvertFrom-Json) }
+  catch {
+    Check "mcp call $tool" $false "tool payload is not JSON: $($_.Exception.Message)"
+    return $null
+  }
 }
 
 # 1. pages
@@ -66,14 +80,14 @@ $fb = Call "4" "routing.fly_feedback" '{"task":"find anomalies in sensor telemet
 Check "feedback accepted" ($fb.status -eq "ok") ("stored=" + $fb.data.stored)
 $pamAfter = $pamBefore
 if (Test-Path $brainPath) { $pamAfter = [int]((Get-Content $brainPath -Raw | ConvertFrom-Json).dopamine.pam) }
-Check "PAM incremented (reward)" ($pamAfter -ge $pamBefore) ("before=" + $pamBefore + " after=" + $pamAfter)
+Check "PAM incremented (reward)" ($pamAfter -gt $pamBefore) ("before=" + $pamBefore + " after=" + $pamAfter)
 
 # 6. correction -> PPL1
 $fb2 = Call "5" "routing.fly_feedback" '{"task":"classify suspicious login logs","chosen":["classification.classify","data.inspect"],"recommended":["vision.analyze"],"source":"codex-correction"}'
 Check "feedback correction" ($fb2.status -eq "ok") ("stored=" + $fb2.data.stored)
 $ppl1After = $ppl1Before
 if (Test-Path $brainPath) { $ppl1After = [int]((Get-Content $brainPath -Raw | ConvertFrom-Json).dopamine.ppl1) }
-Check "PPL1 incremented (pain)" ($ppl1After -ge $ppl1Before) ("before=" + $ppl1Before + " after=" + $ppl1After)
+Check "PPL1 incremented (pain)" ($ppl1After -gt $ppl1Before) ("before=" + $ppl1Before + " after=" + $ppl1After)
 
 # 7. neuron events log
 $logPath = Join-Path $Root "logs\fly-neuron-events.jsonl"
