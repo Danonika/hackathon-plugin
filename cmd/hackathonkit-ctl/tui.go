@@ -63,7 +63,9 @@ func loadCmd(store *control.Store, selected, gen int) tea.Cmd {
 		defer cancel()
 		sessions, err := store.Sessions(ctx, 50)
 		if err != nil {
-			return loadedMsg{err: err}
+			// Carry gen so the supersession check can still discard this stale
+			// failure after a newer load has completed.
+			return loadedMsg{err: err, gen: gen}
 		}
 		if selected >= len(sessions) {
 			selected = len(sessions) - 1
@@ -80,8 +82,9 @@ func loadCmd(store *control.Store, selected, gen int) tea.Cmd {
 }
 
 func (m *tuiModel) applyLoaded(msg loadedMsg) {
-	if msg.gen != 0 && msg.gen < m.gen {
-		// A newer load has superseded this response.
+	if msg.gen < m.gen {
+		// A newer load has superseded this response. The initial load uses
+		// gen == 0 and m.gen == 0, so it still passes.
 		return
 	}
 	if msg.sessions == nil {
