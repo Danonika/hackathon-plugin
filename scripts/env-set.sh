@@ -140,16 +140,20 @@ trap on_signal_env_set INT TERM
 
 (umask 077 && KEY="$KEY" VALUE="$VALUE" awk '
   function enc(v) {
-    if (v ~ /[ \t#"'"'"'$`\\\r\n]/) {
-      gsub(/\\/, "\\\\", v)
-      gsub(/"/, "\\\"", v)
-      gsub(/\n/, "\\n", v)
-      gsub(/\r/, "\\r", v)
-      gsub(/\$/, "\\$", v)
-      gsub(/`/, "\\`", v)
-      return "\"" v "\""
+    # Default-deny: emit bare only when the value is provably safe to source
+    # unquoted. Anything else is quoted and escaped, so shell metacharacters
+    # (`;`, `&`, `|`, `<`, `>`, `(`, `)`, `*`, `?`, `!`, `{`, `}`, `~`, ...)
+    # cannot execute when the .env file is later sourced.
+    if (v == "" || v ~ /^[A-Za-z0-9_.,:\/@%+=-]+$/) {
+      return v
     }
-    return v
+    gsub(/\\/, "\\\\", v)
+    gsub(/"/, "\\\"", v)
+    gsub(/\n/, "\\n", v)
+    gsub(/\r/, "\\r", v)
+    gsub(/\$/, "\\$", v)
+    gsub(/`/, "\\`", v)
+    return "\"" v "\""
   }
   BEGIN { k = ENVIRON["KEY"]; v = ENVIRON["VALUE"]; done = 0 }
   substr($0, 1, length(k) + 1) == k "=" {

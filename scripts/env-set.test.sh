@@ -96,6 +96,27 @@ check "dollar substitution is not executed" "$([ -f /tmp/hackathonkit-env-inject
 check "dollar value round-trips" "$([ "$(cat "$TMP/evil-value")" = '$(touch /tmp/hackathonkit-env-inject-marker)' ] && echo 1 || echo 0)" "got: $(cat "$TMP/evil-value")"
 rm -f /tmp/hackathonkit-env-inject-marker
 
+# Default-deny quoting: shell metacharacters that used to be emitted bare must
+# now be quoted so sourcing the file cannot execute them.
+MARKER="$TMP/cmd-marker"
+rm -f "$MARKER"
+sh "$HELPER" "$TMP/meta.env" M1 "semi;touch $MARKER"
+sh "$HELPER" "$TMP/meta.env" M2 'and&&and'
+sh "$HELPER" "$TMP/meta.env" M3 'pipe|sh'
+sh "$HELPER" "$TMP/meta.env" M4 'redir>out'
+sh "$HELPER" "$TMP/meta.env" M5 'glob*?[]'
+sh "$HELPER" "$TMP/meta.env" M6 'subshell(){}'
+sh "$HELPER" "$TMP/meta.env" M7 'tilde~and!bang'
+( set -a; . "$TMP/meta.env"; set +a; printf '%s\n' "$M1|$M2|$M3|$M4|$M5|$M6|$M7" > "$TMP/meta-values" )
+check "metacharacters are quoted" "$(grep -q '^M3="pipe|sh"$' "$TMP/meta.env" && echo 1 || echo 0)" "got: $(cat "$TMP/meta.env")"
+check "semicolon payload not executed" "$([ -f "$MARKER" ] && echo 0 || echo 1)" "got: $(cat "$TMP/meta.env")"
+check "metachar values round-trip" "$([ "$(cat "$TMP/meta-values")" = "semi;touch $MARKER|and&&and|pipe|sh|redir>out|glob*?[]|subshell(){}|tilde~and!bang" ] && echo 1 || echo 0)" "got: $(cat "$TMP/meta-values")"
+rm -f "$MARKER"
+
+# A provably-safe value stays bare (no needless quoting).
+sh "$HELPER" "$TMP/safe.env" S 'safe-value_1.2:3'
+check "safe value stays bare" "$(grep -q '^S=safe-value_1.2:3$' "$TMP/safe.env" && echo 1 || echo 0)" "got: $(cat "$TMP/safe.env")"
+
 # Keys are matched literally, not as regexes.
 printf 'A_B=old\nA_XB=keep\n' > "$TMP/literal.env"
 sh "$HELPER" "$TMP/literal.env" A_B new
