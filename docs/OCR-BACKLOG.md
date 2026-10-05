@@ -4,7 +4,7 @@ Source: `ocr scan` - 420 findings across 126 files.
 
 Workflow: fix one at a time, commit each, push, then re-run OCR against the commit. `[ ]` = open, `[x]` = fixed.
 
-Progress: **24 of 359** fixed (all criticals + all 24 actionable highs) and verified against pushed commits. Commits v0.16.32..v0.16.59. Next: OCR-025 (medium/bug).
+Progress: **34 of 359** fixed and verified against pushed commits (all criticals, all highs, and OCR-025..034 mediums). Also fixed the pre-existing `internal/skills` catalog failure (5 stub skills now meet SKILL-STANDARD; 34/34 pass). Commits v0.16.32..v0.16.72. Next: OCR-035 (medium/bug).
 
 - Actionable: **359** | Skipped (fly frontend being replaced): **61**
 
@@ -95,34 +95,34 @@ Progress: **24 of 359** fixed (all criticals + all 24 actionable highs) and veri
 
 ## MEDIUM
 
-- [ ] **OCR-025** `.claude-plugin/marketplace.json:3` _bug_
+- [x] **OCR-025** `.claude-plugin/marketplace.json:3` _bug_
   The `owner` object only declares a `name`. The Claude Code marketplace schema expects owner identification to include an `email` alongside `name`; a marketplace manifest without it can be rejected/incompletely registered by `claude plugin marketplace add`. Note also that none of the repo's validators would catch this: `scripts/sync-harness.sh` / `scripts/doctor.sh` only check that the JSON parses, not its schema. Add the owner email (or confirm the field is genuinely optional for the targeted CLI version).
 
-- [ ] **OCR-026** `.claude-plugin/plugin.json:29` _bug_
+- [x] **OCR-026** `.claude-plugin/plugin.json:29` _bug_
   The MCP entrypoint hard-codes the POSIX launcher `hackathonkit-mcp-launcher.sh`. The repo explicitly ships a Windows counterpart (`plugins/hackathonkit/scripts/hackathonkit-mcp-launcher.cmd`) and the generated runtime manifest selects it per-platform (`scripts/gen-mcp-manifest.ps1` substitutes `{{MCP_LAUNCHER}}` with the `.cmd`). Because this static plugin manifest cannot do that substitution, a Windows Claude Code install will try to spawn the `.sh` directly and fail to start the `hackathonkit` MCP server even though a working `.cmd` launcher exists. This is the previously logged M1/S3-M1 regression (`docs/REVIEW-BACKLOG.md:66`, `:466`) that is marked fixed but still present. Make the entrypoint platform-neutral (e.g. a small node/sh dispatcher that picks `.cmd` on Windows) or point `mcpServers` at the generated `.mcp.json`, which is produced with the platform-correct launcher.
 
-- [ ] **OCR-027** `.codex/agents/evaluator.toml:14` _security_
+- [x] **OCR-027** `.codex/agents/evaluator.toml:14` _security_
   The comments and instructions overstate containment. `sandbox_mode = "read-only"` only blocks filesystem writes; read/process execution is still allowed. `approval_policy = "never"` merely removes the approval/escalation prompt and does not deny command execution. The instruction saying containment "depends on this, not on the sandbox" also contradicts the header claim that command execution and network are denied by configuration. Reconcile the header and instructions to state the residual reliance on prompt compliance (or actually constrain execution). The same issue appears in both `evaluator.toml` and `reviewer.toml`.
 
-- [ ] **OCR-028** `.codex/agents/researcher.toml:9` _security_
+- [x] **OCR-028** `.codex/agents/researcher.toml:9` _security_
   `sandbox_mode = "read-only"` restricts filesystem writes but does not itself deny process execution or network access. Unlike the sibling `reviewer.toml` (which adds `approval_policy = "never"` and `network_access = false` for exactly this reason), this agent ingests attacker-controllable content (fetched pages, documents, MCP snippets), so its anti-injection rule currently rests on prompt compliance alone. An embedded instruction could still drive a shell command or outbound request. Add an explicit approval/network policy here (at minimum `approval_policy = "never"`; decide network explicitly given `web_search` is disabled at repo level).
 
-- [ ] **OCR-029** `.codex/agents/researcher.toml:10` _bug_
+- [x] **OCR-029** `.codex/agents/researcher.toml:10` _bug_
   This caveat (MCP runs outside the sandbox, so `reports.create`/`learning.record` may persist state) lives only in a TOML comment, which is never surfaced to the model. Combined with the declared read-only sandbox, the agent may conclude it must not persist anything and skip `reports.create`, silently failing the workflow's persistence step and the required `theme-research-<slug>` artifact id. Move this rule into `developer_instructions` (as `reviewer.toml` does for its read-only semantics), e.g. state that the sandbox is read-only for its own commands while the Hackathon Agent Kit MCP server persists the brief/learning evidence.
 
-- [ ] **OCR-030** `.codex/agents/reviewer.toml:24` _security_
+- [x] **OCR-030** `.codex/agents/reviewer.toml:24` _security_
   The untrusted-content rule covers prompt injection but says nothing about secrets, while `what_breaks`/`repro` will quote attacker-controllable evidence (test output, gate reports, artifact text) that can contain credentials. Unlike the researcher and evaluator profiles, there is no instruction to redact secrets. Also state explicitly that embedded instructions must not alter the output contract itself (only the contract above defines the emission format), and that MCP/tool envelope output is included in "untrusted content".
 
-- [ ] **OCR-031** `.codex/config.toml:3` _maintainability_
+- [x] **OCR-031** `.codex/config.toml:3` _maintainability_
   The placement of `web_search` and `persistent_instructions` before the first `[table]` header is load-bearing for TOML semantics but is enforced only by this comment. A future edit that moves either key below `[mcp_servers.hackathonkit]` silently folds it into that table and the global setting disappears with no parse error. Consider a CI check that asserts these root-level keys remain table-free, so the invariant is machine-verified rather than relying on developer discipline.
 
-- [ ] **OCR-032** `.codex/config.toml:15` _bug_
+- [x] **OCR-032** `.codex/config.toml:15` _bug_
   `persistent_instructions` unconditionally tells the agent to call `system.context` and to "never claim a result without a tool result", but the MCP server it depends on cannot start on Windows (no `sh`) without a manual `scripts/setup.ps1` run. On such installs the agent receives instructions to use an unavailable tool with no guidance that it is missing, producing confusing behavior rather than a clear failure. The Windows path should be made automatic (platform-selected `.cmd` launcher) or the instruction should state how to detect the server's absence.
 
-- [ ] **OCR-033** `.codex/config.toml:22` _bug_
+- [x] **OCR-033** `.codex/config.toml:22` _bug_
   Windows correctness depends entirely on a manual out-of-band step: `sh` does not exist there, so the server fails to register unless the user runs `scripts/setup.ps1` or hand-edits `command`/`args`. Since this checking-in file is static, it bypasses the platform-aware generation already present in `scripts/gen-mcp-manifest.ps1`/`.ps1:36` (which substitutes `{{MCP_LAUNCHER}}` with `hackathonkit-mcp-launcher.cmd`). Prefer generating this entry the same way as `plugins/hackathonkit/.mcp.json`, or make the launcher platform-neutral, so the MCP server is not silently unregistered on Windows.
 
-- [ ] **OCR-034** `.codex/config.toml:26` _bug_
+- [x] **OCR-034** `.codex/config.toml:26` _bug_
   Nesting `$(git rev-parse --show-toplevel ...)` inside the outer double-quoted `args` value means the resolved path is substituted directly into the inner shell's command word. A repo path containing spaces, `$`, backticks, or quotes will word-split or undergo further expansion inside the inner `sh`, launching the wrong file or failing. Pass the root as a separate positional argument instead of interpolating it into the command string.
 
 - [ ] **OCR-035** `.codex/config.toml:26` _maintainability_
