@@ -171,7 +171,6 @@ func rebuildFromFeedback(root string, cfg config.File, embedder fly.Embedder, st
 		return fmt.Errorf("no feedback collected yet: %w", err)
 	}
 	defer f.Close()
-	seen := map[string]bool{}
 	// Must match the live router (cmd/hackathonkit-mcp, cmd/fly-bench): same chain
 	// embedder and the same "+hash512" model tag, otherwise the rebuilt vectors
 	// are treated as stale and contribute no knn signal.
@@ -194,11 +193,9 @@ func rebuildFromFeedback(root string, cfg config.File, embedder fly.Embedder, st
 		if json.Unmarshal(scanner.Bytes(), &line) != nil || line.Task == "" || len(line.Chosen) == 0 {
 			continue
 		}
-		key := strings.ToLower(strings.TrimSpace(line.Task))
-		if seen[key] {
-			continue
-		}
-		seen[key] = true
+		// No pre-dedup: AddFeedback keys examples by hashTask(raw task) and keeps
+		// the last occurrence, exactly like the live router. Replaying every
+		// event keeps the rebuild consistent with runtime behavior.
 		if _, _, err := router.AddFeedback(context.Background(), fly.FeedbackEvent{
 			Task: line.Task, Chosen: line.Chosen, Source: line.Source,
 		}); err != nil {

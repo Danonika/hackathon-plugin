@@ -179,6 +179,13 @@ func run(args []string, stdout, stderr io.Writer) int {
 		results = append(results, result)
 	}
 
+	// Re-check after the final row: the deadline can expire mid-row, which would
+	// otherwise publish a degraded last row as if it completed.
+	if ctx.Err() != nil {
+		fmt.Fprintln(stderr, "error: benchmark deadline exceeded before all rows completed; refusing to publish partial A/B evidence")
+		return 1
+	}
+
 	engaged := 0
 	for _, r := range results {
 		if r.FlyTop1 != "" {
