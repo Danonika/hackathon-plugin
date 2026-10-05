@@ -43,8 +43,18 @@ check "committed config is not machine-specific" "$(printf '%s' "$COMMITTED_ARGS
 WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"; exit 130' INT TERM
 trap 'rm -rf "$WORK"' EXIT
-mkdir -p "$WORK/plugins/hackathonkit/scripts" "$WORK/codexhome"
+mkdir -p "$WORK/plugins/hackathonkit/scripts" "$WORK/codexhome" "$WORK/.codex"
 : > "$WORK/plugins/hackathonkit/scripts/hackathonkit-mcp-launcher.sh"
+# A scratch project config with non-default budgets, to exercise derivation.
+cat > "$WORK/.codex/config.toml" <<'CFG'
+#:schema https://developers.openai.com/codex/config-schema.json
+web_search = "disabled"
+[mcp_servers.hackathonkit]
+command = "sh"
+args = ["plugins/hackathonkit/scripts/hackathonkit-mcp-launcher.sh"]
+startup_timeout_sec = 245
+tool_timeout_sec = 310
+CFG
 printf '# user config\napproval_policy = "on-request"\n' > "$WORK/codexhome/config.toml"
 CODEX_HOME="$WORK/codexhome" sh "$ROOT/scripts/gen-codex-config.sh" "$WORK" >/dev/null 2>&1
 USER_ARGS=$(python3 -c '
@@ -57,15 +67,15 @@ print("ok" if d.get("approval_policy") == "on-request" else "lost")
 check "generator writes an absolute launcher path" "$(printf '%s' "$USER_ARGS" | head -1 | grep -q "^root|/" && echo 1)" "got: $USER_ARGS"
 check "generator preserves user keys" "$(printf '%s' "$USER_ARGS" | grep -q "^ok$" && echo 1)" "got: $USER_ARGS"
 
-# The managed block must carry the timeout budgets (so the override does not
-# silently shorten them).
+# The managed block must carry the budgets derived from the project config (not
+# hardcoded defaults), so the override cannot silently shorten them.
 BUDGETS=$(python3 -c '
 import tomllib, sys
 d = tomllib.load(open(sys.argv[1], "rb"))
 s = d["mcp_servers"]["hackathonkit"]
-print("ok" if s.get("startup_timeout_sec") == 180 and s.get("tool_timeout_sec") == 180 else "bad")
+print("ok" if s.get("startup_timeout_sec") == 245 and s.get("tool_timeout_sec") == 310 else "bad:%r/%r" % (s.get("startup_timeout_sec"), s.get("tool_timeout_sec")))
 ' "$WORK/codexhome/config.toml")
-check "managed block carries timeout budgets" "$([ "$BUDGETS" = "ok" ] && echo 1)" "got: $BUDGETS"
+check "managed block derives project budgets" "$([ "$BUDGETS" = "ok" ] && echo 1)" "got: $BUDGETS"
 
 # A brand-new user config (no pre-existing file) must be created private (0600);
 # it may hold credentials. A pre-existing file keeps its own mode.

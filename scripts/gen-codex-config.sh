@@ -51,20 +51,36 @@ toml_escape() {
 mkdir -p "$CODEX_DIR"
 
 # Refuse to touch a hand-written hackathonkit table: we cannot safely merge it.
+# Allow leading whitespace before the header (TOML permits it).
 if [ -f "$DEST" ] && ! grep -qF "$BEGIN" "$DEST" &&
-   grep -qE '^\[[[:space:]]*"?mcp_servers"?[[:space:]]*\.[[:space:]]*"?hackathonkit"?[[:space:]]*\]' "$DEST"; then
+   grep -qE '^[[:space:]]*\[[[:space:]]*"?mcp_servers"?[[:space:]]*\.[[:space:]]*"?hackathonkit"?[[:space:]]*\]' "$DEST"; then
   echo "[codex-config] $DEST already defines [mcp_servers.hackathonkit] without the managed markers." >&2
   echo "[codex-config] Remove or rename that table, then re-run; refusing to overwrite it." >&2
   exit 1
 fi
 
 # Derive the timeout budgets from the committed config so the override cannot
-# silently shorten them when the project defaults change.
+# silently shorten them when the project defaults change. Scope the extraction
+# to the [mcp_servers.hackathonkit] table and accept the header and the key in any
+# order within that table; fall back to the project defaults.
 PROJECT_CONFIG="$ROOT/.codex/config.toml"
-STARTUP_TIMEOUT=$(sed -n 's/^startup_timeout_sec[[:space:]]*=[[:space:]]*\([0-9][0-9]*\).*/\1/p' "$PROJECT_CONFIG" 2>/dev/null | head -n 1)
-TOOL_TIMEOUT=$(sed -n 's/^tool_timeout_sec[[:space:]]*=[[:space:]]*\([0-9][0-9]*\).*/\1/p' "$PROJECT_CONFIG" 2>/dev/null | head -n 1)
-[ -n "$STARTUP_TIMEOUT" ] || STARTUP_TIMEOUT=180
-[ -n "$TOOL_TIMEOUT" ] || TOOL_TIMEOUT=180
+STARTUP_TIMEOUT=""
+TOOL_TIMEOUT=""
+if [ -f "$PROJECT_CONFIG" ]; then
+  # Header may be spaced and use either bare or quoted keys; strip the value.
+  STARTUP_TIMEOUT=$(awk '
+    /^[[:space:]]*\[[[:space:]]*"?mcp_servers"?[[:space:]]*\.[[:space:]]*"?hackathonkit"?[[:space:]]*\]/ { in_table = 1; next }
+    /^[[:space:]]*\[/ { in_table = 0 }
+    in_table && /^[[:space:]]*startup_timeout_sec[[:space:]]*=/ { v=$0; sub(/^[^=]*=[[:space:]]*/, "", v); sub(/[[:space:]#].*$/, "", v); print v; exit }
+  ' "$PROJECT_CONFIG")
+  TOOL_TIMEOUT=$(awk '
+    /^[[:space:]]*\[[[:space:]]*"?mcp_servers"?[[:space:]]*\.[[:space:]]*"?hackathonkit"?[[:space:]]*\]/ { in_table = 1; next }
+    /^[[:space:]]*\[/ { in_table = 0 }
+    in_table && /^[[:space:]]*tool_timeout_sec[[:space:]]*=/ { v=$0; sub(/^[^=]*=[[:space:]]*/, "", v); sub(/[[:space:]#].*$/, "", v); print v; exit }
+  ' "$PROJECT_CONFIG")
+fi
+case "$STARTUP_TIMEOUT" in ''|*[!0-9]*) STARTUP_TIMEOUT=180 ;; esac
+case "$TOOL_TIMEOUT" in ''|*[!0-9]*) TOOL_TIMEOUT=180 ;; esac
 
 # Preserve the destination mode when it exists (it may hold credentials); a new
 # file is private.
