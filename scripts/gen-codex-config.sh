@@ -70,10 +70,11 @@ TOOL_TIMEOUT=""
 if [ -f "$PROJECT_CONFIG" ]; then
   BUDGETS=$(awk '
     # A table header: the whole line is `[ key (. key)? ]` with optional
-    # spaces/quotes and an optional trailing comment. A multi-line array element
-    # such as `  [3, 4]` has a comma/space and does not match.
+    # spaces, optional double quotes around each key, and an optional trailing
+    # comment. A multi-line array element such as `  [3, 4]` has a comma/space
+    # and does not match.
     function table_header(line) {
-      return line ~ /^[[:space:]]*\[[[:space:]]*[A-Za-z_][A-Za-z0-9_-]*([[:space:]]*\.[[:space:]]*[A-Za-z_][A-Za-z0-9_-]*)*[[:space:]]*\][[:space:]]*(#.*)?$/
+      return line ~ /^[[:space:]]*\[[[:space:]]*"?[A-Za-z_][A-Za-z0-9_-]*"?([[:space:]]*\.[[:space:]]*"?[A-Za-z_][A-Za-z0-9_-]*"?)*[[:space:]]*\][[:space:]]*(#.*)?$/
     }
     # Whole-line comment or blank lines never change table scope.
     /^[[:space:]]*(#|$)/ { next }
