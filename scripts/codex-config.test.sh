@@ -139,12 +139,13 @@ check "tracked config untouched" "$([ "$BEFORE_HASH" = "$AFTER_HASH" ] && echo 1
 # injection vector): a hostile value falls back to the default.
 mkdir -p "$WORK/inject/plugins/hackathonkit/scripts" "$WORK/inject/.codex" "$WORK/cxhome"
 : > "$WORK/inject/plugins/hackathonkit/scripts/hackathonkit-mcp-launcher.sh"
-cat > "$WORK/inject/.codex/config.toml" <<'CFG'
-[mcp_servers.hackathonkit]
-startup_timeout_sec = 999;touch /tmp/codex-config-injection-marker
-tool_timeout_sec = 137
-CFG
-rm -f /tmp/codex-config-injection-marker
+MARKER="$WORK/injection-marker"
+{
+  printf '[mcp_servers.hackathonkit]\n'
+  printf 'startup_timeout_sec = 999;touch %s\n' "$MARKER"
+  printf 'tool_timeout_sec = 137\n'
+} > "$WORK/inject/.codex/config.toml"
+rm -f "$MARKER"
 CODEX_HOME="$WORK/cxhome" sh "$ROOT/scripts/gen-codex-config.sh" "$WORK/inject" >/dev/null 2>&1
 INJ=$(python3 -c '
 import tomllib, sys
@@ -153,8 +154,8 @@ s = d["mcp_servers"]["hackathonkit"]
 print("%s/%s" % (s.get("startup_timeout_sec"), s.get("tool_timeout_sec")))
 ' "$WORK/cxhome/config.toml")
 check "hostile budget value falls back to default" "$([ "$INJ" = "180/137" ] && echo 1)" "got: $INJ"
-check "budget extraction does not execute" "$([ -f /tmp/codex-config-injection-marker ] && echo 0 || echo 1)" "injection executed"
-rm -f /tmp/codex-config-injection-marker
+check "budget extraction does not execute" "$([ -f "$MARKER" ] && echo 0 || echo 1)" "injection executed"
+rm -f "$MARKER"
 
 if [ "$FAIL" -gt 0 ]; then
   echo "[codex-config-test] $FAIL assertion(s) failed"
