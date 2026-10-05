@@ -10,8 +10,6 @@
 # `scripts/uninstall.sh` can remove it again.
 #
 # Usage: scripts/gen-codex-config.sh [repo-root]
-set -e
-# Usage: scripts/gen-codex-config.sh [repo-root]
 #        scripts/gen-codex-config.sh --remove
 set -e
 if [ "$1" = "--remove" ]; then
@@ -53,11 +51,20 @@ toml_escape() {
 mkdir -p "$CODEX_DIR"
 
 # Refuse to touch a hand-written hackathonkit table: we cannot safely merge it.
-if [ -f "$DEST" ] && ! grep -qF "$BEGIN" "$DEST" && grep -qE '^\[mcp_servers\.hackathonkit\]' "$DEST"; then
+if [ -f "$DEST" ] && ! grep -qF "$BEGIN" "$DEST" &&
+   grep -qE '^\[[[:space:]]*"?mcp_servers"?[[:space:]]*\.[[:space:]]*"?hackathonkit"?[[:space:]]*\]' "$DEST"; then
   echo "[codex-config] $DEST already defines [mcp_servers.hackathonkit] without the managed markers." >&2
   echo "[codex-config] Remove or rename that table, then re-run; refusing to overwrite it." >&2
   exit 1
 fi
+
+# Derive the timeout budgets from the committed config so the override cannot
+# silently shorten them when the project defaults change.
+PROJECT_CONFIG="$ROOT/.codex/config.toml"
+STARTUP_TIMEOUT=$(sed -n 's/^startup_timeout_sec[[:space:]]*=[[:space:]]*\([0-9][0-9]*\).*/\1/p' "$PROJECT_CONFIG" 2>/dev/null | head -n 1)
+TOOL_TIMEOUT=$(sed -n 's/^tool_timeout_sec[[:space:]]*=[[:space:]]*\([0-9][0-9]*\).*/\1/p' "$PROJECT_CONFIG" 2>/dev/null | head -n 1)
+[ -n "$STARTUP_TIMEOUT" ] || STARTUP_TIMEOUT=180
+[ -n "$TOOL_TIMEOUT" ] || TOOL_TIMEOUT=180
 
 # Preserve the destination mode when it exists (it may hold credentials); a new
 # file is private.
@@ -68,7 +75,8 @@ if [ -f "$DEST" ]; then
 fi
 
 TMP=$(mktemp "$CODEX_DIR/config.toml.tmp.XXXXXX")
-cleanup() { rm -f "$TMP"; }
+TMP_TRIM="$TMP.trim"
+cleanup() { rm -f "$TMP" "$TMP_TRIM"; }
 trap cleanup EXIT
 trap 'cleanup; exit 130' INT
 trap 'cleanup; exit 143' TERM
@@ -86,19 +94,18 @@ else
   : > "$TMP"
 fi
 
-# Strip trailing blank lines left by the previous block so repeated runs are
-# byte-stable (the block is appended with a single leading blank line).
-awk 'BEGIN{b=""} /^[[:blank:]]*$/{b=b $0 "\n"; next} {printf "%s%s\n", b, $0; b=""} END{}' "$TMP" > "$TMP.trim"
-mv "$TMP.trim" "$TMP"
+# Drop trailing blank lines left by the previous block, then append the block
+# with one leading blank line, so repeated runs are byte-stable.
+awk 'BEGIN{b=""} /^[[:blank:]]*$/{b=b $0 "\n"; next} {printf "%s%s\n", b, $0; b=""} END{}' "$TMP" > "$TMP_TRIM"
+mv "$TMP_TRIM" "$TMP"
 
 {
-  printf '%s\n' "$BEGIN"
+  printf '\n%s\n' "$BEGIN"
   printf '[mcp_servers.hackathonkit]\n'
   printf 'command = "sh"\n'
   printf 'args = ["%s"]\n' "$(toml_escape "$LAUNCHER")"
-  # Mirror the committed budgets so the override does not silently shorten them.
-  printf 'startup_timeout_sec = 180\n'
-  printf 'tool_timeout_sec = 180\n'
+  printf 'startup_timeout_sec = %s\n' "$STARTUP_TIMEOUT"
+  printf 'tool_timeout_sec = %s\n' "$TOOL_TIMEOUT"
   printf '%s\n' "$END"
 } >> "$TMP"
 

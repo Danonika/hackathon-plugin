@@ -57,6 +57,31 @@ print("ok" if d.get("approval_policy") == "on-request" else "lost")
 check "generator writes an absolute launcher path" "$(printf '%s' "$USER_ARGS" | head -1 | grep -q "^root|/" && echo 1)" "got: $USER_ARGS"
 check "generator preserves user keys" "$(printf '%s' "$USER_ARGS" | grep -q "^ok$" && echo 1)" "got: $USER_ARGS"
 
+# The managed block must carry the timeout budgets (so the override does not
+# silently shorten them).
+BUDGETS=$(python3 -c '
+import tomllib, sys
+d = tomllib.load(open(sys.argv[1], "rb"))
+s = d["mcp_servers"]["hackathonkit"]
+print("ok" if s.get("startup_timeout_sec") == 180 and s.get("tool_timeout_sec") == 180 else "bad")
+' "$WORK/codexhome/config.toml")
+check "managed block carries timeout budgets" "$([ "$BUDGETS" = "ok" ] && echo 1)" "got: $BUDGETS"
+
+# A brand-new user config (no pre-existing file) must be created private (0600);
+# it may hold credentials. A pre-existing file keeps its own mode.
+mkdir -p "$WORK/fresh"
+CODEX_HOME="$WORK/fresh" sh "$ROOT/scripts/gen-codex-config.sh" "$WORK" >/dev/null 2>&1
+NEWMODE=$(stat -c '%a' "$WORK/fresh/config.toml" 2>/dev/null || stat -f '%Lp' "$WORK/fresh/config.toml" 2>/dev/null || echo "")
+check "new user config is private" "$([ "$NEWMODE" = "600" ] && echo 1)" "mode: $NEWMODE"
+
+# A pre-existing mode is preserved (e.g. a user file is already 0600 or 0640).
+mkdir -p "$WORK/existing"
+printf '# user\n' > "$WORK/existing/config.toml"
+chmod 640 "$WORK/existing/config.toml"
+CODEX_HOME="$WORK/existing" sh "$ROOT/scripts/gen-codex-config.sh" "$WORK" >/dev/null 2>&1
+KEPTMODE=$(stat -c '%a' "$WORK/existing/config.toml" 2>/dev/null || stat -f '%Lp' "$WORK/existing/config.toml" 2>/dev/null || echo "")
+check "existing config mode preserved" "$([ "$KEPTMODE" = "640" ] && echo 1)" "mode: $KEPTMODE"
+
 # Re-running must not duplicate the managed block and must be byte-stable.
 HASH_ONE=$(python3 -c 'import hashlib,sys;print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "$WORK/codexhome/config.toml")
 CODEX_HOME="$WORK/codexhome" sh "$ROOT/scripts/gen-codex-config.sh" "$WORK" >/dev/null 2>&1
@@ -65,13 +90,23 @@ COUNT=$(grep -c "hackathonkit-mcp (managed by" "$WORK/codexhome/config.toml" || 
 check "generator is idempotent" "$([ "$COUNT" = "2" ] && echo 1)" "marker lines: $COUNT"
 check "generator output is byte-stable" "$([ "$HASH_ONE" = "$HASH_TWO" ] && echo 1)" "rerun changed the file"
 
-# A hand-written hackathonkit table without markers must be refused, not overwritten.
-printf '[mcp_servers.hackathonkit]\ncommand = "custom"\n' > "$WORK/codexhome/handwritten.toml"
+# A hand-written hackathonkit table without markers must be refused and left intact.
 mkdir -p "$WORK/hand"
-if CODEX_HOME="$WORK/hand" sh -c 'mkdir -p "$CODEX_HOME"; cp "$1" "$CODEX_HOME/config.toml"; sh "$2" "$3"' sh "$WORK/codexhome/handwritten.toml" "$ROOT/scripts/gen-codex-config.sh" "$WORK" >/dev/null 2>&1; then
-  check "hand-written table refused" 0 "generator overwrote a hand-written table"
+printf '[mcp_servers.hackathonkit]\ncommand = "custom"\n' > "$WORK/hand/config.toml"
+if CODEX_HOME="$WORK/hand" sh "$ROOT/scripts/gen-codex-config.sh" "$WORK" >/dev/null 2>&1; then
+  check "hand-written table refused" 0 "generator exited 0 on a hand-written table"
 else
   check "hand-written table refused" 1
+fi
+check "hand-written table left intact" "$(grep -q 'command = "custom"' "$WORK/hand/config.toml" && echo 1)" "the user's table was rewritten"
+
+# A whitespace-variant header must also be refused.
+mkdir -p "$WORK/hand2"
+printf '[ mcp_servers . hackathonkit ]\ncommand = "custom"\n' > "$WORK/hand2/config.toml"
+if CODEX_HOME="$WORK/hand2" sh "$ROOT/scripts/gen-codex-config.sh" "$WORK" >/dev/null 2>&1; then
+  check "spaced hand-written table refused" 0 "generator exited 0"
+else
+  check "spaced hand-written table refused" 1
 fi
 
 # --remove strips the managed block and keeps user content.
