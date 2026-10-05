@@ -60,24 +60,35 @@ if [ -f "$DEST" ] && ! grep -qF "$BEGIN" "$DEST" &&
 fi
 
 # Derive the timeout budgets from the committed config so the override cannot
-# silently shorten them when the project defaults change. Scope the extraction
-# to the [mcp_servers.hackathonkit] table and accept the header and the key in any
-# order within that table; fall back to the project defaults.
+# silently shorten them when the project defaults change. One scan: enter the
+# [mcp_servers.hackathonkit] table, capture the two keys, leave on the next table
+# header. The header matcher requires a line that is *only* a table header (so
+# a multi-line array bracket does not reset the scope).
 PROJECT_CONFIG="$ROOT/.codex/config.toml"
 STARTUP_TIMEOUT=""
 TOOL_TIMEOUT=""
 if [ -f "$PROJECT_CONFIG" ]; then
-  # Header may be spaced and use either bare or quoted keys; strip the value.
-  STARTUP_TIMEOUT=$(awk '
-    /^[[:space:]]*\[[[:space:]]*"?mcp_servers"?[[:space:]]*\.[[:space:]]*"?hackathonkit"?[[:space:]]*\]/ { in_table = 1; next }
-    /^[[:space:]]*\[/ { in_table = 0 }
-    in_table && /^[[:space:]]*startup_timeout_sec[[:space:]]*=/ { v=$0; sub(/^[^=]*=[[:space:]]*/, "", v); sub(/[[:space:]#].*$/, "", v); print v; exit }
-  ' "$PROJECT_CONFIG")
-  TOOL_TIMEOUT=$(awk '
-    /^[[:space:]]*\[[[:space:]]*"?mcp_servers"?[[:space:]]*\.[[:space:]]*"?hackathonkit"?[[:space:]]*\]/ { in_table = 1; next }
-    /^[[:space:]]*\[/ { in_table = 0 }
-    in_table && /^[[:space:]]*tool_timeout_sec[[:space:]]*=/ { v=$0; sub(/^[^=]*=[[:space:]]*/, "", v); sub(/[[:space:]#].*$/, "", v); print v; exit }
-  ' "$PROJECT_CONFIG")
+  eval "$(awk '
+    function is_header(line) {
+      # A table header line: optional space, [, optional space, optional
+      # quoted key, ., optional quoted key, optional space, ], optional space,
+      # optional comment. Nothing else on the line.
+      return line ~ /^[[:space:]]*\[[[:space:]]*"?[A-Za-z_][A-Za-z0-9_-]*"?[[:space:]]*\.[[:space:]]*"?[A-Za-z_][A-Za-z0-9_-]*"?[[:space:]]*\][[:space:]]*(#.*)?$/
+    }
+    function is_any_header(line) {
+      return line ~ /^[[:space:]]*\[[^]]*\][[:space:]]*(#.*)?$/
+    }
+    is_header($0) && $0 ~ /mcp_servers/ && $0 ~ /hackathonkit/ { in_table = 1; next }
+    is_any_header($0) { in_table = 0 }
+    in_table && /^[[:space:]]*startup_timeout_sec[[:space:]]*=/ { print "STARTUP_TIMEOUT=" extract() }
+    in_table && /^[[:space:]]*tool_timeout_sec[[:space:]]*=/ { print "TOOL_TIMEOUT=" extract() }
+    function extract(   v) {
+      v = $0
+      sub(/^[^=]*=[[:space:]]*/, "", v)
+      sub(/[[:space:]#].*$/, "", v)
+      return v
+    }
+  ' "$PROJECT_CONFIG")"
 fi
 case "$STARTUP_TIMEOUT" in ''|*[!0-9]*) STARTUP_TIMEOUT=180 ;; esac
 case "$TOOL_TIMEOUT" in ''|*[!0-9]*) TOOL_TIMEOUT=180 ;; esac

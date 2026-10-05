@@ -45,13 +45,20 @@ trap 'rm -rf "$WORK"; exit 130' INT TERM
 trap 'rm -rf "$WORK"' EXIT
 mkdir -p "$WORK/plugins/hackathonkit/scripts" "$WORK/codexhome" "$WORK/.codex"
 : > "$WORK/plugins/hackathonkit/scripts/hackathonkit-mcp-launcher.sh"
-# A scratch project config with non-default budgets, to exercise derivation.
+# A scratch project config with non-default budgets plus a decoy table (other
+# budgets must be ignored) and a multi-line array bracket (must not reset the
+# table scope).
 cat > "$WORK/.codex/config.toml" <<'CFG'
 #:schema https://developers.openai.com/codex/config-schema.json
 web_search = "disabled"
+[mcp_servers.other]
+startup_timeout_sec = 999
+tool_timeout_sec = 999
 [mcp_servers.hackathonkit]
 command = "sh"
-args = ["plugins/hackathonkit/scripts/hackathonkit-mcp-launcher.sh"]
+args = [
+  "plugins/hackathonkit/scripts/hackathonkit-mcp-launcher.sh",
+]
 startup_timeout_sec = 245
 tool_timeout_sec = 310
 CFG
