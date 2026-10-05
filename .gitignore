@@ -18,14 +18,12 @@ htmlcov/
 /tmp/
 *.log
 plugins/hackathonkit/.mcp.json
-data/fly-viz/
-data/artifacts/
-data/index/
-data/control/
-data/worktrees/
-data/judge-bundles/
-# New generated data subdirectories should be added here (or switch to a
-# catch-all `data/*/` with an explicit `!data/input/` negation).
+# All runtime/generated state under data/ is ignored, except the committed
+# sample corpus and dataset. New generated subdirectories are covered
+# automatically instead of needing a hand-added entry.
+data/*/
+!data/input/
+!data/fly/
 .agents/skills/
 .claude/skills/
 .opencode/commands/
@@ -35,17 +33,9 @@ data/judge-bundles/
 # and `sh scripts/setup-resources.sh`.
 configs/install-state.json
 configs/resources.json
-evals/calibration/
-evals/decisions/
-evals/quality/
-evals/plans/
-evals/rankings/
-evals/fly-ab/
-evals/project-cost/
-evals/aggregate/
-evals/judges/
-evals/roast/
-evals/snapshots/
-evals/rehearsal/
+# All generated eval artifact kinds are ignored (only the tracked top-level
+# README stays). New kinds are covered automatically.
+evals/*/
+!evals/README.md
 # Legacy alias for data/judge-bundles/ (kept for older checkouts).
 judge-bundle/

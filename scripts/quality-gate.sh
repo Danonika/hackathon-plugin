@@ -38,12 +38,23 @@ if [ "$USE_BIN" = "1" ]; then
   exec "$BIN" --repo-root "$ROOT" --quality-gate
 fi
 
+# When running as root (e.g. the docker `quality` service), hand evidence written
+# through the bind mount back to the host user so later non-root runs can write
+# it. HACKATHONKIT_UID/GID are recorded in .env by scripts/setup.sh.
+chown_evidence() {
+  [ "$(id -u 2>/dev/null || echo 0)" = "0" ] || return 0
+  owner="${HACKATHONKIT_UID:-}:${HACKATHONKIT_GID:-}"
+  [ "$owner" != ":" ] || return 0
+  [ -d "$ROOT/evals" ] || return 0
+  chown -R "$owner" "$ROOT/evals/quality" 2>/dev/null || true
+}
+
 if command -v go >/dev/null 2>&1; then
   TMP_DIR=$(mktemp -d "${TMPDIR:-/tmp}/hackathonkit-mcp-quality.XXXXXX")
   # Resolve to an absolute path before cd so a relative TMPDIR still works.
   TMP_DIR="$(CDPATH= cd -- "$TMP_DIR" && pwd)"
   TMP_BIN="$TMP_DIR/hackathonkit-mcp"
-  cleanup_tmp() { rm -rf "$TMP_DIR"; }
+  cleanup_tmp() { rm -rf "$TMP_DIR"; chown_evidence; }
   trap cleanup_tmp EXIT
   trap 'exit 130' INT
   trap 'exit 143' TERM
@@ -53,8 +64,10 @@ if command -v go >/dev/null 2>&1; then
     exit 1
   }
   # No exec: the EXIT trap must run to remove the temporary binary.
-  "$TMP_BIN" --repo-root "$ROOT" --quality-gate || exit $?
-  exit 0
+  "$TMP_BIN" --repo-root "$ROOT" --quality-gate
+  status=$?
+  chown_evidence
+  exit $status
 fi
 
 echo "[quality-gate] no runtime available; build one with scripts/setup.sh" >&2

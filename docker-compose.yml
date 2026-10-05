@@ -64,9 +64,16 @@ services:
       dockerfile: Dockerfile
       target: quality
     profiles: ["quality"]
-    # Runs as root on purpose: it writes evals/quality/ evidence through a
-    # host bind mount of unknown ownership and is CI-only tooling. The Go build
-    # cache volume below is mounted at /root for the same reason.
+    # Runs as root by default: it writes evals/quality/ evidence through a host
+    # bind mount of unknown ownership and is CI-only tooling. The Go build cache
+    # volume below is mounted at /root for the same reason.
+    #
+    # To keep host-tree ownership clean, run as the host user and point the Go
+    # caches at world-writable locations:
+    #   docker compose run --rm \
+    #     --user "$(id -u):$(id -g)" \
+    #     -e GOCACHE=/tmp/go-build -e GOMODCACHE=/tmp/go-mod \
+    #     quality
     working_dir: /workspace
     environment:
       HACKATHONKIT_REPO_ROOT: /workspace
