@@ -3,6 +3,7 @@
 package main
 
 import (
+	"errors"
 	"os"
 	"syscall"
 
@@ -50,10 +51,19 @@ func processMatchesPath(pid int, recorded string) bool {
 		return false
 	}
 	defer windows.CloseHandle(handle)
+	// QueryFullProcessImageName returns ERROR_INSUFFICIENT_BUFFER for paths
+	// longer than MAX_PATH; grow and retry.
 	buf := make([]uint16, windows.MAX_PATH)
-	size := uint32(len(buf))
-	if err := windows.QueryFullProcessImageName(handle, 0, &buf[0], &size); err != nil {
+	for {
+		size := uint32(len(buf))
+		err := windows.QueryFullProcessImageName(handle, 0, &buf[0], &size)
+		if err == nil {
+			return samePath(windows.UTF16ToString(buf[:size]), recorded)
+		}
+		if errors.Is(err, windows.ERROR_INSUFFICIENT_BUFFER) && len(buf) < 1<<15 {
+			buf = make([]uint16, len(buf)*2)
+			continue
+		}
 		return false
 	}
-	return samePath(windows.UTF16ToString(buf[:size]), recorded)
 }

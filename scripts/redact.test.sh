@@ -32,10 +32,10 @@ out=$(printf 'postgres://user:p@ss@db:5432/app\n' | sh "$REDACT")
 check "password containing @ fully redacted" "$(printf '%s' "$out" | grep -q '://\*\*\*@db' && ! printf '%s' "$out" | grep -q 'p@ss' && echo 1)" "got: $out"
 
 out=$(printf "password='a b'\n" | sh "$REDACT")
-check "single-quoted value redacted" "$(printf '%s' "$out" | grep -q 'password=' && ! printf '%s' "$out" | grep -q 'a b' && echo 1)" "got: $out"
+check "single-quoted value redacted whole" "$([ "$out" = "password=[redacted]" ] && echo 1)" "got: $out"
 
 out=$(printf 'the token is rotating slowly\n' | sh "$REDACT")
-check "prose with a bare keyword word is left readable" "$(printf '%s' "$out" | grep -q 'rotating slowly' && echo 1)" "got: $out"
+check "prose with a bare keyword word is left readable" "$([ "$out" = "the token is rotating slowly" ] && echo 1)" "got: $out"
 
 if [ "$FAIL" -gt 0 ]; then
   echo "[redact-test] $FAIL assertion(s) failed"
