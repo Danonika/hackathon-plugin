@@ -34,8 +34,11 @@ check "password containing @ fully redacted" "$(printf '%s' "$out" | grep -q ':/
 out=$(printf 'postgres://user:pa?ss@db/x\npostgres://user:p#ss@db/x\n' | sh "$REDACT")
 check "password containing ? or # fully redacted" "$([ "$out" = "$(printf 'postgres://***@db/x\npostgres://***@db/x')" ] && echo 1)" "got: $out"
 
+out=$(printf 'http://a@b http://c@d\n' | sh "$REDACT")
+check "two whitespace-separated URLs each redacted" "$([ "$out" = "http://***@b http://***@d" ] && echo 1)" "got: $out"
+
 out=$(printf 'http://a@b,http://c@d\n' | sh "$REDACT")
-check "multiple URLs on one line do not leak userinfo" "$(! printf '%s' "$out" | grep -q 'a@b' && ! printf '%s' "$out" | grep -q 'c@d' && echo 1)" "got: $out"
+check "comma-joined URLs do not leak userinfo" "$(! printf '%s' "$out" | grep -q 'a@b' && ! printf '%s' "$out" | grep -q 'c@d' && echo 1)" "got: $out"
 
 out=$(printf 'postgres://user:pa/ss@db/x\n' | sh "$REDACT")
 check "password containing / fully redacted" "$([ "$out" = "postgres://***@db/x" ] && echo 1)" "got: $out"
