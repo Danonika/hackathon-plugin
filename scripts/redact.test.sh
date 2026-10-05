@@ -31,6 +31,12 @@ check "json quoted key redacted" "$(printf '%s' "$out" | grep -q '"password":"\[
 out=$(printf 'postgres://user:p@ss@db:5432/app\n' | sh "$REDACT")
 check "password containing @ fully redacted" "$(printf '%s' "$out" | grep -q '://\*\*\*@db' && ! printf '%s' "$out" | grep -q 'p@ss' && echo 1)" "got: $out"
 
+out=$(printf 'postgres://user:pa?ss@db/x\npostgres://user:p#ss@db/x\n' | sh "$REDACT")
+check "password containing ? or # fully redacted" "$([ "$out" = "$(printf 'postgres://***@db/x\npostgres://***@db/x')" ] && echo 1)" "got: $out"
+
+out=$(printf 'http://a@b,http://c@d\n' | sh "$REDACT")
+check "multiple URLs on one line each redacted" "$([ "$out" = "http://***@b,http://***@d" ] && echo 1)" "got: $out"
+
 out=$(printf "password='a b'\n" | sh "$REDACT")
 check "single-quoted value redacted whole" "$([ "$out" = "password=[redacted]" ] && echo 1)" "got: $out"
 
