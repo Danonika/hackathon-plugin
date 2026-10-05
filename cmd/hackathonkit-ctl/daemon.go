@@ -136,14 +136,12 @@ func daemonForeground(root string) error {
 	if err := os.MkdirAll(filepath.Dir(pidPath(root)), 0o755); err != nil {
 		return err
 	}
-	if existing, ok := readPID(root); ok && existing != os.Getpid() {
-		return fmt.Errorf("daemon: another process (pid %d) already owns %s", existing, pidPath(root))
-	}
 	mine := strconv.Itoa(os.Getpid())
 	// Record the pid and the executable path so a recycled pid can be told
-	// apart from our daemon without relying on /proc.
+	// apart from our daemon without relying on /proc. Claim the file atomically
+	// so two concurrent `daemon start` runs cannot both believe they own it.
 	self, _ := os.Executable()
-	if err := os.WriteFile(pidPath(root), []byte(mine+"\n"+self+"\n"), 0o644); err != nil {
+	if err := claimPIDFile(root, []byte(mine+"\n"+self+"\n")); err != nil {
 		return err
 	}
 	defer func() {
@@ -187,9 +185,18 @@ func daemonForeground(root string) error {
 	}
 	token := os.Getenv("HACKATHONKIT_CONTROL_TOKEN")
 	addr := net.JoinHostPort("127.0.0.1", port)
+	// Track in-flight handlers so store.Close() runs only after they finish.
+	// server.Shutdown returns as soon as its context times out, which does not
+	// guarantee handlers have stopped.
+	var handlerWG sync.WaitGroup
+	base := controlHandler(store, token)
 	server := &http.Server{
-		Addr:              addr,
-		Handler:           controlHandler(store, token),
+		Addr: addr,
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			handlerWG.Add(1)
+			defer handlerWG.Done()
+			base.ServeHTTP(w, r)
+		}),
 		ReadHeaderTimeout: 5 * time.Second,
 		WriteTimeout:      30 * time.Second,
 		IdleTimeout:       120 * time.Second,
@@ -205,9 +212,16 @@ func daemonForeground(root string) error {
 	fmt.Printf("control daemon listening on http://%s (pid %d)\n", addr, os.Getpid())
 	err = server.ListenAndServe()
 	if err == http.ErrServerClosed {
-		// ListenAndServe returns as soon as Shutdown begins; wait for in-flight
-		// handlers to drain before the deferred store.Close() runs.
+		// Wait for Shutdown to return, then for in-flight handlers to finish
+		// (bounded) before the deferred store.Close() runs.
 		<-shutdownDone
+		handlersDone := make(chan struct{})
+		go func() { handlerWG.Wait(); close(handlersDone) }()
+		select {
+		case <-handlersDone:
+		case <-time.After(2 * time.Second):
+			fmt.Fprintln(os.Stderr, "daemon: timed out waiting for in-flight handlers to finish")
+		}
 		return nil
 	}
 	return err
@@ -229,6 +243,51 @@ func readPIDFile(root string) (int, string, error) {
 		exe = strings.TrimSpace(lines[1])
 	}
 	return pid, exe, nil
+}
+
+// claimPIDFile publishes the pid file atomically: the content is written to a
+// temp file first and then hard-linked into place, so a concurrent reader never
+// sees an empty pid file (which O_EXCL-create-then-write would expose). If one
+// already exists, it is reclaimed only when no live daemon owns it.
+func claimPIDFile(root string, content []byte) error {
+	path := pidPath(root)
+	dir := filepath.Dir(path)
+	for attempt := 0; attempt < 3; attempt++ {
+		tmp, err := os.CreateTemp(dir, "daemon.pid.*")
+		if err != nil {
+			return err
+		}
+		tmpName := tmp.Name()
+		if _, werr := tmp.Write(content); werr != nil {
+			tmp.Close()
+			os.Remove(tmpName)
+			return werr
+		}
+		if cerr := tmp.Close(); cerr != nil {
+			os.Remove(tmpName)
+			return cerr
+		}
+		if cerr := os.Chmod(tmpName, 0o644); cerr != nil {
+			os.Remove(tmpName)
+			return cerr
+		}
+		if lerr := os.Link(tmpName, path); lerr == nil {
+			os.Remove(tmpName)
+			return nil
+		} else if !os.IsExist(lerr) {
+			os.Remove(tmpName)
+			return lerr
+		}
+		os.Remove(tmpName)
+		if pid, alive := readPID(root); alive && pid != os.Getpid() {
+			return fmt.Errorf("daemon: another process (pid %d) already owns %s", pid, path)
+		}
+		// No live owner: remove the stale file and retry.
+		if rerr := os.Remove(path); rerr != nil && !os.IsNotExist(rerr) {
+			return rerr
+		}
+	}
+	return fmt.Errorf("daemon: could not claim %s", path)
 }
 
 func readPID(root string) (int, bool) {
