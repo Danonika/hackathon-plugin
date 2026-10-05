@@ -11,15 +11,16 @@
 # external facts as gaps instead of asserting them.
 web_search = "disabled"
 
-# Appended to every prompt (additive, unlike model_instructions_file).
-# Instructions for this project live in AGENTS.md: `persistent_instructions` is not
-# a Codex 0.156 config key, so it would be ignored here.
+# Project instructions live in AGENTS.md. `persistent_instructions` is not a
+# Codex 0.156 config key, so it is intentionally omitted here (it would be
+# ignored).
 
-# Fallback MCP registration (no plugin required). The committed value below is
-# repo-root-relative, so start Codex from the repository root, or run
-# scripts/setup.sh: scripts/gen-codex-config.sh then writes an absolute launcher
-# path to the USER config ($CODEX_HOME/config.toml), which Codex applies with
-# higher precedence and which works from any working directory.
+# Fallback MCP registration (no plugin required). Codex loads this project
+# config from any subdirectory, so the launcher path is resolved at launch from
+# the repository root via `git rev-parse --show-toplevel` (it fails closed when
+# not inside a checkout). scripts/gen-codex-config.sh additionally writes an
+# absolute launcher path to the USER config ($CODEX_HOME/config.toml), which
+# Codex applies with higher precedence.
 # POSIX only: on Windows `sh` is unavailable, so run scripts/setup.ps1, which
 # generates plugins/hackathonkit/.mcp.json with the .cmd launcher, or replace
 # `command`/`args` below manually.
@@ -28,13 +29,12 @@ web_search = "disabled"
 # [table] header. TOML tables persist until the next header, so a key placed
 # after [mcp_servers.hackathonkit] is parsed as a server option and silently ignored.
 #
-# `sh <launcher>` (not `sh -c "..."`): the launcher resolves its own repo root
-# from its script path, so no shell string interpolation is needed and raw
-# shell errors cannot reach the MCP stdio channel. Running it through `sh` also
-# avoids depending on the checkout's executable bit.
+# The resolved root is passed to `sh` as a quoted argument, so a path containing
+# spaces is preserved. Running the launcher through `sh` also avoids depending
+# on the checkout's executable bit.
 [mcp_servers.hackathonkit]
 command = "sh"
-args = ["plugins/hackathonkit/scripts/hackathonkit-mcp-launcher.sh"]
+args = ["-c", "root=$(git rev-parse --show-toplevel 2>/dev/null) || { echo 'Hackathon Agent Kit: not inside a git checkout' >&2; exit 1; }; exec sh \"$root/plugins/hackathonkit/scripts/hackathonkit-mcp-launcher.sh\""]
 # 180s covers the docker-compose fallback on a cold machine (image pull/build +
 # dependency startup). Raise further or pre-build images if your network is slow.
 startup_timeout_sec = 180
