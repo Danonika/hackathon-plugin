@@ -51,12 +51,9 @@ sh "$ROOT/scripts/env-set.sh" .env HACKATHONKIT_GID "$(id -g)"
 mkdir -p logs evals data/artifacts data/index data/control data/judge-bundles
 
 redact_logs() {
-  if sed -E 's/a/b/' </dev/null >/dev/null 2>&1; then
-    sed -E -e 's#://[^/@ ]+@#://***@#g' -e 's/([A-Za-z_]*([Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd]|[Pp][Aa][Ss][Ss]|[Tt][Oo][Kk][Ee][Nn]|[Ss][Ee][Cc][Rr][Ee][Tt]|[Dd][Ss][Nn]|[Kk][Ee][Yy])[A-Za-z_]*)([=: ]+)("[^"]*"|[^ " ]+)/\1\3[redacted]/g'
-  else
-    # Fail closed: never print unredacted container logs.
-    printf '[docker-check] sed -E unavailable; container logs withheld to avoid leaking credentials\n'
-  fi
+  # Single shared redactor (scripts/redact.sh); it fails closed if sed -E is
+  # unavailable, so container logs are never printed unredacted.
+  sh "$ROOT/scripts/redact.sh"
 }
 
 INFRA_STARTED=0
