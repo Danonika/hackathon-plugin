@@ -139,12 +139,15 @@ func daemonForeground(root string) error {
 		return fmt.Errorf("daemon: another process (pid %d) already owns %s", existing, pidPath(root))
 	}
 	mine := strconv.Itoa(os.Getpid())
-	if err := os.WriteFile(pidPath(root), []byte(mine), 0o644); err != nil {
+	// Record the pid and the executable path so a recycled pid can be told
+	// apart from our daemon without relying on /proc.
+	self, _ := os.Executable()
+	if err := os.WriteFile(pidPath(root), []byte(mine+"\n"+self+"\n"), 0o644); err != nil {
 		return err
 	}
 	defer func() {
 		// Only remove the pid file when it is still ours.
-		if data, err := os.ReadFile(pidPath(root)); err == nil && strings.TrimSpace(string(data)) == mine {
+		if pid, _, err := readPIDFile(root); err == nil && pid == os.Getpid() {
 			os.Remove(pidPath(root))
 		}
 	}()
@@ -190,7 +193,9 @@ func daemonForeground(root string) error {
 		WriteTimeout:      30 * time.Second,
 		IdleTimeout:       120 * time.Second,
 	}
+	shutdownDone := make(chan struct{})
 	go func() {
+		defer close(shutdownDone)
 		<-ctx.Done()
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer cancel()
@@ -199,38 +204,92 @@ func daemonForeground(root string) error {
 	fmt.Printf("control daemon listening on http://%s (pid %d)\n", addr, os.Getpid())
 	err = server.ListenAndServe()
 	if err == http.ErrServerClosed {
+		// ListenAndServe returns as soon as Shutdown begins; wait for in-flight
+		// handlers to drain before the deferred store.Close() runs.
+		<-shutdownDone
 		return nil
 	}
 	return err
 }
 
-func readPID(root string) (int, bool) {
+// readPIDFile parses the pid file (pid on line 1, executable path on line 2).
+func readPIDFile(root string) (int, string, error) {
 	data, err := os.ReadFile(pidPath(root))
 	if err != nil {
-		return 0, false
+		return 0, "", err
 	}
-	pid, err := strconv.Atoi(strings.TrimSpace(string(data)))
+	lines := strings.Split(strings.ReplaceAll(string(data), "\r\n", "\n"), "\n")
+	pid, err := strconv.Atoi(strings.TrimSpace(lines[0]))
 	if err != nil || pid <= 0 {
+		return 0, "", fmt.Errorf("daemon: malformed pid file %s", pidPath(root))
+	}
+	exe := ""
+	if len(lines) > 1 {
+		exe = strings.TrimSpace(lines[1])
+	}
+	return pid, exe, nil
+}
+
+func readPID(root string) (int, bool) {
+	pid, recordedExe, err := readPIDFile(root)
+	if err != nil {
 		return 0, false
 	}
 	if !processAlive(pid) {
 		return pid, false
 	}
+	// Prefer the recorded executable path: an exact match proves identity on
+	// every platform. Fall back to the /proc check only when no path was saved
+	// (older pid files) and /proc is available; an unverifiable daemon is
+	// reported as not-ours so `stop` never signals an unrelated process.
+	if recordedExe != "" {
+		if !processMatchesPath(pid, recordedExe) {
+			return pid, false
+		}
+		return pid, true
+	}
 	if !processLooksLikeDaemon(pid) {
-		// Stale pid recycled by an unrelated process.
 		return pid, false
 	}
 	return pid, true
 }
 
+// processMatchesPath reports whether the running process at pid is the recorded
+// executable. On Linux it compares /proc/<pid>/exe; elsewhere it compares the
+// recorded path with this binary's path when the pid is our own process.
+func processMatchesPath(pid int, recorded string) bool {
+	if pid == os.Getpid() {
+		self, err := os.Executable()
+		if err == nil {
+			return samePath(self, recorded)
+		}
+	}
+	if resolved, err := os.Readlink(filepath.Join("/proc", strconv.Itoa(pid), "exe")); err == nil {
+		return samePath(resolved, recorded)
+	}
+	// No way to resolve the running executable: do not claim ownership.
+	return false
+}
+
+func samePath(a, b string) bool {
+	ra, errA := filepath.EvalSymlinks(a)
+	if errA != nil {
+		ra = a
+	}
+	rb, errB := filepath.EvalSymlinks(b)
+	if errB != nil {
+		rb = b
+	}
+	return ra == rb
+}
+
 // processLooksLikeDaemon verifies the process identity on Linux (via
-// /proc/<pid>/cmdline) and accepts the signal check elsewhere.
+// /proc/<pid>/cmdline). Without /proc the identity cannot be verified, so it
+// reports false rather than assuming ownership.
 func processLooksLikeDaemon(pid int) bool {
 	cmdline, err := os.ReadFile(filepath.Join("/proc", strconv.Itoa(pid), "cmdline"))
 	if err != nil {
-		// Non-Linux / restricted /proc: identity cannot be verified, so fall
-		// back to the caller's liveness check (documented residual risk).
-		return true
+		return false
 	}
 	return strings.Contains(strings.ReplaceAll(string(cmdline), "\x00", " "), "hackathonkit-ctl")
 }

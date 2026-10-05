@@ -11,6 +11,27 @@ import (
 	"testing"
 )
 
+// writePID writes a realistic pid file (pid + this executable path) for the
+// current test process.
+func writePID(t *testing.T, root string, pid int, exe string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(pidPath(root)), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(pidPath(root), []byte(strconv.Itoa(pid)+"\n"+exe+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func selfExe(t *testing.T) string {
+	t.Helper()
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return exe
+}
+
 func TestPidAndLogPaths(t *testing.T) {
 	root := t.TempDir()
 	if got, want := pidPath(root), filepath.Join(root, "data", "control", "daemon.pid"); got != want {
@@ -29,12 +50,17 @@ func TestReadPID(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(pidPath(root)), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(pidPath(root), []byte(strconv.Itoa(os.Getpid())), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	writePID(t, root, os.Getpid(), selfExe(t))
 	if pid, alive := readPID(root); !alive || pid != os.Getpid() {
 		t.Fatalf("live pid: pid=%d alive=%v", pid, alive)
 	}
+	// A live pid whose recorded executable is someone else must not be treated
+	// as our daemon (recycled-pid guard).
+	writePID(t, root, os.Getpid(), "/usr/bin/some-other-process")
+	if pid, alive := readPID(root); alive {
+		t.Fatalf("foreign executable reported as our daemon: pid=%d alive=%v", pid, alive)
+	}
+	writePID(t, root, os.Getpid(), selfExe(t))
 	for _, bad := range []string{"", "  ", "not-a-number", "-4", "0"} {
 		if err := os.WriteFile(pidPath(root), []byte(bad), 0o644); err != nil {
 			t.Fatal(err)
@@ -68,9 +94,7 @@ func TestDaemonStatusWithLivePID(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(pidPath(root)), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(pidPath(root), []byte(strconv.Itoa(os.Getpid())), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	writePID(t, root, os.Getpid(), selfExe(t))
 	out := captureStdout(t, func() {
 		if err := daemonStatus(root); err != nil {
 			t.Fatalf("daemonStatus: %v", err)
@@ -116,9 +140,7 @@ func TestDaemonStartAlreadyRunning(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(pidPath(root)), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(pidPath(root), []byte(strconv.Itoa(os.Getpid())), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	writePID(t, root, os.Getpid(), selfExe(t))
 	out := captureStdout(t, func() {
 		if err := daemonStart(root); err != nil {
 			t.Fatalf("daemonStart: %v", err)
