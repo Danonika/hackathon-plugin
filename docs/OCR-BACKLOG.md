@@ -4,7 +4,7 @@ Source: `ocr scan` - 420 findings across 126 files.
 
 Workflow: fix one at a time, commit each, push, then re-run OCR against the commit. `[ ]` = open, `[x]` = fixed.
 
-Progress: **34 of 359** fixed and verified against pushed commits (all criticals, all highs, and OCR-025..034 mediums). Also fixed the pre-existing `internal/skills` catalog failure (5 stub skills now meet SKILL-STANDARD; 34/34 pass). Commits v0.16.32..v0.16.72. Next: OCR-035 (medium/bug).
+Progress: **48 of 359** fixed and verified against pushed commits (all criticals, all highs, OCR-025..048 mediums). Commits v0.16.32..v0.16.85. Next: OCR-049 (medium/bug).
 
 - Actionable: **359** | Skipped (fly frontend being replaced): **61**
 
@@ -125,19 +125,19 @@ Progress: **34 of 359** fixed and verified against pushed commits (all criticals
 - [x] **OCR-034** `.codex/config.toml:26` _bug_
   Nesting `$(git rev-parse --show-toplevel ...)` inside the outer double-quoted `args` value means the resolved path is substituted directly into the inner shell's command word. A repo path containing spaces, `$`, backticks, or quotes will word-split or undergo further expansion inside the inner `sh`, launching the wrong file or failing. Pass the root as a separate positional argument instead of interpolating it into the command string.
 
-- [ ] **OCR-035** `.codex/config.toml:26` _maintainability_
+- [x] **OCR-035** `.codex/config.toml:26` _maintainability_
   Redundant double `sh` wrapper: `command = "sh"` + `args = ["-c", "exec sh ..."]` spawns `sh -c` only to spawn another `sh`, while the launcher already carries its own shebang. The extra layer exists solely to resolve the path (finding above), and any failure inside it surfaces only as a raw shell error on the MCP stdio channel. Point `command` at the launcher directly with an absolute path once the root is resolved.
 
-- [ ] **OCR-036** `.dockerignore:9` _security_
+- [x] **OCR-036** `.dockerignore:9` _security_
   `.dockerignore` only covers the root dirs and `.env*`, missing many patterns that `.gitignore` already excludes: `node_modules/`, `__pycache__/`, `*.pyc`, `.venv/`, `coverage/`, `htmlcov/`, `/tmp/`, `*.log`, plus generated/sensitive install state (`configs/install-state.json`, `configs/resources.json`, `plugins/hackathonkit/.mcp.json`, `.claude/skills/`). None of these are excluded from the build context, so a developer's local state (e.g. after `npm install` or launcher run) is sent to the Docker daemon, bloating the context, risking leakage, and busting the `go mod download` layer cache on every build. The project's own checklist (`plugins/hackathonkit/skills/devops-expert/references/docker-review-checklist.md:11`) requires `.dockerignore` to list `node_modules/`, and backlog item M13 was marked fixed without the pattern being added. Add the missing patterns to `.dockerignore` (with `**/` prefixes to match at any depth).
 
-- [ ] **OCR-037** `.gitattributes:1` _bug_
+- [x] **OCR-037** `.gitattributes:1` _bug_
   The global `eol=lf` forces the working tree to LF for every text file, including formats that are not enumerated below and that Windows-native tooling expects in CRLF (e.g. `.sln`, `.csproj`, `.vcxproj`, `.vcxproj.filters`, `.props`, `.targets`, `.reg`). Because `eol=lf` overrides `core.autocrlf`/`core.eol`, Windows-only tooling can read/rewrite these files and produce spurious or non-applying diffs. If this repo is genuinely Go-only this is fine, but if Windows project files may be added later, either add them to the CRLF block below or drop `eol=lf` from the global default and rely on `text=auto`.
 
-- [ ] **OCR-038** `.gitattributes:24` _bug_
+- [x] **OCR-038** `.gitattributes:24` _bug_
   The binary list omits many common binary artifacts (e.g. `.exe`, `.dll`, `.so`, `.dylib`, `.a`, `.o`, `.jar`, `.class`, `.wasm`, `.pyc`, `.bmp`, `.tiff`, `.avif`, `.7z`, `.tar`). `text=auto` relies on a NUL-byte heuristic that can misfire on small binary files, causing them to be treated as text and line-ending-normalized (data corruption). Enumerate the binary formats actually used by this repo explicitly rather than depending on auto-detection.
 
-- [ ] **OCR-039** `.github/workflows/ci.yml:0` _security_
+- [x] **OCR-039** `.github/workflows/ci.yml:0` _security_
   This redactor is materially weaker than the one in `scripts/docker-check.sh` (which already emits redacted diagnostics itself):
   
   1. Case-sensitive keywords: only `PASSWORD|PASS|TOKEN|SECRET|DSN|KEY` in upper case match, so lowercase/mixed-case keys (`password=`, `api_key=`, `secret:`) are printed verbatim. The script uses `[Pp][Aa][Ss]...` character classes to stay case-insensitive.
@@ -146,31 +146,31 @@ Progress: **34 of 359** fixed and verified against pushed commits (all criticals
   
   Since the redaction rules are duplicated here, they drift from the tested implementation. Best fix: reuse the shared redactor (or extract it into a sourceable script) instead of maintaining a second copy.
 
-- [ ] **OCR-040** `.github/workflows/ci.yml:42` _security_
+- [x] **OCR-040** `.github/workflows/ci.yml:42` _security_
   The rehearsal report is dumped verbatim, unlike the docker job which carefully pipes diagnostics through a redactor. `cmd/hackathonkit-rehearse` records step `evidence`/`error` strings and includes MCP-server stderr (`lastLines(stderr.String(), 2)`), which can embed configuration or connection details in the JSON. On failure the whole file is printed to the public build log. Redact the output before printing (reusing the same filter as the docker job) or upload `rehearsal.json` as an artifact instead of echoing it.
 
-- [ ] **OCR-041** `.gitignore:21` _maintainability_
+- [x] **OCR-041** `.gitignore:21` _maintainability_
   Both the `data/` and `evals/*/` blocks are hand-enumerated allowlists. Any new runtime subdirectory under `data/` (e.g. `data/quality/`) or new eval artifact kind (`evals/<new-kind>/<sha>/…`) is silently NOT ignored and will be committed on the next `git add .`. For `data/`, the two directories that must stay tracked are `data/input/` (committed sample corpus) and `data/fly/` (`data/fly/dataset.jsonl` is committed), so both need explicit negations. For `evals/`, only the tracked `evals/README.md` is at the top level, so a directory-only catch-all is safe and keeps the README tracked. Adopting the suggested catch-alls is safer.
 
-- [ ] **OCR-042** `Dockerfile:41` _security_
+- [x] **OCR-042** `Dockerfile:41` _security_
   The `quality` stage runs as root over a host bind mount, so `scripts/quality-gate.sh` creates `evals/quality/...` (and any other file it writes) owned by root in the host working tree, while the `hackathonkit-mcp`/`demo-api` services run as `${HACKATHONKIT_UID}:${HACKATHONKIT_GID}` (1000:1000). A later gate run through those services — or by the host user — then fails with EACCES on the root-owned `evals/quality` directory. Document the supported invocation (`docker compose run --rm --user "$(id -u):$(id -g)" quality`, as already noted for the cache volumes) or have the gate write into a directory that is chowned back to the runtime UID.
 
-- [ ] **OCR-043** `cmd/demo-api/fly_live.go:120` _performance_
+- [x] **OCR-043** `cmd/demo-api/fly_live.go:120` _performance_
   `refresh()` does blocking, potentially heavy work while holding `f.mu`: `os.Stat` + `os.Open` + `file.ReadAt` of up to 4 MiB, plus `json.Unmarshal`/`json.Marshal` of every complete line. Every SSE subscriber owns a 250 ms ticker and calls `snapshot()` -> `refresh()`, and the `?snapshot=1` REST path shares the same lock, so all connections plus the snapshot endpoint serialize behind one disk read. On a slow/stalled filesystem (e.g. NFS) a single read can stall every connected dashboard client. A single shared poller goroutine that owns the file state and publishes an immutable snapshot (e.g. via an atomic pointer), or reading outside the lock and only locking to publish, would remove the head-of-line blocking. Note the mutex is a `sync.Mutex`, so even the cheap fast-path `Stat` comparison serializes all readers unnecessarily.
 
-- [ ] **OCR-044** `cmd/demo-api/main.go:343` _bug_
+- [x] **OCR-044** `cmd/demo-api/main.go:343` _bug_
   The revision guard is skipped whenever the client omits `revision` (zero value) or sends a negative number, so a stale client that never sends `revision` can overwrite an approval taken against a newer plan revision — exactly the lost-update the `decisionMu` + revision check exist to prevent. Require a valid revision instead of silently bypassing the check.
 
-- [ ] **OCR-045** `cmd/demo-api/main.go:451` _bug_
+- [x] **OCR-045** `cmd/demo-api/main.go:451` _bug_
   `readApproval` collapses every failure into `nil`: a missing file, a permission error, and a truncated/corrupt JSON record are all reported as "no approval". `/plan/api/latest` then returns `"approval": null`, so a corrupt approval is indistinguishable from "not yet decided" and the UI silently loses an existing decision. Distinguish `os.IsNotExist` (return nil, nil) from real read/parse failures and surface them (e.g. change the signature to `(*planApproval, error)` and log/return the error) rather than treating them as absence.
 
-- [ ] **OCR-046** `cmd/fly-bench/main.go:231` _bug_
+- [x] **OCR-046** `cmd/fly-bench/main.go:231` _bug_
   When `cfg.Routing.TopK <= 0` (a state the config layer does not forbid) this branch silently uses *all* returned recommendations as k, while `report.Summary.TopK` still records the raw config value (0). Meanwhile `fly.NewRouter` defaults `topK` to 5 for the very same settings, so the published "fly recall@k" / "top_k" no longer describe the top-k the router actually applied. Normalize the effective k once (matching `fly.NewRouter`'s default) and use it for both the recall computation and the report.
 
-- [ ] **OCR-047** `cmd/hackathonkit-ctl/daemon.go:134` _bug_
+- [x] **OCR-047** `cmd/hackathonkit-ctl/daemon.go:134` _bug_
   `store.Close()` is deferred at the top of `daemonForeground`, but nothing waits for the shutdown goroutine below to finish draining in-flight handlers. When `ctx` is cancelled, the goroutine calls `server.Shutdown`, and `ListenAndServe` returns `http.ErrServerClosed` immediately — *not* after handlers complete. The function then returns, the deferred LIFO order runs `ingestWG.Wait()` and `store.Close()` while the server may still be executing handlers, so concurrent requests can fail with `sql: database is closed` and the pid file is removed before the server is really down. Await the shutdown goroutine (e.g. close a `done` channel after `Shutdown` returns) before returning so `store.Close()` only runs once serving has stopped.
 
-- [ ] **OCR-048** `cmd/hackathonkit-ctl/daemon.go:230` _security_
+- [x] **OCR-048** `cmd/hackathonkit-ctl/daemon.go:230` _security_
   Returning `true` here means any live PID recorded in the pid file is reported as "the daemon" on non-Linux or restricted-/proc systems, because `readPID` only requires `processAlive` in that case. A stale or recycled PID then makes `daemonStop` send SIGTERM to an unrelated process. Combined with the brittle substring match on the executable path below, `daemon start/stop/status` are unreliable: if the binary is installed/named anything other than `.../hackathonkit-ctl`, the identity check fails and `start` reports a false "did not start" while `stop` reports "not running". Consider persisting the daemon's executable path (or start time/inode) in the pid file and comparing it exactly, and defaulting the unverifiable case to `false` (requiring an explicit force flag for `stop`) instead of assuming ownership.
 
 - [ ] **OCR-049** `cmd/hackathonkit-ctl/daemon.go:313` _security_
