@@ -1124,3 +1124,1101 @@ Progress: **48 of 359** fixed and verified against pushed commits (all criticals
 
 - [x] **OCR-359** `scripts/uninstall.sh:60` _maintainability_
   `codex` availability is probed twice with two separate `if` blocks. Consolidate into a single `command -v` check with an `else` branch to avoid a redundant lookup and the risk of the two branches drifting apart.
+
+---
+
+# OCR Backlog - Pass 2 (post-sweep full scan)
+
+Source: `ocr scan` after the v0.16.86 sweep. New findings on the changed code.
+
+All pass-2 criticals/highs were fixed in v0.16.87 (except the documented `scripts/redact.sh` false positive). Remaining medium/low below.
+
+## MEDIUM (pass 2)
+
+- [ ] **P2-001** `.codex/agents/evaluator.toml:24` _bug_
+  The self-validation list is narrower than what `eval.aggregate` actually enforces. `ValidateJudgeReport` (internal/evaluation/evaluation.go) additionally rejects reports missing a score for any of the five criteria, reports containing unknown criteria, deductions with negative/non-finite points, non-finite `total`, and a `snapshot_sha` that does not match the bundle. Because the agent is told only to check maxima, total, evidence presence and deduction criterion/reason, an otherwise plausible report can be silently dropped into `dropped_invalid`, driving the run to `inconclusive` for a reason the instructions never surfaced. Align this list with the validator or point at it as the authoritative check.
+
+- [ ] **P2-002** `.codex/agents/evaluator.toml:26` _security_
+  This rule tells the agent not to copy secrets, but the fields it emits (`evidence[].finding`/`source`, `questions[]`, `top_improvements[]`) are precisely where untrusted artifact text gets quoted, and unlike the reviewer/researcher agent configs this file gives no safe fallback. Add an explicit redaction contract with the same coverage (API keys, tokens, passwords, connection strings, private keys, session cookies, Authorization/bearer headers, personal data) and the "summarise and note the omission" fallback so a quoted passage never becomes a secret-leak channel into the persisted report.
+
+- [ ] **P2-003** `.codex/agents/researcher.toml:27` _bug_
+  Coupling bug: "If any are missing ... persist nothing" disables persistence whenever *any* listed tool is absent — including read-only helpers such as `files.describe`, `learning.recall` or `knowledge.search`. That contradicts the later contract line ("the artifact id when `reports.create` persisted the brief") and silently drops the `theme-research-<slug>` artifact the handoff to `$build-planner` depends on. Scope the no-persist rule to when the persistence tools (`reports.create`/`learning.record`) are missing and mirror the skill's fallback matrix.
+
+- [ ] **P2-004** `.codex/agents/reviewer.toml:21` _maintainability_
+  The read-only rule is duplicated across three bullets (lines 21, 22, 26) and the copies disagree: line 21 says read-only "still permits read commands", line 22 says "You are read-only: do not run tests or builds", and line 26 says "do not run commands or fetches". This is not just redundancy (drift risk if only one copy is edited later) — it conflates the physical sandbox capability (which still allows process execution/network) with a behavioral instruction, which is exactly the confusion that misleads the model about what is actually prevented. Consolidate into one canonical statement of the instruction, separate from any description of sandbox capability.
+
+- [ ] **P2-005** `.codex/agents/reviewer.toml:23` _bug_
+  "Check evidence: tests actually ran" is unsatisfiable for a read-only agent: it cannot re-run anything, so it cannot distinguish a genuine run from a fabricated or stale log. The preceding bullet tells it to downgrade what it cannot confirm to "unverified - read-only", but this bullet reasserts confidence in test output as if the agent could authenticate it. Define what counts as trustworthy evidence (CI-produced artifacts with ids/commit hashes) and require self-reported logs to be marked unverified.
+
+- [ ] **P2-006** `.codex/agents/reviewer.toml:26` _security_
+  Merged finding for reviewer.toml and evaluator.toml: the sandbox comments concede that `sandbox_mode = 'read-only'` does not deny file reads, process execution or outbound network, and `approval_policy = 'never'` only prevents escaping the sandbox. Containment of untrusted artifacts therefore rests solely on prompt-level instructions (e.g. 'never run commands, builds or network fetches'), the exact path a malicious artifact would target. The residual risk is currently documented only in a TOML/prompt comment, so operators may over-trust the sandbox boundary. Prefer enforcing the boundary via an agent-level network/tool restriction where the Codex schema exposes one (the global `web_search = 'disabled'` covers only search, not shell egress); otherwise treat this as an accepted, monitored risk and surface it in operator-facing docs, not only in instructions to the model.
+
+- [ ] **P2-007** `.codex/agents/reviewer.toml:27` _maintainability_
+  The output contract claims to be "checkable", but it has gaps/ambiguities that make it non-conforming for real findings: (a) `line` is required for every finding even though file-agnostic/architectural findings have no single line; (b) the shape of `unverified[]` entries is undefined (no field list), so the very list this agent is told to demand of others is itself unspecified; (c) the allowed `severity` values are not enumerated. Because nothing validates this file (scripts/codex-config.test.sh only parses config.toml), the structured contract is prose-only and downstream consumers cannot rely on it. Specify `line` as nullable, list the `unverified[]` fields, and enumerate severities.
+
+- [ ] **P2-008** `.codex/config.toml:21` _documentation_
+  "which Codex applies with higher precedence" is a load-bearing assertion: the entire portability mitigation (absolute launcher path written to the user config) only works if user-level config really overrides this project-level `[mcp_servers.hackathonkit]` table. If Codex layers project config above user config (a common pattern), the relative `args` here would shadow the generated absolute path and the override would be silently ineffective. Please confirm the precedence direction against the Codex schema/docs and, if project config can win, adjust the committed file (e.g. omit the local override when the user config is present) and document the guarantee.
+
+- [ ] **P2-009** `.codex/config.toml:37` _security_
+  The launcher path is resolved against Codex's process working directory, not against this config file's location, so the executed artifact is chosen by cwd. Two consequences: (1) starting Codex from any subdirectory (or a temp cwd, as `scripts/plugin-check.sh` does) silently fails to register the server rather than surfacing an error; (2) if a same-named script exists under the cwd, that untrusted file is what gets executed as an MCP server. The comments document the portability angle but not the trust/execution implication. Prefer keeping a single source of truth for an absolute path (the user-config override written by `scripts/gen-codex-config.sh`), or resolve the path relative to the config file, so launch cannot be redirected by cwd.
+
+- [ ] **P2-010** `.dockerignore:9` _performance_
+  This block only excludes gitignored build output under `bin`, `data`, `logs`, `evals`. Other gitignored build/local artifacts are still shipped to the daemon via the Dockerfile's `COPY . .`:
+  - root-level binaries `/hackathonkit-mcp`, `/hackathonkit-demo-api`, `/hackathonkit-ctl`, `/hackathonkit-rehearse` (`.gitignore:2-5`)
+  - `*.exe` (`.gitignore:6`)
+  - the `.coverage` data file (`.gitignore:14`) — the existing `coverage`/`**/coverage` patterns only match the directory, not the `.coverage` file
+  - the legacy generated `judge-bundle/` alias (`.gitignore:41`)
+  
+  These bloat the build context, can leak local-only artifacts and bust the `COPY . .` layer cache. Mirror the remaining `.gitignore` build-output patterns here.
+
+- [ ] **P2-011** `.gitattributes:3` _bug_
+  `eol=lf` on the global rule forces LF into the working tree for every file git treats as text, not just in the repository. Any Windows-native text format that is added later and is not in the CRLF block below will be checked out with LF, which can break tooling that expects CRLF (e.g. `.resx`, `.appconfig`/`.config`, `.appxmanifest`, `.wixproj`, `.nuspec`, `.runsettings`, `.slnf`, `.filters` for other project types). The CRLF override list is therefore safety-critical and easy to fall out of sync. Consider dropping `eol=lf` from the global rule (leaving `* text=auto`, which already normalises the repository to LF) so the working tree keeps platform-native endings, or document that this list must be kept complete.
+
+- [ ] **P2-012** `.gitattributes:51` _bug_
+  The explicit binary list is a denylist and is incomplete; every binary/archive/asset type missing here still goes through the `text=auto` NUL-byte heuristic. Combined with the global `eol=lf`, a single misdetection silently rewrites the file with LF endings (corruption), which is exactly what this block is meant to prevent. Commonly needed entries still absent: archives/compressed (`.rar`, `.xz`, `.bz2`, `.zst`, `.lz`, `.lzma`, `.nupkg`, `.deb`, `.rpm`, `.apk`, `.ipa`), disk images (`.iso`, `.dmg`, `.img`), media (`.mov`, `.avi`, `.webm`, `.mkv`, `.wmv`, `.flv`, `.aac`, `.wma`, `.opus`), images/design (`.psd`, `.psb`, `.ai`, `.tga`, `.dds`, `.exr`, `.ktx`), fonts (`.ttc`, `.otc`), and data (`.sqlite`, `.db`, `.bin`, `.dat`, `.pdb`). Given the list must be exhaustive to work, an allow-list of text extensions (or `-text` catch-all plus explicit text patterns) is more robust than enumerating binaries.
+
+- [ ] **P2-013** `.gitignore:24` _bug_
+  Both `data/*/` and `evals/*/` use a trailing slash, so they only match *directories* one level down. Consequences: (1) any generated file written directly under `data/` (e.g. `data/state.json`, `data/export.csv`) is NOT ignored, contradicting the comment "All runtime/generated state under data/ is ignored" and risking large/generated content being committed; (2) `!evals/README.md` is a no-op (a file is never excluded by a directory-only pattern), and any generated *file* at the top level of `evals/` (e.g. `evals/<kind>.json`) is silently tracked. Drop the trailing slashes (`data/*`, `evals/*`) so files are covered too; the existing `!data/input/` and `!data/fly/` negations still correctly re-include those directories and contents, and `!evals/README.md` becomes a meaningful re-inclusion.
+
+- [ ] **P2-014** `Dockerfile:44` _security_
+  This `quality` stage is the LAST stage in the file, so the default build target of a bare `docker build .` (no `--target`) is this image — which runs as root and carries the full Go toolchain plus git. That contradicts the project checklist rule "containers run as `${HACKATHONKIT_UID:-1000}:${HACKATHONKIT_GID:-1000}`, never root" and makes it easy to accidentally tag/publish the privileged CI image (or ship it as the "main" image). Consider ordering the stages so that a non-root runtime stage is last (e.g. move this `quality` stage above `hackathonkit-mcp`/`demo-api`) and requiring `--target quality` (compose already sets `target: quality`); otherwise add a prominent warning that `--target` is mandatory.
+
+- [ ] **P2-015** `cmd/demo-api/fly_live.go:112` _bug_
+  `snapshot` is built under `f.mu` but stored after the lock is released. With two publishers (the poller goroutine plus any direct caller of `refreshSnapshot`, which the doc comment advertises), the sequence G1(refresh→rev=5, unlock) → G2(refresh→rev=6, unlock) → G2.Store(6) → G1.Store(5) publishes an older snapshot last, and every subscriber then observes a monotonically-decreasing `Revision` (SSE dedup compares `snapshot.Revision == lastRevision`, so the newer update is silently lost until a later poll bumps the revision again). Move the `Store` inside the lock so build-and-publish are atomic.
+
+- [ ] **P2-016** `cmd/demo-api/main.go:355` _bug_
+  The comment above this check states that a client omitting the revision (zero) or sending a negative value must not bypass the guard, but the equality check does not enforce that: `plans.Latest`/`plans.Load` never normalize `Revision`, so a plan file with `revision: 0` (or no revision field) yields `plan.Revision == 0`, and a client that omits `revision` (also 0) passes the guard. Reject non-positive revisions explicitly, e.g. `if body.Revision < 1 || body.Revision != plan.Revision`.
+
+- [ ] **P2-017** `cmd/fly-train/main.go:199` _bug_
+  If `AddFeedback` fails part way through the replay (e.g. a transient `saveMemory` disk error), the loop returns immediately with no rollback: `fly-memory.json` (and, via the dopamine side effect, possibly `fly-brain.json`) has already been rewritten with only the events processed so far and will be loaded by the live router as if complete. Consider failing fast before mutating anything, retrying transient errors, or documenting that the index can be left partially rebuilt and should be re-run.
+
+- [ ] **P2-018** `cmd/fly-train/main.go:273` _bug_
+  A single JSONL line longer than the 4 MB scanner limit makes `scanner.Scan()` stop and `scanner.Err()` return `bufio.ErrTooLong`, which is returned as a fatal error and aborts the whole dataset/eval run. This is inconsistent with the `onSkip` contract, where malformed JSON and missing fields are skipped per line. At minimum, surface an actionable error; ideally use a `bufio.Reader`/`ReadString('\n')` loop (or a larger, configurable limit) so one oversized line is skipped like the other bad lines instead of failing the entire training run.
+
+- [ ] **P2-019** `cmd/hackathonkit-ctl/daemon.go:86` _bug_
+  `daemonStart` treats "pid file present and process alive" as readiness, but `daemonForeground` writes the pid file *before* calling `ListenAndServe`. If the daemon later fails to bind (port already in use) it still exits and cleans up the pid file, yet this loop can observe the pid as alive while the initial ingest runs and report `daemon started`. The parent therefore reports success for a daemon that never listened. Consider having the child bind the listener before writing the pid file (and serve with `server.Serve(listener)`), or otherwise signal readiness only after a successful bind.
+
+- [ ] **P2-020** `cmd/hackathonkit-ctl/daemon.go:201` _bug_
+  The graceful-shutdown result is discarded. `Server.Shutdown` returns `context.DeadlineExceeded` when in-flight handlers do not finish within 3s, but the `<-shutdownDone` wait only waits for Shutdown to *return*, not for handlers to finish. Handlers can run up to `WriteTimeout` (30s), so after this 3s timeout `daemonForeground` proceeds to the deferred `store.Close()` while handlers are still executing store queries; those requests then fail with `sql: database is closed`. Handle the error (log it and fall back to `server.Close()`), or ensure the store is only closed after handlers have drained (e.g. track in-flight requests and wait for them).
+
+- [ ] **P2-021** `cmd/hackathonkit-ctl/main.go:248` _maintainability_
+  `addWorktree` creates a `hackathonkit/<name>` branch, but no code path ever deletes it: `worktree remove` only runs `git worktree remove`, and the setup-failure rollback above only removes the directory. Failed/completed runs therefore leak branches in the repository indefinitely, and the slug collisions below then interact badly with their existence. Consider creating a detached or per-run branch and pruning it when the worktree is removed.
+
+- [ ] **P2-022** `cmd/hackathonkit-ctl/main.go:335` _bug_
+  The worktree name is derived by `slugify`, which strips every non-alphanumeric rune, so distinct tasks/slugs (e.g. "fix: auth" and "fix auth", or "Bug A" vs "bug-a") collapse to the same name. With `--worktree`, the second run then fails with "worktree already exists", and because the branch persists (see above) it can also silently reuse an unrelated branch. Add a short uniqueness suffix (e.g. a timestamp/counter) to the derived name.
+
+- [ ] **P2-023** `cmd/hackathonkit-ctl/main.go:357` _bug_
+  If `UpsertSession` fails, the worktree directory is force-removed but (1) the `hackathonkit/<name>` branch created by `addWorktree` is left behind, and (2) the removal command's error is discarded, so an orphaned worktree directory can remain with no signal to the caller. Surface the removal failure (e.g. join it into the returned error) and delete the branch as part of the rollback.
+
+- [ ] **P2-024** `cmd/hackathonkit-ctl/main.go:371` _bug_
+  The task is appended as a bare trailing argument with no `--` terminator. A task beginning with `-` (e.g. `--help`, `-x`) will be parsed by codex as a flag rather than the prompt, silently changing behavior. Insert a `--` before the task argument so it is always treated as a positional value.
+
+- [ ] **P2-025** `cmd/hackathonkit-ctl/main.go:375` _maintainability_
+  cmdRun accepts `stdout`/`stderr` writers so it can be exercised/tested in isolation, but the child process is wired directly to `os.Stdout`/`os.Stderr`, so codex output bypasses the injected contract and escapes to the real terminal. This makes the function's output untestable and fragments where output goes. Route the child's stdout/stderr through the provided writers (or `io.MultiWriter` if you still want terminal output); `os.Stdin` can stay for interactivity.
+
+- [ ] **P2-026** `cmd/hackathonkit-ctl/proc_unix.go:38` _bug_
+  `processMatchesPath` reads `/proc/<pid>/exe`, which only exists on Linux, yet this file is compiled for every non-Windows GOOS (`//go:build !windows`); on darwin/BSD the readlink fails, so for `pid != os.Getpid()` it returns false. Because `readPID` (daemon.go:246) trusts the recorded executable path as the primary identity check, a live daemon is reported as stopped: `daemonStatus` prints "stopped", `daemonStop` removes the pid file without signalling, and `daemonForeground` overwrites it and launches a second daemon. The comment in daemon.go claiming executable-path matching "proves identity on every platform" is therefore wrong. Either narrow this file to `//go:build linux` and add a darwin/BSD implementation (e.g. `proc_pidpath`/`sysctl` KERN_PROCARGS, or matching the process list), or make the check explicitly portable/fail-safe instead of silently failing on non-Linux Unix; treat "cannot verify on this platform" distinctly from "verified not ours".
+
+- [ ] **P2-027** `cmd/hackathonkit-ctl/proc_windows.go:47` _bug_
+  A hard `TerminateProcess` bypasses the daemon's graceful shutdown entirely: `daemonForeground` installs `signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)` and relies on its defers to drain in-flight HTTP handlers and `store.Close()` the SQLite store, but `TerminateProcess` cannot be caught, so none of that runs when the process is stopped via `daemon stop`. In-flight ingest/DB writes can be lost and the pid file is left behind. Consider an explicit cooperative shutdown request (e.g. a control endpoint or a named event) with `TerminateProcess` only as a post-timeout fallback.
+
+- [ ] **P2-028** `cmd/hackathonkit-ctl/proc_windows.go:50` _bug_
+  Check-then-kill is not atomic and can terminate an unrelated process. In `daemonStop` (cmd/hackathonkit-ctl/daemon.go), identity is validated by `readPID` -> `processAlive` + `processMatchesPath`, each of which opens and closes its own short-lived handle; the pid is then handed to `os.FindProcess`/`terminateProcess`. On Windows pids are recycled aggressively, so a process that exits between the validation and this `Kill` lets the new owner of that pid be terminated. Retain the verified handle from a single `OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION|PROCESS_TERMINATE)` call, re-check the image path on that same handle, and call `windows.TerminateProcess` on it so verification and termination are atomic.
+
+- [ ] **P2-029** `cmd/hackathonkit-ctl/tui.go:67` _bug_
+  `Sessions` and `Events` share a single 5s deadline created before the sessions query runs. If `Sessions` is slow (large DB, SQLite lock contention, or a queued query because the pool is limited to one connection via `SetMaxOpenConns(1)`), it can consume most or all of the budget, so the subsequent `Events` call fails with `context.DeadlineExceeded`. That surfaces as a misleading "events unavailable" state on an otherwise successful refresh, and because the newest overlapping load is the one applied, it can even be the load that gets starved. Consider giving the events query its own timeout derived from the same parent instead of sharing one deadline across both queries.
+
+- [ ] **P2-030** `cmd/hackathonkit-mcp/main.go:107` _security_
+  Under-redaction gap: when the key and its value are separated by whitespace *plus* a stray separator (e.g. `password = hunter2`, `password : hunter2`), the marker that matches is the `<key>+space` one, `valueStart` lands on `=`/`:`, and the scan stops at the following whitespace. Only the separator is replaced, so the real secret survives in the output (result: `password [redacted] hunter2`). The same happens for the `"password":"secret"` (JSON key) rendering, where no marker matches at all. Since this routine is the only thing preventing DSN/credentials in startup logs, extend the skip logic to also consume a leading `=`/`:` (and following whitespace) before capturing the value, and consider handling a quoted key.
+
+- [ ] **P2-031** `cmd/hackathonkit-rehearse/main.go:381` _bug_
+  On timeout, `c.close()` calls `cmd.Wait()` while the reader goroutine spawned a few lines above is still blocked in `c.stdout.ReadBytes('\n')` on the StdoutPipe. `os/exec` documents that it is incorrect to call `Wait` before all reads from a `StdoutPipe` have completed, because `Wait` closes the parent's read end of the pipe; the blocked goroutine can then observe a closed/reused descriptor. Consider draining stdout from a single long-lived reader goroutine (or closing the pipe only after the reader exits) instead of calling `Wait` with an in-flight read.
+
+- [ ] **P2-032** `internal/config/config.go:230` _maintainability_
+  The same numeric fields are merged twice: `mergeFile` applies `tools.*` and `routing.*` with a `> 0` guard, then `mergeNumeric` (always reached because the same YAML parses into `filePatch`) overwrites them with pointer semantics. The `mergeFile` branches for `Tools`/`Routing` are effectively dead and the two guards diverge — e.g. a negative `fly_threshold`/`top_k` passes `mergeNumeric` while `mergeFile` would have ignored it. Consolidate numeric handling in one place (keeping the pointer patch for explicit zeros) to avoid the two paths drifting apart.
+
+- [ ] **P2-033** `internal/config/config.go:445` _bug_
+  Unlike `Routing()` and `NewManager`, `Evaluation()` does not log a non-`IsNotExist` read error: a permission/IO failure on bind-mounted `evaluation.yaml` is silently swallowed and the defaults/last cache are returned, making a broken config look like a successful load. Log the error (as done for routing) so the failure is observable.
+
+- [ ] **P2-034** `internal/config/lock_unix.go:23` _bug_
+  `syscall.Flock(..., LOCK_EX)` blocks indefinitely with no timeout or cancellation, unlike the non-unix implementation in `lock_other.go`, which bounds acquisition with a 5s deadline and returns a timeout error. `acquireLock` is reached from `Manager.SetRoutingMode`, which is invoked from the demo-api HTTP handler (`cmd/demo-api/main.go:388`) and the MCP server (`cmd/hackathonkit-mcp/main.go:207`), so a peer process that holds the lock while stuck on slow/hung filesystem I/O inside its own read-modify-write will wedge this request/worker indefinitely. Mirror the portable path by polling with LOCK_EX|LOCK_NB against a deadline (and document the behavior if blocking is intended).
+
+- [ ] **P2-035** `internal/control/ingest.go:189` _bug_
+  The comment claims a crash cannot replay already-ingested records, but the cursor is written *after* `handle` applies the record. A crash (or a `flush` failure reported below) between the apply and the cursor write leaves the cursor pointing at the previous record, so the next run replays it. The `events` table has no unique constraint, so replayed `tool_use`/`mcp_call`/`fly_feedback` records become duplicate rows. Either persist the cursor before applying (accepting possible loss instead of duplication) or correct the comment to document the actual at-least-once semantics; if duplicates are unacceptable, add a dedup key to `events`.
+
+- [ ] **P2-036** `internal/control/ingest.go:313` _bug_
+  `readFileBounded` uses `io.LimitReader`, which silently truncates a file at `maxIngestBytes` and returns no error. A decision file at or above 64 MiB therefore yields truncated bytes, `json.Unmarshal` fails, and the `continue` above skips it on every cycle — the file is never ingested and nothing is logged or returned. Detect truncation (e.g. read `max+1` and treat `len == max+1` as oversized, or `Stat` first) and surface it through the same `log.Printf`/error path as other read failures so the file is not silently dropped forever.
+
+- [ ] **P2-037** `internal/control/risk.go:76` _bug_
+  `panicNegation` only strips negations that occur in free-text values (`"no panic"`, `"0 panics"`, `panic_free`). The most common way a tool reports the absence of a panic is a quoted **key/value** (`{"panic":false}`, `{"panics":0}`, `{"panic_count":0}`), and there the first byte after `panic` is `"`, which `[\s:=]*` cannot consume, so no alternative matches and `panicWord` then matches `panic` → a benign payload is scored as a panic. Worse, `panicWord` ignores the value entirely, so `{"panic":false}` and `{"panic":true}` are classified identically. This inflates `riskPanic`/the stored reasons (violating the `[^a-z]panic`/negation contract documented above) and makes the reasons non-authoritative. Suggest handling an explicit boolean/numeric `panic`/`panics` field separately in `payloadHasPanic`, or making the pattern quote-aware (illustrative suggestion below).
+
+- [ ] **P2-038** `internal/evaluation/evaluation.go:650` _bug_
+  compareEntries treats differences within epsilon (1e-9) as equal, which is not transitive: A~B and B~C can hold while A≁C. Using it as the sort.SliceStable less predicate here, and then relying on adjacent-pair comparison to populate Unresolved, means a tie cluster can be left non-contiguous or split. ApplyCommission then re-checks only neighbouring entries to recover tier boundaries, so it can mis-merge genuinely different scores into a single commission tier (forcing an unnecessary majority vote and possibly ordering a lower-scored entry above a higher one) or split a real tier and reject a valid commission vote. Compute tie membership with a consistent tolerance-based clustering, or compare exact/rounded values so the ordering predicate is a strict weak ordering.
+
+- [ ] **P2-039** `internal/learning/learning.go:519` _bug_
+  `load` never validates the on-disk schema version: `save` stamps `fileVersion`, but any file is unmarshalled as the current format. A file written by an incompatible (e.g. newer) build is silently mis-parsed instead of being rejected, which can drop or misinterpret fields. Reject unknown versions (or migrate them) after unmarshalling.
+
+- [ ] **P2-040** `internal/learning/learning.go:548` _bug_
+  The package advertises "durable" learnings, but `save` renames the temp file into place without fsyncing it (or the containing directory). After a crash/power loss the rename may be persisted while the file's data is not, so a write that `Record` already reported as succeeded can be lost or leave a zero-length/truncated store. `tmp.Sync()` before `Close` and a directory fsync after `Rename` are needed to honor the durability claim.
+
+- [ ] **P2-041** `internal/learning/proc_unix.go:21` _bug_
+  `processAlive` collapses every non-EPERM error into "not alive". Its only caller (`Store.lockFile` in learning.go) uses a `false` result to `os.Remove` another process's lock file, so an indeterminate probe failure (e.g. a transient EINTR, or EINVAL on a platform where signal 0 is not accepted) is silently interpreted as "owner died" and the live lock is broken, letting two writers mutate the store concurrently. The contract should distinguish "definitely gone" (ESRCH) from "could not determine" and default indeterminate results to alive, matching the conservative intent of the caller's stale-lock logic. Also note `os.ErrProcessDone` (returned by `Process.Signal` for an already-reaped process) is not ESRCH.
+
+- [ ] **P2-042** `internal/mcp/registry.go:76` _bug_
+  `cloneMap`/`cloneSlice` always return non-nil containers, so a nested nil map/slice (`null` in JSON) is silently rewritten to `{}`/`[]`. Preserve nil so JSON serialization matches the registered schema.
+
+- [ ] **P2-043** `internal/mcp/server.go:164` _bug_
+  The write error for the oversize-frame response is discarded (`_ = enc.Encode(...)`), and the parse-error response below does the same, while the success path returns the encode error. If the output stream is broken (broken pipe, full disk, closed client), these error replies silently vanish and the loop keeps running; if the input then ends, `ServeStreams` returns `nil`, so the caller sees a clean shutdown even though responses were never delivered. Propagate the error consistently with the success path.
+
+- [ ] **P2-044** `internal/mcp/server.go:266` _bug_
+  When `CallTimeoutSec` exceeds `maxTimeoutSec` (24h) the condition is false and `timeout` silently stays at the hard-coded 30s default. A caller who configures, say, 30h gets a 30s per-call deadline instead, with no error or warning. Clamp to the supported maximum instead of falling back to the default (keep the seconds value bounded before the multiplication to avoid the previous overflow).
+
+- [ ] **P2-045** `internal/metadata/metadata.go:146` _performance_
+  These backfill/`SET NOT NULL` statements run unconditionally on every startup. `ALTER COLUMN ... SET NOT NULL` requires ACCESS EXCLUSIVE and validates the column, which can block all concurrent access and force a full table scan on large `routing_runs`/`eval_runs` tables; the surrounding `ADD COLUMN IF NOT EXISTS` statements also take locks even when already applied. Consider gating migrations behind a schema-version check so the destructive/blocking DDL runs only when needed.
+
+- [ ] **P2-046** `internal/metadata/metadata.go:160` _bug_
+  `isDuplicateDDL` only tolerates `42P07`/`42710`, but the comment claims it handles a concurrent creator winning the DDL race. `CREATE TABLE IF NOT EXISTS` executed concurrently in PostgreSQL can still fail with `23505` (unique_violation on `pg_type_typname_nsp_index` / `pg_class`), and `ADD COLUMN IF NOT EXISTS`/`ALTER COLUMN` races can surface as `42701` (duplicate_column). With the current filter these benign races hard-fail `openPostgres`. Add the concurrent-DDL codes to the benign set.
+
+- [ ] **P2-047** `internal/metadata/metadata.go:193` _bug_
+  `schema` and `migrations` share a single 15s `ddlCtx`. If the schema Exec consumes most/all of that budget (e.g. slow startup under load), the migrations Exec inherits a nearly/fully expired deadline and fails with `context deadline exceeded`, aborting `openPostgres` even though migrations would otherwise succeed. Give each DDL step its own timeout.
+
+- [ ] **P2-048** `internal/metadata/metadata.go:220` _bug_
+  The read lock is held across `pool.Exec`, i.e. across network/DB I/O. `Close()` takes the write lock and therefore blocks until every in-flight write finishes. If a caller passes a context without a deadline (or the DB stalls), a single slow query can block `Close()` — and shutdown — indefinitely, since the lock is released only when Exec returns. Use a bounded context for the writes (or an ownership model such as an atomic pointer/refcount) so Close cannot be pinned by a stalled query.
+
+- [ ] **P2-049** `internal/objectstore/minio.go:26` _security_
+  Any non-empty but unrecognized value (e.g. a typo like `ture`/`flase`, or `enable`) falls through to `return false`, silently disabling TLS while the static access/secret keys are still sent to the endpoint. There is no warning, so the downgrade to cleartext is invisible at runtime. For a security-relevant switch like this, fail fast on an unrecognized value (or at minimum log a warning) instead of silently defaulting to plaintext.
+
+- [ ] **P2-050** `internal/objectstore/minio.go:55` _bug_
+  The endpoint and credential fields are trimmed to defend against stray whitespace (the code comment explicitly cites a CRLF `.env`), but `s.Bucket` is not. A `MINIO_BUCKET` that picked up a trailing `\r`/space (or the default check in `SettingsFromEnv`, which only tests `bucket == ""`) will be passed verbatim to `BucketExists`/`MakeBucket`. minio-go rejects such a name, so `Open` fails and object storage is silently disabled — exactly the failure mode the trimming above was meant to prevent. Trim the bucket too (and treat a whitespace-only value as unset).
+
+- [ ] **P2-051** `internal/openai/client.go:253` _bug_
+  The `maxAudioBytes` cap is validated against the pre-copy `Stat` size, but the actual bytes written into the multipart buffer by `io.Copy` are unbounded. A file that grows between the `Stat` and the copy (or a symlinked/pseudo file under the input dir that reports size 0, which `Store.InputPath` does not reject for intermediate components) makes `io.Copy` read until EOF, so the whole file accumulates in `buf` without ever hitting the guard — a memory-exhaustion path on the MCP request side. Enforce the limit on the bytes actually copied.
+
+- [ ] **P2-052** `internal/plans/plans.go:120` _bug_
+  `Load` trusts the `slug` field stored inside the JSON file and returns it verbatim when non-empty; it is neither normalized nor checked against the requested name. Every caller that persists a loaded plan must therefore remember to force `plan.Slug = slug` back (e.g. `internal/tools/plan.go:181` does this manually), and any future caller that uses `Plan.Slug` to build a path can be redirected by a renamed/hand-edited file (the audit backlog already records this for the demo-api approval path). Reconcile the stored slug with the requested, already-sanitized name here so the library is safe regardless of caller discipline.
+
+- [ ] **P2-053** `internal/quality/proc_unix.go:24` _bug_
+  The liveness probe tests the direct child, not the process group, and the synchronization argument in the comment is incomplete:
+  
+  1) Over-skip: `configureProcessGroup` makes the child the group leader, but the group can outlive the leader whenever grandchildren keep running (e.g. after `cmd.Wait` reaps the child during the `WaitDelay` drain window in quality.go). At that point `Process.Signal` returns `os.ErrProcessDone`, so this early return skips the group kill and leaves alive exactly the grandchildren the function exists to terminate.
+  
+  2) Residual race: `killProcessGroup` is called from `cmd.Cancel`, which os/exec runs concurrently with `cmd.Wait`. There is still a TOCTOU window between this probe and `syscall.Kill(-pid, SIGKILL)` below: the child can be reaped in between, its PID/PGID recycled, and the negative-PID SIGKILL delivered to an unrelated process group. The `Signal`/`Wait` synchronization only covers the instant of the probe, not the following group kill.
+  
+  The leader-liveness heuristic therefore errs in both directions; consider driving termination from the group (treating only `ESRCH` as benign) and documenting the residual recycling risk (e.g. pidfd on Linux) instead of gating on the leader's liveness.
+
+- [ ] **P2-054** `internal/quality/proc_windows.go:23` _bug_
+  `killProcessGroup` is invoked from `cmd.Cancel` in `quality.go`, which os/exec can call from its context-watcher goroutine after `Process.Wait()` has already reaped the child. Once reaped, `cmd.Process.Pid` may be recycled to an unrelated process, so `taskkill /T /F /PID <oldPid>` can terminate an innocent process tree. Add a liveness probe before killing (e.g. bail out if the process is already done) so taskkill only targets a live child; for robust tree cleanup prefer a Job Object, which is referenced by handle rather than a reusable PID. Also consider `exec.CommandContext` here, since the plain `Run()` has no timeout and can block the cancellation goroutine.
+
+- [ ] **P2-055** `internal/quality/quality.go:99` _bug_
+  Status classification is gated on `runCtx.Err()` *before* the outcome derived from `err`, so the outcome of the command itself is ignored whenever the deadline/cancellation has fired. Two concrete consequences:
+  
+  1. If a command exits successfully but the deadline fires concurrently (or, more likely, the process already exited and `Wait` is still draining pipes for up to `WaitDelay = 10s`), `runCtx.Err()` is already `DeadlineExceeded` and the check is reported as `timeout` even though the command succeeded.
+  2. The `exec.ErrWaitDelay` branch right below — whose comment explicitly says to report a cleanly-exited command as passing — is effectively unreachable in exactly that window, so its intended `ok` + note is swallowed and replaced with `timeout`. The `gofmt` output-based failure is shadowed the same way.
+  
+  Determine the result from `err` first (success / `ErrWaitDelay`), and only fall back to `runCtx.Err()` when the command actually failed.
+
+- [ ] **P2-056** `internal/resources/matrix.go:92` _bug_
+  `Validate` checks variant IDs, duplicates and capability references, but never validates the provider ID against the known provider set. A typo (e.g. `openai` instead of `openai_api`) loads fine; `Ready` then never matches, `providerMissing` returns "unresolved provider ...", and the capability silently degrades instead of failing fast — inconsistent with the file's own fail-fast philosophy for unknown tracks/capabilities. The package already exposes `knownProvider` for exactly this purpose. Reject non-empty provider IDs that are not defined.
+
+- [ ] **P2-057** `internal/resources/matrix.go:98` _bug_
+  `Validate` iterates `plan.Capabilities` but never rejects an empty list. A track declared with `capabilities: []` (or omitted) passes validation, then `Plan` returns a `resolved` plan with zero decisions and the tool reports success with `capabilities: 0`, silently doing no work for that track. Fail fast here like the other checks.
+
+- [ ] **P2-058** `internal/resources/probe.go:51` _security_
+  `http.DefaultClient` follows up to 10 redirects by default, and this request carries the API key as a bearer token. The base URL is an external (and optionally operator-overridden, e.g. `OPENAI_BASE_URL`) endpoint, so a 3xx response can steer the probe's GET to an arbitrary host — a blind SSRF path from a compromised/rogue provider into the internal network. Note that `net/http` only strips the `Authorization` header for *cross-host* redirects; a same-domain/subdomain redirect still re-sends the key. The repo already installs a `CheckRedirect` guard for the credential-bearing Telegram client (`internal/telegram/telegram.go`), so this probe should do the same. Define a package-level client, e.g.:
+  
+  ```go
+  var probeClient = &http.Client{
+  	CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+  }
+  ```
+
+- [ ] **P2-059** `internal/resources/resources.go:135` _bug_
+  The `len(ref) >= 4 && strings.Contains(label, ref)` branch matches an arbitrary 4+ character substring against each label, evaluated per track in slice order. This resolves ambiguous or unrelated references to whatever track happens to come first: e.g. `LookupTrack("forecast")` matches track 05 ("delay forecast") before 10 ("demand forecast"), and any short common word can silently select the wrong track. Prefer matching on whole words/boundaries, the slug, or a unique match, and reject an ambiguous reference instead of returning the first hit.
+
+- [ ] **P2-060** `internal/resources/resources.go:173` _bug_
+  `Save` rejects an unknown `Track` with an error, but `Load` performs no track validation at all: a hand-edited or legacy `configs/resources.json` with an invalid `track` is accepted and silently returned. That invalid value then surfaces through `View` and is fed to `routing.variant` as the default track reference, so invalid persisted state propagates without any signal. Consider mirroring the Save-side validation here (normalize valid refs to their canonical ID, and clear or reject unknown ones).
+
+- [ ] **P2-061** `internal/resources/resources.go:202` _bug_
+  `Save` treats `CodexPro` as authoritative and unconditionally overwrites `Claimed["codex_pro"]`, but `Load` (and `Statuses`) OR-merge the two fields. A caller that builds a `Profile` directly with `Claimed["codex_pro"] = true` (leaving `CodexPro` false, exactly how callers like `applyResourcesSet`'s SetAnswer path or `main_test.go` populate `Claimed`) will have the claim silently reverted to `false` on save. To keep the two representations genuinely consistent regardless of which one the caller set, mirror the OR-merge used by Load.
+
+- [ ] **P2-062** `internal/routing/fly/embed.go:172` _bug_
+  This recovery path unconditionally clears the shared `r.centroids` and deletes the on-disk cache on any dimension mismatch, without coordinating with concurrent builders/writers. A concurrent goroutine that just rebuilt valid centroids (or a `buildCentroids` that just rewrote the file via `writeFileAtomic`) can have its result nulled/deleted by this goroutine, and during a `ChainEmbedder` dimension flip (primary 1536 vs hash fallback 512) every request re-runs the full exemplar embedding batch plus an atomic disk write, i.e. rebuild thrash on the request path. Re-check that `r.centroids` is still the mismatching map under `r.mu` before nulling it, and add a short cooldown/backoff before rebuilding so repeated mismatches are not rebuilt on every request.
+
+- [ ] **P2-063** `internal/routing/fly/embed.go:284` _bug_
+  The shared single-flight build is executed with the *first caller's* context (`Recommend` passes the request context down). If that context is cancelled (e.g. a client disconnect), the embed fails, `ok` becomes false, and the code below sets `centroidFailAt = time.Now()`. That negative cache then disables the embedding signal for every other caller for 30s, and the concurrent waiters on `building` are all released with `false` even though their own contexts were still valid. One caller's cancellation should not degrade routing for unrelated requests: only populate the shared negative cache when the failure was not caused by context cancellation (e.g. guard the `centroidFailAt` assignment with `ctx.Err() == nil`), or run the build with a context that is independent of any single caller.
+
+- [ ] **P2-064** `internal/routing/fly/events.go:35` _maintainability_
+  Unlike the `brain == nil` and `r.embedder == nil` branches, the embed/scores failure paths return the empty snapshot without setting `empty["reason"]`. Callers that surface `reason` report no cause for an embedding or scoring failure, making them indistinguishable from an internally-unknown state. Set a reason for both `r.embedTask` and `brain.scores` failures for consistent diagnostics.
+
+- [ ] **P2-065** `internal/routing/fly/mb.go:55` _bug_
+  `WithBrain` writes `r.brainPath` with no synchronization, while `loadBrain` reads the very same field under the process-global `brainMu` (and `saveBrain` reads it with no lock at all). The field therefore has one guarded and two unguarded accesses. Today WithBrain is only called during construction, but nothing enforces that, so a Router reused/reconfigured after it starts serving can produce an unsynchronized read/write on `r.brainPath`. Either guard the write with the same mutex used by `loadBrain`, or document that WithBrain must not be called once the Router is shared.
+
+- [ ] **P2-066** `internal/routing/fly/mb.go:77` _maintainability_
+  Every failure mode of loading collapses to `nil` with no log or error: an unreadable file (swallowed on the `os.ReadFile` branch), invalid JSON, and a structurally invalid brain (`KC == 0`, empty `Readout`) are all treated as "no brain configured". A corrupt or truncated brain therefore silently disables all MB scoring and dopamine learning with no diagnostic. Note also that a single category whose readout length differs from `KC` makes `scores` reject the whole brain. Consider logging the distinction (missing file vs. corrupt brain) so operators can tell the two apart.
+
+- [ ] **P2-067** `internal/routing/fly/mb.go:290` _bug_
+  `brainSaveMu` is per-Router, but `brainMu` is process-global, which suggests multiple Routers in one process are expected. Two Routers configured with the same `brainPath` can each run this read-modify-persist sequence concurrently (each holds only its own `brainSaveMu`), so the last writer silently overwrites the other's learned weights and both in-memory caches diverge. If sharing a brain file across Routers is supported, a lock keyed by the resolved path (or a process-global writer lock) is needed; otherwise document the single-writer assumption.
+
+- [ ] **P2-068** `internal/routing/fly/mb.go:383` _maintainability_
+  `Train` mutates the receiver in place (`adjust` writes Readout slice elements and re-assigns `b.Readout[category]`, `Categories` is appended to, `Bias` is written) and performs no synchronization. The package relies on the documented invariant that a published brain is immutable so that `mbCategoryScores`/`ActivationSnapshot` can score without a lock; an exported, unsynchronized mutator on the same type contradicts that contract. Nowhere is it stated that `Train` is only safe on a single-owner brain. Either have `Train` operate on a copy that the caller publishes explicitly, or rename/document it to make the single-owner requirement unambiguous.
+
+- [ ] **P2-069** `internal/routing/fly/memory.go:201` _bug_
+  `saveMemory` reimplements the temp-file-plus-rename pattern but omits the directory fsync, so the rename itself is not durable: after a crash the update can vanish while the old snapshot reappears, even though this function returned success. The project already provides `internal/atomicfile.Write`, which flushes the temp file, renames, then fsyncs the containing directory and surfaces a sync failure (see `embed.go` which already uses it). Consider delegating to that helper instead of maintaining a second, subtly weaker copy. Note also that the `fly-memory-*.tmp` names here are not covered by `atomicfile`'s stale-temp reclamation, so crashed writes leak temp files indefinitely.
+
+- [ ] **P2-070** `internal/routing/fly/memory.go:253` _bug_
+  On decode failure the code unconditionally renames `memoryPath` to `memoryPath+".corrupt"`. Because `os.Rename` replaces an existing destination, a second corruption silently overwrites the previously quarantined file, destroying recoverable data that the first quarantine was meant to preserve. Guard against an existing backup (or use a unique/timestamped suffix, e.g. `.corrupt.<unixnano>`).
+
+- [ ] **P2-071** `internal/routing/fly/router.go:324` _bug_
+  MB categories are not constrained to `categoryCapabilities`: `cmd/fly-train` builds a brain from arbitrary dataset `row.Category` values (`fly.NewMBrain(... , categories, ...)`). `mbCategoryScores` can therefore return a category with no capability mapping, and this branch lets it win route selection. Such a route corresponds to no recommendation, so `Result.Route` can name an unusable category while its score is not reflected in `MaxScore`/`Recommendations` (and if other mapped categories still produce recommendations, callers like `internal/tools/system.go` report a bogus route). Treat unmapped categories as unavailable for routing.
+
+- [ ] **P2-072** `internal/skills/validate.go:206` _bug_
+  The explicit-only enforcement only runs in the `else` branch, i.e. only when `validateOpenAIYAML` returned no error at all. Any unrelated `agents/openai.yaml` problem (blank `display_name`, `short_description` over 80 chars, missing `default_prompt`, or a YAML parse error) suppresses the `policy.allow_implicit_invocation` check, so the invocation-policy defect is silently dropped from the problem list. This is the only enforcement of the explicit-only policy, so it should not be gated on unrelated field errors; validate the policy independently of the other field checks (e.g. report parse errors separately from the field-level problems) so the guard always runs.
+
+- [ ] **P2-073** `internal/telegram/telegram.go:589` _bug_
+  The closing tags emitted here are unbalanced. Every chunk appended in the main loop (line 624, `prefix+body+closers`) already closes *all* tags in the incoming stack via `scanTags`, so the tags currently held in `stack` were already closed at the end of the previous chunk. Appending another set of closing tags as its own chunk therefore produces a chunk with unmatched end tags (e.g. `</b></i>`); Telegram rejects it with a 400, so this branch does not actually make deeply-nested HTML deliverable — it only swaps an oversized chunk for an invalid one. Emit nothing and just reset `stack` (losing the formatting for the remainder) so the message stays parseable, and add a test with >4096 runes of deeply nested tags to exercise this path.
+
+- [ ] **P2-074** `internal/tools/context.go:155` _performance_
+  `skillContextItems` walks the entire skills tree and calls `os.ReadFile` on every entry, but for non-SKILL.md assets the data is only used to count newlines (bytes/tokens come from `info.Size()`). This materializes every file — including large/binary assets — in memory on each `system.context_budget` call. Cap the read (e.g. only read SKILL.md for frontmatter, and stream/limit newline counting with an `io.Reader`/`bufio` for the rest), or skip files above a size threshold.
+
+- [ ] **P2-075** `internal/tools/context.go:176` _bug_
+  `bytes.Count(data, []byte("\n")) + 1` over-counts by one for the common case of files ending in a trailing newline (e.g. "a\nb\n" is reported as 3 lines, not 2), which can incorrectly flag SKILL.md/manifest files as exceeding `skillLinesWarn`. The same formula is used again in `manifestContextItems`. Use a helper that only adds the extra line when the content does not end with a newline.
+
+- [ ] **P2-076** `internal/tools/data.go:50` _performance_
+  `ReadAll` reads and parses the entire file with no cancellation check, and `loadTable` only checks `ctx.Err()` after the whole parse has completed. For a file up to `maxTableBytes` (64 MB) this can block well past a caller's deadline/cancellation. Iterate with `r.Read()` in a loop (or use `r.ReadAll` only for small inputs) and check `ctx.Err()` periodically so the work is abandoned when the caller cancels.
+
+- [ ] **P2-077** `internal/tools/data.go:100` _bug_
+  The substring fallback only refuses when *more than one* header contains the needle. A single incidental match (e.g. requesting `id` against a table whose only header is `grid`, or `date` against `updated_at`) is accepted silently, so callers get the wrong column without any warning or error. Since `columnIndex` is used to resolve query/where/filter columns, this can return incorrect data. Consider requiring full-token equality (or at least logging a warning when a non-exact match is used) instead of binding on any unique substring.
+
+- [ ] **P2-078** `internal/tools/data.go:216` _security_
+  The byte limit is checked against the on-disk file size, but `readAnyTable` may read a *compressed* container (`.xlsx` is a zip). A file well under 64 MB can expand to a much larger sheet, and `readXLSXTable` materializes all rows before the `maxTableRows` trim is applied, so the limit does not bound peak memory. Consider streaming the sheet with an early row cap, or bounding the declared uncompressed size for archive formats.
+
+- [ ] **P2-079** `internal/tools/data.go:405` _performance_
+  This allocates a full-length `[]float64` for every numeric column (up to 32 cols × 2,000,000 rows × 8 B ≈ 512 MB retained), and the pairwise loop then allocates two more fresh slices per pair (~496 pairs) for the strong-correlation scan, giving billions of float comparisons. The column/row caps bound the worst case but not to a small value. Consider capping the rows used for correlation (sampling) and/or computing the coefficient with reusable scratch buffers instead of per-pair allocations.
+
+- [ ] **P2-080** `internal/tools/data.go:516` _bug_
+  Ordering comparisons only count a skip when the *cell* (or the value) fails to parse. If `value` is non-numeric (e.g. `where age > abc`), every row increments `skippedNonNumeric` and the caller warns that "the column value is not numeric for an ordering comparison" even though the cell values are perfectly numeric. The result is a silently empty match set with a misleading warning. Validate the comparison value once, before the row loop, and return an error for `>`,`>=`,`<`,`<=` when it cannot be parsed; keep the skip counter for genuine per-cell non-numeric values only.
+
+- [ ] **P2-081** `internal/tools/documents.go:88` _performance_
+  Extraction never observes the request context. `extractText` (and the helpers it calls: the `docxText` XML token loop, `readXLSXSheets`, the PDF plain-text read, and the raw `io.ReadAll`) performs synchronous, potentially long file/archive I/O, yet none of them accept or check `ctx`. The server wraps tool calls in a timeout (`internal/mcp/server.go` `context.WithTimeout`) and other long-running tool loops in this package do check `ctx.Err()` (e.g. `internal/tools/data.go`), so a large DOCX/PDF/XLSX can run well past the deadline without ever aborting. Consider threading `ctx` into `extractText`/`pdfText`/`docxText` and checking `ctx.Err()` periodically (and wiring a context-aware reader) so cancellation/deadline actually stops extraction.
+
+- [ ] **P2-082** `internal/tools/evaluation.go:552` _security_
+  TOCTOU: containment is validated against the *resolved* path (`resolveExistingPath(full)`), but the function returns the original unresolved `full`. Every caller (`os.ReadFile`, `writeRepoJSON`'s `MkdirAll`/`os.Rename`) then re-walks the unresolved path, so a symlink that is swapped in between the check and the use (or a component replaced by a symlink to `/etc`) is followed unchecked and can read/overwrite files outside the repository root. Return the already-resolved path (or re-resolve and re-check immediately before the I/O, e.g. use `O_NOFOLLOW`/open then fstat) so the checked target is the one actually used.
+
+- [ ] **P2-083** `internal/tools/extras.go:225` _bug_
+  Numeric X values are silently lost for supported inputs. The tool documents that points accept `t/v` keys (and `x/y`), but X only accepts a `string` or `float64`; `t` is only read as a string. So a point like `{"t": 1700000000, "v": 5}` (or an `x` supplied as `int`/`json.Number`, which the Y branch below explicitly handles) yields `x == ""`. That drops the X coordinate, forces `chartXValues` to return `useX == false`, and silently falls back to index spacing with index labels. Mirror the numeric handling used for Y (int, json.Number) for both `x` and `t`.
+
+- [ ] **P2-084** `internal/tools/extras.go:273` _bug_
+  `chartXValues` mixes two different scales into one axis: plain numeric X values are appended as-is, while date/timestamp strings are converted to Unix seconds (`float64(ts.Unix())`, ~1.7e9). Heterogeneous input such as one series using years/indices (`"2024"` -> 2024) and another using dates (`"2024-01-01"` -> 1704067200) is accepted, and then the whole chart is scaled against the 1.7e9 max, collapsing the numeric points onto the left edge — a silently nonsensical chart. Detect a mix and refuse to enable value-axis mode (or normalise to a single unit).
+
+- [ ] **P2-085** `internal/tools/files.go:129` _bug_
+  When `readAnyTable` / `readXLSXSheets` fail (malformed CSV, unreadable file, etc.), the error is only appended to `warnings` while the envelope is still built as `mcp.OK`. Callers that key off `status == "ok"` will treat this as a successful describe even though `rows`/`columns`/`headers` are absent, silently hiding a real read failure. Note the sibling path `Deps.loadTable` (internal/tools/data.go) returns `mcp.Fail` for the very same `readAnyTable` errors. Prefer `mcp.Fail` when a parse error occurs, or `mcp.Partial(...)` when metadata is still usable.
+
+- [ ] **P2-086** `internal/tools/knowledge.go:179` _bug_
+  `readCapped` is implemented with `io.All/LimitReader` and does not error on oversized input; it just returns up to `limit` bytes. So reading with `maxRawTextBytes+1` means (a) the extra byte is never inspected to detect an oversized file, and (b) a local artifact larger than the cap is silently truncated to ~20MB with no warning, while the object-store fallback below issues a warning. Bound the local read to `maxRawTextBytes` (rune-safely) and emit the same warning when the read hit the cap.
+
+- [ ] **P2-087** `internal/tools/knowledge.go:190` _bug_
+  `raw = raw[:maxRawTextBytes]` slices a byte buffer at an arbitrary byte offset and can split a multi-byte UTF-8 rune, so the resulting `text` (and every tokenized chunk) starts with invalid UTF-8 / a U+FFFD. A rune-safe helper already exists in this package (`truncateRunes`).
+
+- [ ] **P2-088** `internal/tools/learning.go:72` _bug_
+  Inconsistent nil guard: only `d.Learning` is checked, but this handler (and `learning.promote`) immediately dereferences `d.Cfg`. Today `main.go` and the test registry always set `Cfg` whenever `Learning` is set, so this is latent rather than currently reachable, but a caller that supplies a store without a config manager makes the tool panic instead of returning a structured `mcp.Fail`. Add a `d.Cfg == nil` check (or a shared precondition helper) so the two guards stay consistent.
+
+- [ ] **P2-089** `internal/tools/security.go:115` _maintainability_
+  The underlying error is discarded, so every failure mode (missing file, permission denied, I/O error, decode issue) is reported as the same generic "is not readable" message. This hides the cause from logs and from callers that might need to distinguish not-found from a transient store failure. Wrap the original error with %w (and do the same for the InputPath/readCapped/ReadArtifact branches below).
+
+- [ ] **P2-090** `internal/tools/security.go:133` _performance_
+  The comment claims the read is "capped to the scan limit", but `ReadArtifact` performs a full `os.ReadFile` / remote object fetch into memory and only *afterwards* is `raw` sliced to `securityScanLimit+1`. A large artifact therefore bypasses the cap and is read entirely into memory, defeating the truncation guard and creating a memory/DoS vector. Read through a size-limited reader (or add a capped/count variant) instead of loading the whole object.
+
+- [ ] **P2-091** `internal/tools/security.go:151` _bug_
+  Line-by-line scanning defeats the multi-line injection patterns. `scanSecurity` matches each line independently, so any pattern whose separator spans a newline (`ignore\s+...previous`, and the `.`-based rules which never cross `\n` anyway) is evaded by splitting the payload across two lines, e.g. "ignore all\nprevious instructions". For a security detector this is a real bypass. Consider also matching the full normalized text (collapsing newlines/whitespace) and mapping hits back to line numbers, rather than only per-line.
+
+- [ ] **P2-092** `internal/tools/security.go:159` _security_
+  Only matches from rules flagged `secret` are redacted. Excerpts for the non-secret rules return the raw matched text, and the exfiltration rule's `.{0,40}` span between the verb and the keyword can itself contain credential material (e.g. "send sk-ABCDEF... to the api keys"), which then lands in findings, logs and artifacts. Redact (or at least truncate/scrub) excerpts for all rules, not just secret ones.
+
+- [ ] **P2-093** `internal/tools/system.go:93` _performance_
+  `emit_activation` defaults to true, so whenever a store is configured every `routing.fly_recommend` call invokes `d.Router.ActivationSnapshot`, which re-embeds the exact same `task` that `Router.Recommend` already embedded in this same call (`ActivationSnapshot` -> `r.embedTask`, events.go:35). With an OpenAI-backed embedder this adds a second network round trip, roughly doubling the latency/cost of the request path. Consider reusing the vector computed during `Recommend`, or flipping the default to false so callers explicitly opt into the extra embed pass.
+
+- [ ] **P2-094** `internal/tools/telegram.go:28` _bug_
+  The guard validates `parse_mode` case-insensitively, but the original (possibly lowercase) value is forwarded unchanged to `SendMessage`, whose payload sends it verbatim (`payload["parse_mode"] = opts.ParseMode` in internal/telegram/telegram.go). Telegram's `parse_mode` is expected to use canonical casing ("HTML"/"MarkdownV2"), so an input like `html`/`markdownv2` passes validation here yet may be rejected/ignored by the API. Normalize to the canonical value before forwarding so validation and the forwarded value agree.
+
+- [ ] **P2-095** `internal/tools/timeseries.go:282` _bug_
+  Variance is derived from the one-pass `sumSq - sum*sum/n` expression while `sum`/`sumSq` are incrementally accumulated and decremented across the window. For large values (or after many add/subtract cycles) this suffers catastrophic cancellation and can produce a slightly negative variance, which the next line clamps to 0. That makes `s` zero, routes the point into the `constant-window` branch, and can emit a false anomaly with score 0 for a window that is not actually constant. Consider a numerically stable computation (e.g. Welford-style running mean/M2 with removal, or recomputing mean/variance over the window) instead of clamping a cancellation-corrupted value.
+
+- [ ] **P2-096** `internal/tools/util.go:86` _bug_
+  The magnitude heuristic silently reinterprets compact numeric dates as epoch values. `20240101120000` (YYYYMMDDHHMMSS, 14 digits) is >= 1e11, so it is parsed as **milliseconds** giving a date around year 2611, and `202401011200` (YYYYMMDDHHMM, 12 digits) similarly lands in the millisecond branch. Depending on the source column, this yields a wrong timestamp with no error. Conversely, negative epoch values (`strconv.ParseInt` accepts a leading '-') match none of the positive thresholds and are silently dropped. Consider restricting each branch to a plausible epoch window (e.g. seconds 1e8..~4e9) and/or detecting all-digit date-shaped values before the epoch conversion, so ambiguous magnitudes fall through to the layout parsers instead of being misclassified.
+
+- [ ] **P2-097** `internal/tools/util.go:285` _bug_
+  Unlike `mean`/`stddev`/`sqrt`, `pearson` performs no finiteness check. With large-magnitude inputs (note `mean` clamps an overflowed sum to 0, which makes `a = xs[i] - mx` even larger) `dx`/`dy` can overflow to +Inf and `num` to ±Inf, so `num / sqrt(dx*dy)` can return NaN (or +Inf). Callers such as data.go serialize the result, and `json.Marshal` fails on NaN/Inf, so a degenerate dataset can break output. Guard the return value consistently with the other statistics helpers.
+
+- [ ] **P2-098** `internal/tools/xlsx.go:294` _bug_
+  `readSharedStrings` sets `inT` for *any* `<t>` while inside an `<si>`, including `<t>` elements nested inside phonetic runs (`<rPh sb=.. eb=..><t>...</t></rPh>`). Since the concatenated text is never scoped to the real value runs, phonetic/hint text gets appended to the cell string (e.g. `<si><t>漢字</t><rPh><t>かんじ</t></rPh></si>` yields `漢字かんじ`). Track the enclosing element (or an `inRPh` flag set on `<rPh>` and cleared on `</rPh>`) and only accumulate `<t>` when it is a direct child of `<si>`/`<r>`, skipping `<rPh>` content.
+
+- [ ] **P2-099** `internal/tools/xlsx.go:493` _bug_
+  The exact-limit EOF probe can spin forever if the underlying reader returns `(0, nil)` (a legal, if discouraged, `io.Reader` result) instead of blocking or returning EOF: neither `n > 0` nor `err != nil` holds, so the `for` loop never terminates. Because this reader wraps request-controlled zip entries on the decode path, add a guard (e.g. bail out with the configured size-limit error after a `(0, nil)` read) rather than looping unconditionally.
+
+- [ ] **P2-100** `internal/tools/xlsx.go:752` _bug_
+  `validExcelSerial` allows serials up to ~2.95e6, so `serial * 86400` reaches ~2.55e11, which overflows a 32-bit `int`. On 32-bit builds `int(math.Round(...))` silently wraps, producing a garbage/negative elapsed time. Compute in 64-bit (e.g. `float64`->`int64`) and/or clamp the magnitude before the conversion, consistent with how `validExcelSerial` guards the other formatters.
+
+- [ ] **P2-101** `plugins/hackathonkit/.codex-plugin/plugin.json:16` _bug_
+  `"Interactive"` is not one of the recognized capability tokens for this manifest (the allowed permission tokens are `Read`/`Write`). An unrecognized token may be rejected by the manifest validator or silently ignored, so the intended capability would not actually be granted. Remove this entry or replace it with a supported token.
+
+- [ ] **P2-102** `plugins/hackathonkit/hooks/codex-hooks.json:11` _security_
+  `%PLUGIN_ROOT%` is interpolated into the cmd.exe command without quotes (same on the `tool-use` and `stop` entries, lines 24/37). If the plugin install path contains spaces (e.g. `C:\Users\Jane Doe\.codex\...`) cmd splits the path and `node` receives a truncated script argument, so the Windows hook silently no-ops (failures are swallowed). A path containing cmd metacharacters (`&`, `|`, `>`) would additionally allow command injection. The POSIX form quotes `"$PLUGIN_ROOT/scripts/hooks.js"`, so the two platforms are not equivalent. If Codex's Windows re-escaping genuinely prevents quotes, don't depend on shell expansion of the root: pass the plugin root via an env var that `hooks.js` reads, or resolve the script from a fixed location inside the script itself.
+
+- [ ] **P2-103** `plugins/hackathonkit/hooks/codex-hooks.json:24` _maintainability_
+  This repo's own hook-schema note (docs/OCR-BACKLOG.md, OCR-129) documents a command hook as accepting only `type` + `command` + `timeout`; `commandWindows` is not part of that schema (same on lines 11 and 37). If Codex does not recognise the key, it is either silently dropped — so Windows falls back to the POSIX `command` whose `$PLUGIN_ROOT` cmd.exe cannot expand, breaking all three Windows hooks — or the whole manifest is rejected, disabling every lifecycle hook. Please confirm `commandWindows` against the current Codex plugin hook schema (or move the platform split into `hooks.js`) before relying on it.
+
+- [ ] **P2-104** `plugins/hackathonkit/scripts/hackathonkit-mcp-launcher.test.sh:44` _test_
+  The local binary's exit status is never asserted: `LOCAL_STATUS` is plumbed through the fake binary (`exit "${LOCAL_STATUS:-0}"`) but the harness always leaves it at 0, and the one place that would exercise the local exec path (`run_launcher --list-tools` on line 63) is run outside an `if`. A regression where the launcher swallows or mangles the local binary's exit code would pass silently. Add a case that runs the local path with a non-zero `LOCAL_STATUS` and asserts the code is propagated.
+
+- [ ] **P2-105** `plugins/hackathonkit/scripts/hackathonkit-mcp-launcher.test.sh:82` _test_
+  The exit-status test silently depends on state left by the previous block (the local binary is still non-executable, so execution falls through to docker) and on the fake docker special-casing `compose version`. If any additional docker preflight subcommand is added to the launcher, `DOCKER_STATUS=7` will leak into it and the launcher will abort with 1 instead of 7, producing a false result. Make the fake docker return 0 for all non-`run` subcommands, and explicitly set up the non-executable state here rather than relying on the prior block.
+
+- [ ] **P2-106** `plugins/hackathonkit/scripts/hackathonkit-mcp-launcher.test.sh:91` _test_
+  The duplicate `--repo-root` guard is only exercised in its space-separated form (`--repo-root /tmp`) and only on the local-binary path. The launcher's guard also matches `--repo-root=*`, and the rejection happens before the binary/docker branch, so both the `--repo-root=/tmp` form and the docker-compose fallback path are untested. Add cases for `--repo-root=/tmp` and for invoking the guard while the local binary is non-executable.
+
+- [ ] **P2-107** `scripts/codex-config.test.sh:12` _test_
+  `need_python` only verifies that `python3` exists, but the suite depends on `tomllib`, which requires Python 3.11+. On Python 3.8–3.10 the very first `tomllib` call raises `ModuleNotFoundError`, which under `set -e` aborts the run with an opaque traceback instead of a clear diagnostic. Check the module, not just the interpreter:
+  
+  ```sh
+  python3 -c 'import tomllib' >/dev/null 2>&1 || { echo "[codex-config-test] python3 with tomllib (3.11+) required" >&2; exit 2; }
+  ```
+
+- [ ] **P2-108** `scripts/codex-config.test.sh:113` _test_
+  This refusal assertion only verifies a non-zero exit code. `gen-codex-config.sh` exits non-zero for several unrelated reasons (missing launcher, invalid rendered TOML, bad invocation), so the test would report `[ok]` even if the hand-written-table detection regressed entirely. Assert the distinguishing evidence instead — redirect stderr to a file and check it contains the specific refusal message ("already defines [mcp_servers.hackathonkit]"), or scope the assertion to the detection predicate. The `hand2` spaced-header variant has the same weakness (and additionally does not verify the file was left intact, unlike `hand`).
+
+- [ ] **P2-109** `scripts/docker-check.sh:41` _security_
+  Security: `.env` is created with a plain `cp`, so it inherits `.env.example`'s mode modified by the caller's umask. A checked-in template is typically 0644, which means a freshly created `.env` (which is then filled with real `MINIO_ROOT_PASSWORD`/`POSTGRES_PASSWORD`/tokens) can end up world-readable. Note the comment below claims env-set.sh preserves 0600, but env-set.sh preserves whatever mode it finds — it only defaults to 600 when the file did not previously exist, so the guarantee does not hold here. Create the file under a restrictive umask.
+
+- [ ] **P2-110** `scripts/docker-check.sh:146` _bug_
+  Robustness: the no-curl fallback assumes a POSIX shell (and curl or wget) is present inside the `minio` and `postgres` images. The official MinIO image is minimal (UBI-micro based) and may not ship `sh`/`curl`/`wget`, so `docker compose exec -T minio sh -c ...` can fail for reasons unrelated to MinIO's health, and readiness then only succeeds via the incidental `wget` in the postgres image. This makes the gate depend on tooling that is not part of the image contract; prefer querying the container state/health (`docker compose ps --format '{{.Health}}'`) instead of re-implementing the probe inside the containers.
+
+- [ ] **P2-111** `scripts/doctor.ps1:9` _bug_
+  On timeout the in-flight `BeginConnect` is never completed via `EndConnect`, so the `IAsyncResult.AsyncWaitHandle` is leaked and any eventual connection failure surfaces as an unobserved async exception; additionally `$client.Close()` is invoked here *and* again in `finally`. Since `Close()` does not reliably abort a pending OS-level connect, release the wait handle and avoid the double-close.
+
+- [ ] **P2-112** `scripts/doctor.ps1:76` _bug_
+  `Get-FileHash` raises an error for locked/unreadable/zero-byte files. With `$ErrorActionPreference = "Continue"` the error is swallowed, the hash expression evaluates to `$null`, and an entry like `"$rel|"` is emitted. If the same file fails on both sides the mirror comparison can report a false match (or a confusing mismatch) instead of surfacing the real problem. Wrap hashing so failures are explicit. Apply the same fix to the `.agents\skills` loop below.
+
+- [ ] **P2-113** `scripts/doctor.sh:23` _bug_
+  `run_bounded` silently degrades to an unbounded run when `timeout` is not installed, so a hanging `scripts/plugin-check.sh`/`scripts/smoke.sh` can block doctor.sh forever and the `124` branches below become unreachable. Consider a portable bound (run child in background, `wait` with a kill timer) or at least print a warning so the user knows checks are not bounded.
+
+- [ ] **P2-114** `scripts/doctor.sh:96` _security_
+  This branch echoes the last 5 lines of the child's combined stdout/stderr straight into the report (`SMOKE_OUT` below does the same). Those scripts may print environment values, tokens or credential-bearing URLs, which would leak into terminal/CI logs. Prefer reporting only the exit code plus a pointer to run the script manually, or redact known secret patterns before echoing.
+
+- [ ] **P2-115** `scripts/e2e-fly.ps1:20` _performance_
+  The MCP binary is invoked synchronously with no timeout: a hung/slow process (or network stall) blocks the entire test run indefinitely. The same applies to every `& $exe --set-routing-mode ...` call below. Wrap the native invocation with a bounded wait (e.g. `Start-Process`/`Wait-Job` with a timeout, or `Start-Process -Wait` under a job) and kill the process on timeout so the script can fail instead of hanging.
+
+- [ ] **P2-116** `scripts/e2e-fly.ps1:32` _maintainability_
+  `Call()` registers a FAIL and returns `$null` on any failure, but every caller immediately dereferences the result (`$ctx.status`, `$rec.metrics.encoder`, `$fb.data.stored`, ...) without short-circuiting. Because `$null` property access silently yields `$null` under the default (non-StrictMode) preference, a single failed call cascades into several extra, misleading `[FAIL]` lines (e.g. `fly_recommend status`, `fly_recommend encoder`, `fly_recommend top-k` all fail even though the real problem was the JSON-RPC call). Returning a sentinel or guarding callers would keep one root cause = one failure.
+
+- [ ] **P2-117** `scripts/e2e-fly.ps1:92` _bug_
+  `pamBefore`/`ppl1Before` default to 0 when `data/index/fly-brain.json` is absent, and every counter assertion only compares the persisted value before vs. after. This makes the assertions unreliable: a missing artifact makes `PAM incremented` fail for the wrong reason (both sides read 0), while an artifact mutated by another process between the two reads can make it pass spuriously. Consider requiring/validating the artifact (fail fast if absent) and, ideally, reading the counters from the same stable source instead of re-reading the file mid-test.
+
+- [ ] **P2-118** `scripts/e2e-fly.ps1:125` _test_
+  `fbEvents` counts every `feedback` line in the last 200 regardless of task, and only the `recommend` events are filtered by the hard-coded task marker. Stale feedback/neuron events from earlier runs (or a truncated `-Tail 200` window under concurrent runs/buffering) can therefore satisfy the `neuron events: feedback` / `active KC exported` checks without this run producing them. Scope all event queries to the current run (e.g. filter by task/marker and/or record the pre-run log line count and only inspect lines appended after it).
+
+- [ ] **P2-119** `scripts/e2e-fly.ps1:141` _bug_
+  Routing mode is global mutable state and the restore call ignores its own exit code. If `--set-routing-mode normal` fails here, the script exits leaving the environment in `fly` mode; combined with the fact that section 2 sets `normal` outside the try/finally, concurrent runs will also interfere with each other's global mode. Check the restore invocation's exit code (and surface it as a FAIL) so a failed restore is not silently swallowed.
+
+- [ ] **P2-120** `scripts/env-set-test.sh:0` _test_
+  This block claims to verify that a peer replacing our lock's owner token is not deleted by our cleanup, and the comment says the lock dir is "snapshot[ted], swap[ped], and restore[d]". That never happens: a *fresh* foreign lock is created before the helper starts, so the helper's `lock_is_stale` sees a live pid, aborts with `LOCKED=0`, and `release_lock` returns early without ever evaluating its ownership check. The `release_lock` branch `[ "$owner" = "$LOCK_TOKEN" ] || { [ -z "$owner" ] && ... }` (i.e. the case where we hold the lock but a peer's token is present) is therefore never exercised, and the assertion only proves the writer aborted. Either genuinely simulate the swap while the writer holds the lock, or drop the misleading comment/claim so coverage isn't overstated.
+
+- [ ] **P2-121** `scripts/env-set-test.sh:0` _test_
+  The test hard-codes pid 999999 to mean "dead". `lock_is_stale` probes it with `kill -0`; on hosts where that pid happens to exist (or `pid_max` permits it), the lock is treated as live, the helper retries for ~10s and exits non-zero, and both "dead-pid lock reclaimed" assertions fail spuriously. Spawn-and-reap a real process to obtain a guaranteed-dead pid, or pick a pid derived from the running system's `pid_max`, instead of a magic constant.
+
+- [ ] **P2-122** `scripts/env-set.sh:174` _bug_
+  Embedded newlines/CR are rewritten to the literal two-character sequences `\n`/`\r`. A POSIX shell does not recognise these escapes inside double quotes, so a later `source`/`.` of the file yields a literal backslash+n instead of a newline, silently corrupting the value (values read from stdin legitimately contain newlines, since `$(cat)` preserves them). This is only correct for parsers that explicitly decode `\n`. Either emit the raw newline inside the quotes (sh allows multi-line double-quoted strings) or document that consumers must decode these escapes rather than source the file directly.
+
+- [ ] **P2-123** `scripts/env-set.sh:181` _bug_
+  Duplicate detection only matches a line that starts exactly with `key=`. Common `.env` forms such as `export KEY=...`, leading whitespace, or `KEY = value` are not recognized, so an existing definition is left in place while a second canonical `KEY=...` line is appended. A shell that sources the file will then apply whichever assignment it reaches last, so the stale value may win and the file accumulates duplicate keys. Since the key is already validated to `[A-Za-z_][A-Za-z0-9_]*` (no regex metacharacters), this can be matched with a regex that also tolerates `export` and surrounding whitespace.
+
+- [ ] **P2-124** `scripts/gen-codex-config.sh:23` _bug_
+  The `--remove` path performs the same destructive strip (anything from a lone BEGIN marker to EOF is deleted) but, unlike the install path, runs no TOML validation and never trims/verifies the result. A stray/unbalanced BEGIN marker in a user-edited file therefore silently deletes all following content with no safety check. Reuse the python3/tomllib validation (when available) before the `mv`, and at minimum warn/refuse when an unbalanced marker is detected instead of truncating to EOF.
+
+- [ ] **P2-125** `scripts/gen-codex-config.sh:56` _bug_
+  The hand-written-table guard only recognizes a single-line `[mcp_servers.hackathonkit]` header. Valid TOML that defines the same table in another spelling — an inline table (`mcp_servers.hackathonkit = { ... }`), dotted keys (`mcp_servers.hackathonkit.command = "..."`), or a quoted/whitespaced header the regex doesn't cover — is not detected, so the script proceeds and the subsequent strip/append can merge with or clobber hand-written settings despite the intC of refusing to. Consider broadening the detection (or validating the resulting merge) rather than relying on one header shape.
+
+- [ ] **P2-126** `scripts/gen-codex-config.sh:99` _bug_
+  The blanket fallback to 180 contradicts the stated guarantee that the override "cannot silently shorten" the project defaults. If the awk scope/parse misses a legitimate value — e.g. a quoted key (`"startup_timeout_sec" =`), an array-of-tables/indented header that the `table_header` regex rejects, or the `mcp_servers`/`hackathonkit` substring match being triggered by a comment on a different header — a project default larger than 180 will be replaced by 180 here, silently shortening the budget. Prefer omitting the key entirely when it cannot be parsed, or fall back to a value that cannot shrink the budget, and tighten/verify the parser.
+
+- [ ] **P2-127** `scripts/gen-codex-config.sh:110` _bug_
+  The read-modify-write of `$DEST` has no locking. Two overlapping invocations (e.g. the plugin installer running twice, or a user re-running while an earlier run is still in flight) both read the same `$DEST`, each strips/appends in its own temp file, and whichever `mv` lands last silently discards the other run's result — the atomic `mv` only guarantees the *final* file is not torn, not that the update is not lost. Consider guarding with an exclusive lock (e.g. `flock`/`mkdir` lockdir) around the read-modify-write section.
+
+- [ ] **P2-128** `scripts/gen-mcp-manifest.sh:33` _bug_
+  `tr -d '[:cntrl:]'` *deletes* every C0/DEL byte from the value instead of escaping it. The accompanying comment claims "such bytes cannot appear in a path", but on POSIX filesystems a path may legally contain any byte except NUL and '/'. So a root such as a directory whose name contains a newline/tab/backspace is silently rewritten to a different (still valid) path and the manifest is published pointing somewhere unintended — a silent corruption rather than a loud failure and, unlike the previous revision, other C0 bytes no longer produce invalid JSON but they still change the value. Prefer failing fast on control characters, or emit proper `\uXXXX` escapes, so the value written always equals the caller value.
+
+- [ ] **P2-129** `scripts/install-prompts.ps1:38` _maintainability_
+  `New-Item` (and the `Copy-Item` in the loop) are not wrapped in try/catch. With `$ErrorActionPreference = "Stop"` any failure (disk full, permission denied, `$DestDir` exists as a file) surfaces as a raw terminating exception with an opaque stack trace instead of the friendly `[prompts]` message used elsewhere, and a partial install (some prompts copied, some not) is never reported. Wrap the create/copy operations and emit a consistent `[prompts]` diagnostic via `Fail`.
+
+- [ ] **P2-130** `scripts/install-prompts.sh:26` _maintainability_
+  Under `set -e`, any `cp` (or `mkdir`) failure aborts the script immediately mid-loop, leaving a partially installed state with no error summary and no indication of which prompts were applied. Handle per-file failures explicitly (report and track failures, then summarize) so the user knows the true state. This concern applies to the `cp` inside the install loop as well.
+
+- [ ] **P2-131** `scripts/install-prompts.sh:34` _bug_
+  The destination guard only rejects symlinks and directories. FIFOs, sockets and device files pass the guard, so the following `cp` can clobber a device or block indefinitely on a FIFO. Also, this check-then-cp sequence is a TOCTOU race if `$dest` is swapped in between. Reject any existing non-regular destination (including dangling symlinks).
+
+- [ ] **P2-132** `scripts/install-prompts.sh:39` _bug_
+  Locally modified prompts are only warned about and then overwritten unconditionally, silently destroying user edits with no backup. Consider preserving the modified file (e.g. to `$dest.bak`) before clobbering it.
+
+- [ ] **P2-133** `scripts/install-prompts.sh:56` _bug_
+  `[ -f "$dest" ]` follows symlinks, so a symlink pointing at a file with matching content is removed by `rm -f` even though `install` explicitly refuses to touch symlinks. This is inconsistent with install and can delete a user-created link. Require the destination to be a non-symlink regular file, matching the install guard.
+
+- [ ] **P2-134** `scripts/plugin-check.ps1:81` _security_
+  The containment guarantee depends on `Resolve-Path` following symlinks/junctions. That behavior is only guaranteed on PowerShell 6+; on Windows PowerShell 5.1 `Resolve-Path` returns the link path itself, so a symlink placed inside the plugin (pointing to an executable outside it) would pass the `StartsWith` check and be executed. Use an explicit link-resolution helper (e.g. loop over `Get-Item ... | Select-Object -ExpandProperty Target`, or `[System.IO.File]::ResolveLinkTarget` on .NET 6+) and only then compare, or document/require PowerShell 7+.
+
+- [ ] **P2-135** `scripts/plugin-check.ps1:82` _bug_
+  This `Resolve-Path` call (and the `$cmdResolved` one above) is not wrapped in try/catch and no `-ErrorAction` is set. If resolution fails (broken/replaced link, race between `Test-Path` and this call), `$sourceResolved` becomes `$null`; the following `$sourceResolved.TrimEnd(...)` then throws, so the script aborts with an unhandled error instead of the intended clean diagnostic. Guard these resolutions and fail with an explicit exit 1.
+
+- [ ] **P2-136** `scripts/plugin-check.ps1:91` _bug_
+  `$env:TEMP` is a Windows-only convention; on Linux/macOS (PowerShell Core, which this script clearly targets given the `$env:OS`/separator handling below) it is normally unset and `$env:TMPDIR` is used instead. `Join-Path $env:TEMP ...` will therefore fail (or bind an empty path) and the script exits with "cannot create the temp directory" even though nothing is wrong. Resolve the temp root portably.
+
+- [ ] **P2-137** `scripts/plugin-check.ps1:126` _performance_
+  `Stop-Job` terminates the job, but the native MCP executable spawned inside it is not necessarily killed and can be orphaned on timeout, holding the temp files/ports opened for the check. Capture the child PID (or run the executable via a tracked process) and kill the process tree (e.g. `Stop-Process -Id ... -Force -ErrorAction SilentlyContinue` / `taskkill /T /F`) on the timeout path.
+
+- [ ] **P2-138** `scripts/plugin-check.sh:82` _security_
+  The guard only inspects the plugin root directory (`os.lstat(source_raw)`), not the files that are actually executed/consumed. A `.mcp.json` or launcher script that is itself group/world-writable (e.g. an existing `scripts/hackathonkit-mcp-launcher.sh` with mode 0777) is still executed, so the stated guarantee ("refuse a symlinked or group/world-writable plugin tree") is not met. The manifest and the resolved command should be `stat`ed as well and rejected if they are not regular files or are group/world-writable. Note also that this remains a check-then-use (TOCTOU) window: the state can change between `lstat`, `realpath` and the later `subprocess.run`, so this is a mitigation and not a hard guarantee.
+
+- [ ] **P2-139** `scripts/quality-gate.sh:12` _security_
+  HACKATHONKIT_UID/GID come straight from the environment and are later used verbatim in a root `chown -R`. Unlike the Dockerfile (which validates them as non-zero numeric ids before building the image), nothing here rejects malformed values: an option-like string (`--reference=...`), a typo, or `0` would be interpreted by chown as an option/owner and can silently re-own the whole evidence tree (or error out). Validate the values as numeric (dropping/ignoring anything else) before building `owner`, and skip the chown when the result is empty.
+
+- [ ] **P2-140** `scripts/quality-gate.sh:20` _bug_
+  The recursive chown covers the entire `evals/quality` tree on every run, not just the evidence written by the current invocation (`evals/quality/<sha>`). This needlessly reassigns ownership of unrelated historical evidence and, with concurrent gate runs, makes two `chown -R` processes interleave over the same tree (partial/half-applied ownership, races with another run's cleanup). Consider chowning only this run's output directory (or using `chown --from=root`) instead of the whole tree.
+
+- [ ] **P2-141** `scripts/quality-gate.sh:38` _bug_
+  Freshness detection only considers `*.go`, `go.mod` and `go.sum`. Any build-affecting non-Go input (embedded assets/templates/SQL/configs, or generated sources) can change without triggering a rebuild, so the prebuilt binary keeps reporting evidence for stale sources. Also, `2>/dev/null` hides `find` permission errors, so an unreadable subtree would be silently skipped and treated as up-to-date. Consider widening the tracked patterns (or hashing inputs) and surfacing/forbidding find errors instead of swallowing them.
+
+- [ ] **P2-142** `scripts/redact.sh:20` _bug_
+  The keyword alternation is wrapped in unanchored `[A-Za-z_]*` runs, so any longer identifier containing a keyword is matched and its value redacted: `monkey=banana` (matches `key`), `passenger=...`/`bypass=...` (matches `pass`), `keyboard: ...`/`tokenizer: ...`, etc. The header comment only warns about URL over-redaction, so this silent corruption of benign output is undocumented. Add token boundaries, e.g. `(^|[^A-Za-z0-9_])([A-Za-z_]*KEY[A-Za-z_]*)...` and a trailing boundary, or otherwise require the keyword to be a whole identifier.
+
+- [ ] **P2-143** `scripts/redact.sh:24` _bug_
+  The JSON rule only handles double-quoted keys and values. A value containing an escaped quote (e.g. `"password": "a\"b"`) terminates the `[^\"]*` match early, leaving the remainder (and potentially the secret) unredacted. Single-quoted or unquoted JSON-like forms are not covered either. Consider handling escaped quotes (`"(\\.|[^\"\\])*"`) or documenting/limiting the supported JSON subset.
+
+- [ ] **P2-144** `scripts/redact.test.sh:10` _security_
+  The failure branch echoes `detail`, and every caller sets `detail` to `got: $out` — i.e. the raw redactor output. When a test fails precisely because the secret was *not* redacted, this prints the plaintext credential to stdout/CI logs, defeating the purpose of the redactor. On failure, avoid echoing raw output (or gate it behind an explicit debug flag) and instead print a safe placeholder.
+
+- [ ] **P2-145** `scripts/redact.test.sh:25` _test_
+  Coverage gaps leave several likely regression paths untested: empty input, leading/trailing whitespace around keys, values spanning newlines, the same key appearing twice on one line, and — most importantly — the documented fail-closed path when `sed -E` is unavailable. Also no test asserts idempotency (running the redactor on already-redacted output must be a no-op). Consider adding cases for these boundary conditions.
+
+- [ ] **P2-146** `scripts/redact.test.sh:41` _test_
+  This assertion only checks that the substrings `a@b`/`c@d` are absent, so it passes even if the redactor emits nothing, drops the URLs, or mangles them into something unrelated. The test gives false confidence for the comma-joined case. Assert the actual expected output (e.g. `[ "$out" = 'http://***@b,http://***@d' ]`) instead of only checking for absence.
+
+- [ ] **P2-147** `scripts/redact.test.sh:49` _test_
+  Over-redaction is only checked with three benign inputs. Given that `pass`/`token`/`key`/`secret` are matched as substrings, inputs like `token_count=5`, `keyboard=us`, `secretary=x` or prose such as `description=my secret plan` are realistic over-redaction candidates that no test guards. Add assertions that credential-keyword substrings used as ordinary identifiers/values stay readable.
+
+- [ ] **P2-148** `scripts/repair.ps1:44` _bug_
+  When the existing install-state cannot be read or parsed, the profile silently degrades to the hard-coded default `full`. For a machine that was installed as `core`, a transient read/parse failure (e.g. a partially written file) turns this repair run into an implicit upgrade to `full`, and the result is then persisted by write-install-state.ps1. Consider defaulting to the last-known profile only when it can be determined, or failing loudly instead of assuming `full` when the state file exists but is unreadable.
+
+- [ ] **P2-149** `scripts/repair.sh:18` _bug_
+  Check-then-remove-then-create is not atomic. Run A can detect a stale lock and `rm -rf "$LOCK"`, then Run B (which also read the old stale pid) executes its own `rm -rf "$LOCK"` after A has already recreated and populated the lock, deleting A's live lock. Both runs then pass the `mkdir` gate and execute concurrently, defeating the serialization the lock is meant to provide. Verify ownership after acquiring (re-read the pid and confirm it is `$$`) or use an atomic primitive (e.g. `ln`/`set -C`) instead of `rm -rf` on the shared path.
+
+- [ ] **P2-150** `scripts/repair.sh:61` _bug_
+  The temp files are only removed by the explicit `cleanup_bin` call in the build-failure branch. Because `set -e` is active, if the 2nd or 3rd `mktemp` fails (e.g. disk/permission error), the script exits immediately and the previously created temp file(s) leak in `bin/`. Likewise, Ctrl-C/SIGTERM during the build leaves all three temps behind, since the INT/TERM traps installed earlier only `exit` and the EXIT trap only removes the lock. Register the cleanup with a trap (or build into a dedicated temp dir) so interrupted/failed runs do not accumulate `*.tmp.XXXXXX` files.
+
+- [ ] **P2-151** `scripts/repair.sh:78` _bug_
+  Installing the three binaries with sequential `mv` is not atomic: if a later `mv` (or the following `chmod`) fails under `set -e`, the script exits having replaced only part of `bin/`, leaving a mixed-version toolchain (e.g. new mcp with old demo-api/ctl) with no rollback. Consider staging the built binaries in a temp directory and swapping them in with a single atomic operation, or restoring the originals on failure.
+
+- [ ] **P2-152** `scripts/repair.sh:93` _bug_
+  The fallback `codex plugin list | grep -q hackathonkit` matches any line containing the substring `hackathonkit` (e.g. a differently-versioned/partially installed plugin, or the `hackathonkit-local` marketplace name), so a failed `plugin add` can be masked and the script proceeds to write install state as if the plugin were installed. Match the exact plugin id/config key (e.g. `grep -q 'hackathonkit@hackathonkit-local'`) or otherwise assert the expected plugin version.
+
+- [ ] **P2-153** `scripts/set-version.test.sh:29` _test_
+  The comment states the contract is "exit 2, leaving files untouched", but the assertions only require *a* non-zero exit and never verify that no file was modified. A regression that exits 1 instead of 2, or one that rewrites files before validating the version, would go undetected. Capture the exit status and assert it equals 2, and compare a file's content before/after the rejected run.
+
+- [ ] **P2-154** `scripts/set-version.test.sh:47` _test_
+  The helper syncs three manifests, but the suite only asserts two of them: `plugins/hackathonkit/.codex-plugin/plugin.json` is created in the fixture (set to 1.2.3) yet never checked after the bump. A regression in that specific target would pass silently. Add the missing assertion.
+
+- [ ] **P2-155** `scripts/setup-resources.sh:108` _bug_
+  `TELEGRAM_CHAT_ID` is a required `EnvKeys` entry for the telegram provider (`internal/resources/resources.go`), yet an empty/skipped chat id is silently ignored here (`|| true`), so `TELEGRAM` stays 1 and the profile advertises telegram as claimed while the provider is not ready. Treat a missing chat id the same as a missing token (downgrade `TELEGRAM=0`), or at least warn the user that the notification target was not stored.
+
+- [ ] **P2-156** `scripts/setup-resources.sh:117` _bug_
+  Partial multi-key provider leaves stale credentials behind. When `MINIO_ENDPOINT`/`MINIO_ACCESS_KEY` succeed but `MINIO_SECRET_KEY` is empty, `MINIO` is downgraded to 0, yet the endpoint and access key remain in `.env` — exactly the "provider that cannot authenticate" state the comment above claims to avoid. Read all three values first and only write them (and claim the provider) when the full set is non-empty.
+
+- [ ] **P2-157** `scripts/setup.ps1:101` _security_
+  The `try`/`catch` wraps not only the RNG/token generation but also the whole atomic `.env` write and its own integrity assertion (`throw "atomic .env write did not produce ..."`). Consequently a genuine write failure (e.g. read-only `.env`, `File.Replace` unsupported) is silently downgraded to a warning and setup continues. If `.env` still holds a shipped placeholder, the demo API then runs protected by a known/weak token — which is exactly what the placeholder check above tried to prevent. Narrow the catch to the token-generation step, or make write failures fatal so the operator cannot proceed with an unset/placeholder token.
+
+- [ ] **P2-158** `scripts/setup.ps1:117` _security_
+  `[IO.Path]::GetFullPath()` does not resolve reparse points. If `$dir` (e.g. `.agent/skills`) is itself a junction/symlink to a location outside the repo, `$dirFull` is still the link path, so every child (`$dirFull\<skill>`) passes `StartsWith($dirFull)`. The per-skill reparse check only inspects the child, not the mirror root, so `Remove-TreeNoReparse` would delete real directories at the link target — defeating this containment guard. Reject the whole mirror when `$dir` is a reparse point before iterating.
+
+- [ ] **P2-159** `scripts/setup.sh:68` _security_
+  The idempotency check accepts *any* non-empty value, so a shipped placeholder such as `HACKATHONKIT_DEMO_TOKEN=changeme` (or `your-token-here`) is treated as a real secret and no strong token is generated. Since this value is what protects the demo API, the file can end up with a guessable token. The PowerShell sibling (scripts/setup.ps1:63-72) already rejects a known placeholder list before deciding to regenerate; apply the same validation here.
+
+- [ ] **P2-160** `scripts/setup.sh:121` _bug_
+  `docker compose up -d` returns as soon as the containers are created, not when they are healthy. RUNTIME is then set to "docker" and the success message is printed even if postgres/redis/minio crash-loop immediately, so install-state.json claims a working docker runtime that is not actually serving. The PowerShell sibling waits for health (`up -d --wait`, setup.ps1:168); add the same wait (or a health probe) so RUNTIME reflects what is really running.
+
+- [ ] **P2-161** `scripts/smoke.ps1:21` _maintainability_
+  In `auto` mode the mere existence of `bin\hackathonkit-mcp.exe` selects the local binary with no freshness check and without logging which transport was chosen. A stale artifact can therefore silently pass the smoke test while the container path is never exercised. Consider comparing the binary's timestamp against the sources under `cmd/`/`internal/` (warn or fall back to docker when stale) and emitting the selected runtime via `Write-Host` so the bypass is at least visible.
+
+- [ ] **P2-162** `scripts/smoke.sh:34` _maintainability_
+  The 60s cap is a fixed magic number; a cold `docker compose run` (image pull + container start) can easily exceed it and abort with a generic failure that hides whether the code or the environment is at fault. Consider making the limit configurable (and larger for the compose path). Note also that when `timeout` is not installed the server runs completely unbounded, so a hanging server still stalls CI.
+
+- [ ] **P2-163** `scripts/smoke.sh:82` _bug_
+  The staleness heuristic only scans `.go` files under `cmd/` and `internal/`. Changes to `go.mod`/`go.sum`, embedded assets, `Makefile`, or other packages will not mark the binary stale, so `--auto` may silently run an outdated `bin/hackathonkit-mcp`. Additionally, when docker is unavailable the script only prints a warning and proceeds to run the possibly stale binary, which can mask real failures. Consider widening the freshness check (or forcing a rebuild/`--binary` requirement in that case).
+
+- [ ] **P2-164** `scripts/smoke.sh:136` _maintainability_
+  The python3 validator and the grep-based fallback enforce different contracts: python accepts any dict with ids {1,2,3} and a result, while the fallback additionally requires exactly three `"jsonrpc"` occurrences. Validation therefore depends on whether python3 happens to be installed. Make both paths check the `jsonrpc` field for consistency.
+
+- [ ] **P2-165** `scripts/smoke.sh:148` _bug_
+  The fallback extracts ids with `grep -o '"id"...'` across the whole stdout, so any nested `"id"` field inside a `system.context` result (or any other nested object) is also counted as a top-level response id. That inflates `GOT_ID_COUNT` and makes the handshake fail spuriously. Prefer parsing the top-level id (e.g. via python) or anchor the match to the start of the JSON-RPC envelope instead of matching `"id"` anywhere in the line.
+
+- [ ] **P2-166** `scripts/smoke.sh:155` _bug_
+  `grep -q '"error"'` scans the entire stdout, so a legitimate tool result whose payload contains the token `"error"` (e.g. a diagnostic object/field inside `system.context`) is treated as a JSON-RPC error and fails the smoke test. The same over-broad matching applies to `grep -c '"jsonrpc"'` below. Validate the parsed top-level object (error member present on the envelope) rather than grepping raw text.
+
+- [ ] **P2-167** `scripts/smoke.test.sh:54` _bug_
+  Under `set -e`, this assignment aborts the entire suite when `grep -c` finds no match (it prints `0` and exits `1`). Because it depends on `smoke.sh` keeping the exact literal `{"jsonrpc":"2.0","id":` prefix, any reformatting of the requests (spaces, variable-built payloads, etc.) silently kills the run before a single assertion executes, rather than failing a clear check. Make the derivation non-fatal and assert on it explicitly.
+
+- [ ] **P2-168** `scripts/smoke.test.sh:127` _test_
+  The failure-path checks only compare numeric exit codes and never assert the user-facing stderr messages (`--binary requires ...`, `--compose requires the docker CLI`, `unknown argument: ...`). Additionally the stub always returns a well-formed success response, so malformed/error JSON paths in `smoke.sh` are never exercised. Add stderr assertions and at least one error-response stub mode to cover these branches.
+
+- [ ] **P2-169** `scripts/sync-harness.ps1:11` _bug_
+  Reparse points (symlinks/junctions) are silently skipped here and in `Get-TreeManifest`. Since both the copy and the manifest skip them, a skill reachable through a junction/symlink is silently omitted from the mirror while the source and copy manifests still compare equal — the mirror is incomplete yet reported as a match. Prefer failing (or at least warning) when a reparse point is found under the skills source instead of dropping it silently.
+
+- [ ] **P2-170** `scripts/sync-harness.ps1:87` _bug_
+  `Get-Process -Id $holderPid` only proves that *some* process with that PID exists. If the PID was reused by an unrelated process, a genuinely stale lock is treated as live and the loop spins for roughly 20s before failing, blocking the sync instead of recovering. Consider validating the process start time against the lock's creation time (or relying on the owner token) rather than PID existence alone.
+
+- [ ] **P2-171** `scripts/sync-harness.ps1:154` _maintainability_
+  The required-file and JSON-manifest validation runs only after `.claude/skills`, `.opencode/commands` and `.claude/commands` have already been mutated. On validation failure the script exits 1, but the mirror/command side effects are already committed, leaving the working tree modified on a reported failure. Consider validating the required files and JSON manifests before performing any mutation.
+
+- [ ] **P2-172** `scripts/sync-harness.sh:156` _bug_
+  The mirror is swapped with two separate `mv` operations (`mv "$dest" "$CMDS_OLD"` then `mv "$CMDS_STAGE" "$dest"`), so `$dest` is momentarily absent. If the process is SIGKILLed between them the traps do not run and an orphaned `$dest.old.<pid>` is left behind; because the next run uses a different `$$` suffix it never reconciles that backup, leaking it indefinitely. Reconcile stale `*.old.*` directories at startup (or otherwise guarantee the backup is cleaned up).
+
+- [ ] **P2-173** `scripts/sync-harness.sh:227` _bug_
+  When no `python3`/`node` is available the fallback only checks the first byte and the final byte, so malformed manifests (e.g. `{ "a": }`) pass validation and the script still prints "adapters ready". The warning is emitted, but consider failing here (or reflecting the weakened check in the exit status) rather than reporting readiness with an unvalidated manifest.
+
+- [ ] **P2-174** `scripts/sync-skills.ps1:54` _bug_
+  The retry budget is 100 × 200ms = 20s, but eviction of a lock with an unparseable PID (or one whose PID is dead but younger than 60s) requires the lock to be older than 60s. A run that crashed shortly before leaves a lock this invocation can neither evict in time nor wait out, so the sync always fails. Align the retry budget with the staleness threshold, and/or evict immediately when the owner PID is confirmed absent (the age gate only needs to protect against PID recycling, not against a confirmed-dead owner).
+
+- [ ] **P2-175** `scripts/sync-skills.ps1:58` _bug_
+  If writing the owner token fails, `-ErrorAction SilentlyContinue` hides it, but the `finally` still requires `$owner -eq $lockToken` to release the lock. A failed write therefore leaks this run's own lock permanently (until age eviction). Do not swallow the write error, or treat a missing/unreadable owner file as "owned" when the `pid` file still contains this run's PID.
+
+- [ ] **P2-176** `scripts/sync-skills.ps1:78` _bug_
+  `Get-Process -Id $holderPid -ErrorAction SilentlyContinue` treats any failure — including access-denied for a holder owned by another user — as "process is dead". Combined with the 60s age gate below, this can let a concurrent run evict the lock of a holder that is still alive and mid-copy. Distinguish "not found" from other errors (e.g. use `-ErrorAction Stop` in a `try` and inspect the exception, or check `$null` vs a thrown error) before concluding the holder is gone.
+
+- [ ] **P2-177** `scripts/sync-skills.ps1:119` _bug_
+  The lock is released only in the `try/finally` that begins later, but all work between acquisition and that `try` (this recovery `Move-Item`, plus the `$tmp` `New-Item`/`Remove-Item`) runs under `$ErrorActionPreference = "Stop"` with no cleanup guard. If any of these throws, the script aborts and the lock is never removed, blocking every subsequent run until the 60s age eviction kicks in. Move the post-acquisition body inside the same `try/finally` (or wrap the lock in an outer `try/finally`) so release is guaranteed.
+
+- [ ] **P2-178** `scripts/sync-skills.sh:58` _bug_
+  `find ... | wc -l` masks `find` failures under `set -e`. The pipeline's status is that of `wc -l`, which succeeds even if `find` fails, so `ERROR` output goes to stderr but the variable ends up as `0`. The script then continues with bogus counts and reports a misleading "mirror mismatch" instead of the real error. Add `set -o pipefail` (and quote the substitutions) or capture and check `find`'s exit status directly.
+
+- [ ] **P2-179** `scripts/sync-skills.sh:80` _bug_
+  The `cmp` fallback relies on unquoted word splitting of `$A_LIST` (`for rel in $A_LIST`), so filenames containing spaces, tabs or newlines are split into bogus paths; the resulting `cmp` fails and the script declares a mismatch even though the mirror is fine (and in other orderings files can be skipped). Use a newline-safe loop and reject names with newlines, e.g. read with a `while IFS= read -r` loop over the `find` output, or `find ... -exec cmp` per file.
+
+- [ ] **P2-180** `scripts/sync-skills.sh:94` _bug_
+  Stale-lock reclamation is unsafe. `kill -0` returns non-zero not only when the process is gone but also when it exists and is owned by another user (EPERM), so `! kill -0` will delete a *live* lock held by a different user, defeating mutual exclusion. Conversely, PID reuse can make a dead lock's pid appear alive, so the stale lock is never freed. A lock dir with no `pid` file is also never reclaimed (see the other comment). Prefer an age/mtime-based staleness check as a fallback and never treat EPERM as "dead".
+
+- [ ] **P2-181** `scripts/uninstall.ps1:16` _bug_
+  Excluding reparse-point entries from BOTH trees means a user-authored skill that only *adds* a symlink/junction (or a link to extra content) produces the same entry set as the shipped skill, so `Test-SameTree` returns true and the whole target directory is deleted — contradicting the stated intent to preserve user-authored skills. Consider treating any extra link in the target as a difference (i.e. keep it) rather than silently filtering links out of the comparison.
+
+- [ ] **P2-182** `scripts/uninstall.ps1:148` _security_
+  Check-then-delete race: the reparse-point/existence checks (and, in the shared branch, the content comparison) happen before `Remove-TreeNoReparse`/`Remove-Item` runs. A path swapped for a reparse point or modified copy between the check and the deletion defeats the junction/user-skill protections. Where possible, delete from the already-fetched item object or re-validate the attribute immediately before removal.
+
+- [ ] **P2-183** `scripts/uninstall.sh:73` _bug_
+  Substring match: `grep -q hackathonkit` also matches unrelated plugins whose name merely contains the token (e.g. `hackathonkit-tools`, `my-hackathonkit`). Because the match gates a destructive `codex plugin remove`, use a boundary-anchored pattern so only the exact `hackathonkit` entry triggers removal.
+
+- [ ] **P2-184** `scripts/uninstall.sh:82` _bug_
+  Same substring issue for the marketplace: `grep -q hackathonkit-local` matches any marketplace whose name contains that token (e.g. `hackathonkit-local-v2`), so an unrelated registration can trigger the remove branch. Anchor the match to a complete field.
+
+- [ ] **P2-185** `scripts/uninstall.sh:99` _bug_
+  Dry-run/apply parity: the apply path skips these commands when the `codex` CLI is absent, and skips each one when the plugin/marketplace is not actually registered. The dry-run branch unconditionally prints both commands, so the preview advertises removals that apply would not perform. Mirror the apply-path conditions (codex availability and registration checks) in the preview.
+
+- [ ] **P2-186** `scripts/uninstall.sh:116` _bug_
+  Unconditional `|| true` masks any failure of the managed-config removal, so a failure to strip the hackathonkit block is silently reported as success. This is inconsistent with every other removal path, which increments FAILURES. Capture the exit status and warn (and optionally increment FAILURES) when it fails.
+
+- [ ] **P2-187** `scripts/validate-skills.sh:7` _bug_
+  When `command -v` cannot locate the script (e.g. it is not on `PATH`, invoked via a name found in an odd way, or `command -v --` is unsupported and returns nothing), `SELF` keeps the bare name. `dirname "$SELF"` then yields `.`, so `ROOT` silently becomes the parent of the caller's CWD instead of the real checkout — and for a validation gate this can produce a false "pass" against the wrong tree. Also note `command -v --`, `dirname --` and `cd --` are not strictly POSIX (the `--` handling varies across `sh` implementations such as dash/busybox ash), which compounds the mis-resolution. Fail loudly when the script location cannot be resolved instead of falling back to a bare name.
+
+- [ ] **P2-188** `scripts/validate-skills.sh:13` _bug_
+  The repository-identity guard only checks for `docker-compose.yml`. A wrong tree that happens to contain that file passes, while the referenced standard (`docs/SKILL-STANDARD.md`) — which is what this script claims to validate against, and what the `go run`/binary path actually reads — is never confirmed to exist. Since `ROOT` resolution above can mis-resolve, strengthen the guard by also requiring the files the validator depends on (at minimum `docs/SKILL-STANDARD.md`, and ideally `cmd/hackathonkit-mcp`).
+
+- [ ] **P2-189** `scripts/verify-command.test.sh:42` _test_
+  These content assertions are too permissive: a bare `coverage`, `seven checks`, or `do not ask the user` can match incidental prose, so a real content regression would still pass. In addition, `evaluate.md` is only asserted to exist (the generic existence loop) and has no content check at all, leaving that command's behavior untested. Tighten patterns (anchored phrases) and add at least one content assertion for `evaluate.md`.
+
+- [ ] **P2-190** `scripts/verify-command.test.sh:78` _maintainability_
+  This test mutates the working tree: `sync-harness.sh` regenerates `.opencode/commands/*.md` and `.claude/commands/*.md` in place, but the test never snapshots/restores them, so running the suite dirties the repo and can mask real drift. Worse, `|| true` swallows the script's exit status: if sync fails, the failure surfaces later as misleading "mirror ... missing or stale" assertions instead of the actual sync error. Capture and assert the sync exit status before comparing mirrors.
+
+- [ ] **P2-191** `scripts/verify-command.test.sh:92` _bug_
+  Under `set -e` this is fatal: if `install-prompts.sh install` returns non-zero, the whole test aborts immediately and no `[fail]` line or summary is printed, so the real cause is hidden and only the trap cleanup runs. Guard the invocation so failure is reported through `check`.
+
+- [ ] **P2-192** `scripts/write-install-state.ps1:63` _bug_
+  When `$srcSkills` is missing the script only emits a warning (`Write-Warning` at the earlier check), yet `$Skills` is still set to the mirror directory count. A stale `.agents/skills` mirror left from a previous install will therefore be reported as a positive skills count even though the plugin source no longer exists, overstating a broken installation. Force the count to 0 (or skip the mirror comparison) when the source directory is absent.
+
+- [ ] **P2-193** `scripts/write-install-state.ps1:99` _bug_
+  `New-Item` runs outside the `try`/`catch` that is meant to turn write failures into the friendly `Fail` message. A permission or path error here (e.g. read-only root, invalid name) will surface as an unhandled terminating exception instead of `[install-state] cannot write ...`. Wrap the directory creation in the `try` (with `-ErrorAction Stop`) so it follows the same error-reporting path.
+
+- [ ] **P2-194** `scripts/write-install-state.ps1:109` _bug_
+  Two concerns with this swap: (1) `File.Replace` is not available on all platforms/filesystems (it throws `PlatformNotSupportedException` on .NET Framework and on some non-Windows filesystems), and this script is explicitly invoked for binary/docker installs that may run on Linux; (2) the `Test-Path`/`Move` pair is a check-then-act race — a concurrent run can create `$out` between the two calls, making `File.Move` throw and discarding the freshly generated state. Prefer an overwrite-style move (or fall back to `Move -Force`/delete+move) and catch `PlatformNotSupportedException` to fall back safely.
+
+- [ ] **P2-195** `scripts/write-install-state.sh:22` _bug_
+  `json_escape` is still incomplete: it deletes CR/LF and escapes only `\` and `"`. TAB and other control characters (U+0000–U+001F, e.g. a tab or \x01 in the plugin version string) are emitted verbatim, which makes `install-state.json` invalid JSON (RFC 8259 forbids raw control chars inside strings) and can break the strict consumers (`doctor.sh`, `repair.sh`) that parse this file. Escape all control characters (e.g. emit \t/\n/\r/\uXXXX) or reject values containing them.
+
+- [ ] **P2-196** `scripts/write-install-state.sh:29` _bug_
+  `json.load(...).get("version", "")` returns `None` when the manifest contains `"version": null`, and `print(None)` writes the literal string `None` as the version. Since the value is non-empty, the `-z` fallback never runs and `install-state.json` silently records `"version": "None"`. Non-string values (objects/arrays) are likewise stringified into a misleading version. Guard the type and coerce falsy values to empty so the fallback/warning path is taken: `v = json.load(...).get("version") or ""; print(v if isinstance(v, str) else "")`.
+
+## LOW (pass 2)
+
+- [ ] **P2-197** `.codex/agents/evaluator.toml:20` _maintainability_
+  The criterion maxima are duplicated inline while the same sentence declares `rubric.md` the source of truth. If rubric.md is revised (and its rubric version bumped), this copy silently mis-scores with no signal, and the prompt is the one the model reads on every run. Prefer keeping only the authoritative reference (or have the agent read maxima from `rubric.md`) instead of an unreferenced numeric copy.
+
+- [ ] **P2-198** `.codex/agents/researcher.toml:5` _maintainability_
+  The comment asserts high effort is "bounded" and offers to "pin it here to freeze behavior", but the file only sets `model_reasoning_effort = "high"`: no `model` is pinned (so behavior is not actually frozen to a specific model version) and there is no token/time bound (the pass limit lives only in the prose instructions). Reword so the comment doesn't imply containment the config doesn't provide, or pin `model` explicitly if freezing behavior is the intent.
+
+- [ ] **P2-199** `.codex/agents/researcher.toml:26` _security_
+  The rule says secrets must be redacted "everywhere they could persist" but the enumeration only names the brief and the `reports.create`/`learning.record` outputs. `documents.ingest` (stored artifact) and `knowledge.index` (persisted chunk text) also persist content outside the sandbox, so secret-bearing text routed through them is not covered. Either list those persistence destinations explicitly or narrow the wording to the three outputs.
+
+- [ ] **P2-200** `.codex/config.toml:14` _maintainability_
+  This comment block is orphaned and self-contradictory: the first sentence documents the semantics of a root key that is not present in the file, then the next sentence says that key is invalid. It reads like leftover documentation for a removed `persistent_instructions` line and will mislead future editors into thinking some prompt instruction is being appended when nothing is configured here. Collapse it to a single clear statement, e.g. "Project instructions live in AGENTS.md; there is no valid `persistent_instructions` key, so none is set."
+
+- [ ] **P2-201** `.dockerignore:17` _maintainability_
+  Redundant pair: `**/` matches any number of directories *including zero*, so `**/node_modules` already covers the root `node_modules`. The same duplication exists for `coverage`/`**/coverage` and `htmlcov`/`**/htmlcov` above. The extra plain patterns are dead rules and make the anchoring intent ambiguous (and prone to drift when edited); keep only the recursive form for clarity.
+
+- [ ] **P2-202** `.gitattributes:32` _maintainability_
+  Treating `.obj` as a binary mesh asset is questionable: Wavefront OBJ is a text format with no common binary variant, so `binary` (which sets `-diff -merge -text`) silently discards diffs and merge support for these files. It is also easily confused with the MSVC/C++ object-file extension of the same name, and the "demo assets" rationale in the comment above will not hold once any real (text) OBJ files are tracked. The binary `.stl`/`.glb` entries are justified; reconsider forcing `.obj`/`.gltf` (glTF is JSON) to binary. If the intent is only to protect specific binary fixtures, scope the rule to those paths instead of the whole extension.
+
+- [ ] **P2-203** `.gitignore:41` _maintainability_
+  This pattern is unanchored, so it ignores any directory named `judge-bundle` anywhere in the tree, not just the legacy root-level alias its comment describes. A legitimately tracked nested directory sharing that name would be silently excluded. If this is only meant to cover the root-level legacy alias, anchor it with a leading slash.
+
+- [ ] **P2-204** `Dockerfile:2` _security_
+  Base images are referenced by mutable tags only (`golang:1.27.0-alpine3.24` here and in the `quality` stage, `alpine:3.24.2` in `runtime-base`). A tag can be re-pointed upstream, so builds are not reproducible and are exposed to silent upstream mutation / supply-chain substitution. Pin each `FROM` by digest (e.g. `golang:1.27.0-alpine3.24@sha256:...`, `alpine:3.24.2@sha256:...`) and refresh digests deliberately via a dependency-update job.
+
+- [ ] **P2-205** `cmd/demo-api/fly_live.go:225` _bug_
+  On the read-limit jump, `skipPartial` is set unconditionally (`info.Size() > flyLiveReadLimit` guarantees `f.offset > 0`), so the first line in the new window is always discarded. If `info.Size() - flyLiveReadLimit` happens to land exactly on a line boundary, that first line is a complete event and it is dropped permanently: after this read `f.offset` reaches the current size and the unchanged fast-path prevents any re-read. In the worst case (the window contains a single recommend/feedback event) the only available event is lost. Consider deciding `skipPartial` from the byte preceding the new offset (e.g. probe byte `f.offset-1` via `file.ReadAt` and only skip when it is not `'\n'`) instead of assuming the window starts mid-line.
+
+- [ ] **P2-206** `cmd/fly-bench/main.go:175` _maintainability_
+  The stated determinism definition says the "full ranked order" was compared, but `sameOrder` only compares `Capability` strings and ignores `Score` (the field that actually drives ordering and is the only value persisted in the router's output). If the intent is to detect score-level nondeterminism, compare `Score` too; otherwise reword the claim so readers don't over-read what was measured.
+
+- [ ] **P2-207** `cmd/fly-train/main.go:136` _performance_
+  `vectorNorm(vectors[i])` is recomputed for every example on every epoch, doing `epochs * len(rows)` normalizations and slice allocations when the normalized vectors are constant across epochs. Precompute them once before the epoch loop.
+
+- [ ] **P2-208** `cmd/hackathonkit-ctl/daemon.go:146` _bug_
+  The ownership check (`readPID`) and the pid-file write are not atomic: two concurrent launches (two `daemon start`, or a start racing `foreground`) can both read "no live owner" and proceed, running duplicate daemons. Additionally `os.WriteFile` truncates and rewrites in place, so a concurrent `readPIDFile` can observe a partially written file and fail parsing. Write to a temp file and `os.Rename` for atomicity, and guard ownership with an exclusively-created lock file (e.g. `O_CREATE|O_EXCL`) rather than a plain check-then-write.
+
+- [ ] **P2-209** `cmd/hackathonkit-ctl/daemon.go:282` _bug_
+  The fallback identity check only requires the substring `hackathonkit-ctl` in the target's cmdline. If a stale pid file (one without a recorded executable path) is later recycled by an unrelated process whose argv contains that substring — including another `hackathonkit-ctl daemon ...` invocation — `readPID` will report it as ours and `daemonStop` will SIGTERM the wrong process. Match the exact executable (or require the `daemon foreground` argv) instead of a bare substring.
+
+- [ ] **P2-210** `cmd/hackathonkit-ctl/detach_unix.go:1` _maintainability_
+  The `unix` build constraint (POSIX: linux/darwin/bsd/solaris/aix/etc.) is paired only with the sibling `detach_windows.go` (`//go:build windows`). For any other GOOS (plan9, js/wasip1, wasip2) no file defines `detachSysProcAttr`, so `daemon.go:80` will not compile and the package fails to build for those targets. Since this helper is called unconditionally, either add a matching fallback stub (e.g. a `//go:build !unix && !windows` file returning a minimal `*syscall.SysProcAttr`) or explicitly document that only unix/windows are supported. Note also that the sibling `proc_unix.go` still uses `//go:build !windows`, so the build-tag scheme across the package is currently inconsistent.
+
+- [ ] **P2-211** `cmd/hackathonkit-ctl/main.go:342` _bug_
+  The session ID keys uniqueness on a second-resolution timestamp plus PID. Because the SQLite store is shared and PIDs are reused by the OS, back-to-back invocations in the same second can collide and cause the second `UpsertSession` to overwrite the first session's row. Use a monotonic/unique suffix (e.g. a random or nanosecond component) to guarantee uniqueness.
+
+- [ ] **P2-212** `cmd/hackathonkit-ctl/proc_windows.go:37` _bug_
+  The comment claims only a nonexistent pid (`ERROR_INVALID_PARAMETER`) is 'not alive', but this collapses *every* `OpenProcess` failure other than `ERROR_ACCESS_DENIED` into 'dead', and the `GetExitCodeProcess` branch below likewise returns false on any error. A transient/environmental failure (e.g. `ERROR_NOT_ENOUGH_MEMORY`) is therefore reported as a dead process, which lets `daemonStop` conclude 'not running' (and drop the pid file) while the daemon is still up. Either handle `ERROR_INVALID_PARAMETER` explicitly and treat other failures conservatively, or make the comment state that this probe fails closed.
+
+- [ ] **P2-213** `cmd/hackathonkit-ctl/tui.go:46` _bug_
+  The error from `store.Close()` is silently discarded, which can hide a failed WAL checkpoint/finalization on exit while `cmdTUI` still returns success (or only the `program.Run` error). Consider making the return value named and joining the close error, e.g. change the signature to `func cmdTUI(args []string) (retErr error)` and use `defer func() { if cerr := store.Close(); cerr != nil { retErr = errors.Join(retErr, cerr) } }()`.
+
+- [ ] **P2-214** `cmd/hackathonkit-ctl/tui.go:258` _performance_
+  When `rightWidth > 0`, `left.String()` is rendered twice: once for the initial `body` assignment and again inside `lipgloss.JoinHorizontal`. The first render result is discarded, wasting work on every redraw (which happens on each 2s tick). Restructure so the left pane is rendered exactly once.
+
+- [ ] **P2-215** `cmd/hackathonkit-mcp/main.go:483` _bug_
+  Returning the callback error aborts the entire traversal on the first unreadable entry, so `countFiles` returns a partial count; the subsequent `pending eval decisions: N` line then understates the real number (only a side note is written to diag). To keep counting readable directories while still surfacing the failure, log the error here and continue the walk (e.g. return `filepath.SkipDir` for an unreadable directory, `nil` otherwise) instead of propagating it.
+
+- [ ] **P2-216** `cmd/hackathonkit-rehearse/main.go:287` _bug_
+  Pipe file descriptors are leaked on the early-return error paths of startMCP: if `cmd.StdoutPipe()` fails after `cmd.StdinPipe()` already succeeded, the stdin writer is never closed; if `cmd.Start()` fails, both the stdin writer and the stdout reader remain open. Since the descriptors are never handed to any owner on these paths, they should be closed before returning.
+
+- [ ] **P2-217** `cmd/hackathonkit-rehearse/main.go:417` _maintainability_
+  `close()` is not idempotent and has no closed-state guard, yet it can be invoked more than once for the same client: once from the timeout branch inside `request()` (which sets `c.dead = true` and calls `c.close()`), and again from the `defer client.close()` in `run()`. Each invocation spawns a goroutine that calls `c.cmd.Wait()` and may call `c.cmd.Process.Kill()`. Calling `cmd.Wait()` a second time returns "Wait was already called" (ignored here) and the repeated Kill is redundant, so the shutdown contract is fragile. Guard with a `sync.Once`/`closed` flag so the process is reaped exactly once and `close()` is safe to call from any path.
+
+- [ ] **P2-218** `docker-compose.yml:104` _maintainability_
+  The comment describes Redis as "optional" because nothing consumes it yet, but the service has no `profiles:` entry, so a plain `docker compose up` always starts it and publishes host port 6379 (unused attack surface / resource use). If it is genuinely optional, gate it behind a profile so it is only started on demand (e.g. `docker compose --profile cache up`).
+
+- [ ] **P2-219** `internal/atomicfile/atomicfile.go:55` _bug_
+  The stale-temp sweep deletes any file matching `<base><tempMarker>*` older than one hour. The unique marker fixed the namespace collision with unrelated tools, but the residual race remains: a concurrent writer for the *same* path whose write is stalled/suspended (e.g. SIGSTOP, a blocked frozen process, or an extremely slow huge write) longer than an hour has its still-live temp file unlinked here, so its later `os.Rename` fails with ENOENT. Since the sweep is explicitly best-effort, consider tracking in-process temp names to exclude them, or document this residual race.
+
+- [ ] **P2-220** `internal/atomicfile/atomicfile.go:70` _bug_
+  `os.Chmod(dir, dirMode)` blindly tightens whatever directory the caller's path resolves to, including a pre-existing directory this package did not create. Worse, when `path` has no directory component `filepath.Dir` returns `"."`, so this chmods the process's current working directory to 0700 (and a root-level path such as `/state.json` would chmod the filesystem root). Guard against `dir == "."` (and the volume/FS root) and/or only tighten directories this call created.
+
+- [ ] **P2-221** `internal/config/config.go:332` _bug_
+  `Routing()` reads the file outside `m.mu` and only afterwards takes the lock to publish `m.routingCache`. A concurrent `SetRoutingMode` can write the new file, install the fresh cache under the lock, and then this call (which read the older snapshot earlier) clobbers the cache with stale state and returns the old mode right after the writer reported success. Consider re-checking/versioning under the lock (or comparing against the current version) before overwriting the cache.
+
+- [ ] **P2-222** `internal/config/dotenv.go:119` _bug_
+  Malformed double-quoted values are silently corrupted. A dangling backslash is dropped with no warning: because `escaped` is set to true on the last `\` and the loop then ends (e.g. `KEY="abc\` or a value that ends with `\` before an escaped closing quote), the pending backslash is never flushed. Similarly, an unterminated quote returns a partially parsed value instead of reporting anything. Since `LoadDotEnv` already logs invalid keys and `Setenv` failures, an unterminated/malformed quote should also be diagnosed rather than silently producing a different value.
+
+- [ ] **P2-223** `internal/config/dotenv.go:132` _bug_
+  Inline-comment stripping only recognizes the exact two-character sequence " #" (a space immediately before `#`) and only for unquoted values. A tab-separated trailing comment (`KEY=value\t# note`) is therefore kept as part of the value, while a leading `#` (`KEY=#foo`) is treated as data. This diverges from common dotenv parsers, which treat `#` as a comment start when preceded by any whitespace (or at the start of the value). Align the rule with the expected contract or document the deviation explicitly.
+
+- [ ] **P2-224** `internal/control/handoff.go:40` _security_
+  Raw internal error text is appended to Notes and later emitted by RenderHandoff into the markdown handoff, which is meant to be pasted into another agent session. Store/plan errors can embed filesystem paths and storage/query details, leaking internal information across that boundary. Consider logging the detailed error and recording only a generic (sanitized) reason in the handoff notes.
+
+- [ ] **P2-225** `internal/control/handoff.go:65` _documentation_
+  This counts every `eval_decision` event in the session window, but an `eval_decision` records a decision that was already made and has no unresolved state (see ingest/risk handling). Reporting the total as "pending eval decisions" (field `PendingDecisions`) gives the resuming agent a misleading workload signal. Consider renaming the field/output to reflect "recent eval decisions", or track an explicit pending/resolved state instead of deriving it from recorded-decision events.
+
+- [ ] **P2-226** `internal/control/handoff.go:105` _bug_
+  Event Type/Tool/Status and `plans.Summary` output are interpolated into the markdown without going through the whitespace-collapsing `line()` helper used for every other field. A value containing newlines or markdown (e.g. from an unusual hook payload, plan slug, stage ID, or stage status) can break the paste-ready block or inject extra list items. Apply `line()` to each component and to the `plans.Summary` output for consistency.
+
+- [ ] **P2-227** `internal/control/ingest.go:211` _bug_
+  Files smaller than the 256-byte window get no head fingerprint (`hasFP == false`), so rotation detection falls back to the size check alone. If a small JSONL stream (e.g. offset 100) is truncated and recreated with different content that is still larger than the old offset but under 256 bytes, `offset > info.Size()` is false and no fingerprint exists to compare, so the new file's head is silently skipped. This is a known limitation of the fixed window; consider storing a fingerprint for small files as well, or comparing a hash of `(size, first N bytes)` with `N` scaled to the file size.
+
+- [ ] **P2-228** `internal/control/store.go:103` _bug_
+  The path is concatenated into a `file:` URI without escaping. A path containing `?` or `#` (both legal in filesystem names, e.g. a repo checked out under a `feature#2` directory, or a user-supplied `--root`) is treated by SQLite as the query/fragment delimiter: the path is silently truncated and the remainder is parsed as DSN parameters, so the intended DB may not be opened, the `mode=ro` guard could be dropped in `OpenReadOnly`, or the WAL/busy_timeout pragmas can be lost. Build the path via `net/url` (which percent-encodes `?`/`#`) or escape it explicitly.
+
+- [ ] **P2-229** `internal/control/store.go:315` _maintainability_
+  One corrupt row aborts the entire listing: a single malformed `risk_reasons` value makes `Sessions`/`Session` (and the TUI / `sessions list`) fail outright, and `scanEvents` does the same for a malformed `payload`. This is inconsistent with the ingest path, which deliberately skips malformed records so "one bad record must not stall the stream". Consider tolerating a corrupt JSON value (leave the field nil and/or log it) so a single bad row cannot render the store unreadable.
+
+- [ ] **P2-230** `internal/control/store.go:471` _documentation_
+  Contract mismatch: the doc says an empty `sessionID` counts "all sessions", but the query filters `session_id = ?`, so passing `""` actually counts only session-less/global events (`session_id = ''`). A caller that follows the documented behavior will silently get a wrong (global-only) count. Either fix the comment to say "session-less events when sessionID is empty", or change the predicate (e.g. `(? = '' OR session_id = ?)`) to match the documented semantics.
+
+- [ ] **P2-231** `internal/evaluation/bundle.go:388` _maintainability_
+  The error from `globToRegexp` is silently discarded. This is only safe because `FreezeBundle` calls `validateExcludes` before `compileExcludes`; if that ordering ever changes (or the function is reused), an invalid glob yields a nil regex which `isExcluded` treats as a non-match, silently leaking files that were meant to be excluded. Propagate the error from `compileExcludes` (return `([]excludeRule, error)`) or make the failure explicit instead of dropping it.
+
+- [ ] **P2-232** `internal/learning/proc_windows.go:37` _bug_
+  GetExitCodeProcess returns STILL_ACTIVE (259) for a running process **and** for a process that terminated with exit code 259, so the two cases are indistinguishable here and a dead lock owner can be reported as alive. The only caller (`Store.lockFile`) uses this result to decide whether a lock file is stale: a false "alive" prevents reclamation, so after the 50 retries it fails with "learning store is locked by another process" while the stale lock file (and any future acquisitions) stay blocked. Disambiguate by waiting on the process handle with a zero timeout — WAIT_TIMEOUT means still running, WAIT_OBJECT_0 means it has exited — which requires requesting `SYNCHRONIZE` access (0x00100000) in addition to PROCESS_QUERY_LIMITED_INFORMATION above. Since that is an inherent Win32 quirk rather than a plain bug, consider at least documenting the caveat next to the constant comment if the collision is acceptable.
+
+- [ ] **P2-233** `internal/mcp/jsonrpc.go:5` _bug_
+  `Request` exposes the required `jsonrpc` field but nothing validates that it is `"2.0"`, and `Server.handle` (internal/mcp/server.go) dispatches on `Method` without ever checking it. A client sending `{"jsonrpc":"1.0",...}` (or omitting the field entirely) is therefore served normally instead of being rejected as an Invalid Request, which is non-compliant with JSON-RPC 2.0 / MCP. Consider adding a version-check helper here (e.g. `func (r *Request) HasValidVersion() bool`) and having the server reject a bad version with `CodeInvalidRequest`, or explicitly document that the version is intentionally advisory.
+
+- [ ] **P2-234** `internal/mcp/jsonrpc.go:60` _maintainability_
+  The error-code set omits the standard `CodeInvalidRequest = -32600`. Cases the spec classifies as Invalid Request (unsupported `jsonrpc` version, missing/empty `method`, malformed request object) currently fall through to `CodeMethodNotFound` or ad-hoc codes in `Server.handle`, producing spec-inconsistent error codes. Defining `-32600` here gives handlers a consistent way to signal invalid requests.
+
+- [ ] **P2-235** `internal/mcp/registry.go:132` _maintainability_
+  The `default` branch returns pointers, structs, and arrays unchanged. For pointer/struct values that internally reference maps/slices, the cloned schema still aliases registry state, contradicting the doc comment ("callers can never mutate registry state through a returned schema"). Either handle `reflect.Ptr`/`reflect.Struct`/`reflect.Array` or document the limitation explicitly.
+
+- [ ] **P2-236** `internal/mcp/streams.go:8` _maintainability_
+  Both helpers return the process globals directly. Since `os.Stdin`/`os.Stdout` are themselves package variables, a caller that wants a non-process stream must reassign those globals (affecting the whole process) or pass explicit `in`/`out` to `ServeStreams`. If per-instance stream injection is ever needed (e.g. alternate transports or parallel tests), consider storing overridable readers/writers on the Server instead of reading the globals here. Non-blocking design note — current behavior is correct.
+
+- [ ] **P2-237** `internal/metadata/metadata.go:239` _bug_
+  When `Close()` has already set `pool = nil`, every `Record*` returns `nil` (success) rather than an error, and `Enabled()` can still have reported `true` in the window before `Close` acquired the write lock. Records dropped during shutdown are thus indistinguishable from persisted ones. If these records are relied upon, return a sentinel (e.g. `errRecorderClosed`) so callers can detect the drop instead of silently losing data.
+
+- [ ] **P2-238** `internal/objectstore/minio.go:102` _bug_
+  The `Close` error is discarded. minio-go's GetObject returns a lazy reader whose `Close` releases the underlying HTTP response/connection and can surface a transport error that `ReadAll` may not have observed on all paths. Silently dropping it means a failed/truncated fetch can be reported to the caller as a clean read. Consider surfacing (or at least logging) the close error when the read otherwise succeeded, e.g. via a named return so the deferred close can amend the result.
+
+- [ ] **P2-239** `internal/openai/client.go:99` _security_
+  The error string embeds up to 400 chars of the raw provider response body. These errors propagate verbatim across the tool boundary (e.g. `audio.transcribe`/MCP `mcp.Fail(trace(ctx), terr.Error())`), so a gateway/proxy that echoes request content can leak text or the base64 image payload submitted to the model. Consider returning only a short, sanitized provider message (e.g. extracted `error.message`) rather than the raw body. The same pattern exists in `Transcribe` ("openai transcribe: status %d: %s").
+
+- [ ] **P2-240** `internal/plans/plans.go:38` _maintainability_
+  `DefaultStages` is an exported package-level slice, so its backing array is shared by every caller. Although the doc comment declares it immutable, the idiomatic and already-used pattern `plan.Stages = plans.DefaultStages` / `append(stages, plans.DefaultStages...)` makes accidental in-place mutation (e.g. `plan.Stages[i].Status = ...`) corrupt the template process-wide with no copy-on-read protection; `Save`'s nil check cannot repair it. Consider keeping the template unexported and exposing a copy-returning accessor so callers cannot alias the shared backing array.
+
+- [ ] **P2-241** `internal/plans/plans.go:224` _bug_
+  `CurrentStage` returns `false` both when every stage is done/cut and when the plan has no stages at all (e.g. a plan saved with an empty/nil stage list, which `Save` persists as `[]`). `Summary` then reports `all stages complete` for a plan that has not even been laid out, which is misleading in hooks/CLI output. Distinguish the empty-plan case.
+
+- [ ] **P2-242** `internal/quality/proc_unix.go:16` _bug_
+  Group-kill failures other than `ESRCH` (e.g. `EPERM`, or a group that still has live members) are silently discarded and the function returns no error, so the caller (`cmd.Cancel` in quality.go) cannot tell whether the tree was actually terminated. A failed group kill leaves compilers/grandchildren running while the timeout path appears to succeed. Return or at least log the non-ESRCH error so this failure is observable.
+
+- [ ] **P2-243** `internal/quality/proc_windows.go:22` _security_
+  `taskkill` is resolved through `PATH` (and on Windows the current-directory lookup rules) rather than from a fixed system location. If a binary named `taskkill.exe` is planted earlier in `PATH`/the working directory, it would be executed instead. Use the absolute path from the system directory, e.g. `filepath.Join(os.Getenv("SystemRoot"), "System32", "taskkill.exe")`.
+
+- [ ] **P2-244** `internal/resources/matrix.go:211` _documentation_
+  The doc says DegradedCapabilities lists capabilities "running on a deterministic fallback while a provider-backed variant exists", but the implementation returns every decision with `Degraded == true`. `Degraded` is also set (a) when the terminal chosen variant is provider-backed (a capability with no providerless variant) and (b) for a capability with no variants at all, in neither of which a deterministic fallback exists. Align the comment with the actual semantics (or narrow the filter) so callers' expectations about the deterministic-fallback contract hold.
+
+- [ ] **P2-245** `internal/routing/fly/events.go:39` _performance_
+  This takes the process-global `brainMu` around the CPU-bound `brain.scores` (O(KC) activation plus an O(KC log KC) sort), which serializes every Router's `loadBrain`/`ActivationSnapshot` across the process. It is also inconsistent with `mbCategoryScores` (mb.go:272-274), which relies on the documented invariant that published brains are immutable (applyDopamine clones and swaps) and scores without a lock. `scores`/`activate` return freshly allocated maps/slices, so the lock provides no protection here. Consider scoring without the lock (or add a comment explaining why this path differs).
+
+- [ ] **P2-246** `internal/routing/fly/hash_encoder.go:113` _bug_
+  The fallback error is flattened with `%v`, so its cause is dropped from the error chain: `errors.Is`/`errors.As` can only reach the primary error when both embedders fail. Since this module targets go 1.27, `fmt.Errorf` supports multiple `%w` verbs and produces a joined error, so both causes can be preserved.
+
+- [ ] **P2-247** `internal/routing/fly/mb.go:454` _bug_
+  `NewMBrain` stores the caller's slice directly instead of copying it. `Train` later does `b.Categories = append(b.Categories, category)`, so when the caller's slice has spare capacity the append writes into the caller's backing array, and any caller-side mutation of the slice leaks into the brain (and vice versa). Copy the slice on entry.
+
+- [ ] **P2-248** `internal/routing/fly/router.go:130` _bug_
+  Substring matching on short stems over-matches unrelated words and can inflate a category. Concretely, the `documents` stem "акт" also fires for "факт", "контакт", "практика", "характеристика"; the `classification` stem "логи" fires for "биологические"/"логистика"; the `geo` keyword "поля" fires for "полярный". A single incidental hit awards the category 0.3 and can change the reported route. Consider token/word-boundary matching or lengthening the ambiguous stems.
+
+- [ ] **P2-249** `internal/skills/validate.go:119` _bug_
+  When the skills directory exists but contains no skill subdirectories (or every entry was skipped because it is not a directory), `Total`/`Failed` both remain 0, so `OK` is reported `true` and the CLI exits 0 for an empty or relocated catalog. Add an explicit check that at least one skill was validated (or treat a zero-skill catalog as a failure) so silencing the catalog cannot pass the gate.
+
+- [ ] **P2-250** `internal/skills/validate.go:188` _security_
+  `filepath.IsAbs(ref)` is unreachable: both reference regexes force a `references/` prefix, so `ref` can never be absolute. The containment guarantee therefore rests entirely on the `EvalSymlinks` block below, but that block is skipped whenever `EvalSymlinks(dir)` or `EvalSymlinks(target)` returns an error, so a reference that resolves outside the skill directory via a symlink component is silently accepted instead of being reported. Consider resolving the paths unconditionally and treating a resolution failure as a problem (fail closed), and drop or replace the dead `IsAbs` guard.
+
+- [ ] **P2-251** `internal/storage/store.go:31` _maintainability_
+  `backendContext` always derives from `context.Background()`, so every `meta.RecordArtifact`/`objects.Put`/`objects.Get` call ignores the caller's deadline and cancellation. The callers (e.g. tool handlers in internal/tools) do hold a request `ctx`, but these Store methods take no `context.Context`, so a client disconnect cannot abort a stalled Postgres/MinIO call and the handler blocks up to `backendTimeout()` per backend call (two sequential calls in `WriteArtifact`). Consider threading `ctx` through these methods and deriving the timeout from it.
+
+- [ ] **P2-252** `internal/storage/store.go:251` _security_
+  Read path is not hardened against symlink races, while the write path is. `ensureWithin` verifies containment at check time, but the subsequent `os.ReadFile(full)` follows symlinks; if a component of `full` is replaced with a symlink pointing outside `s.root` between the check and the read, content outside the root is returned. `safeWriteFile` defends against exactly this (Lstat + temp-file + rename), so the asymmetry is likely unintentional. Consider opening with `O_NOFOLLOW`/`openat` (RESOLVE_BENEATH) or re-verifying via the opened fd. `ReadIndex`'s `os.ReadFile(full)` has the same gap.
+
+- [ ] **P2-253** `internal/tools/context.go:50` _maintainability_
+  `skillContextItems` deliberately returns partially collected `items` together with the walk error, but the handler discards them and returns `mcp.Fail` on any `skillErr`. Today only context cancellation propagates, where an error response is reasonable; however this makes the partial-return contract dead and would silently drop all tool/manifest items for any future non-cancellation error. Either have the caller surface the partial items, or drop the partial return and document that a scan error aborts the whole report.
+
+- [ ] **P2-254** `internal/tools/context.go:310` _bug_
+  `frontmatterBlock` treats any line whose trimmed content equals `---` as the closing fence and only signals success when a closing fence is found. Two problems: a `---` line appearing inside a multi-line description (e.g. an unquoted value) prematurely ends the block, and a SKILL.md whose frontmatter is unterminated silently yields an empty description, so the oversized-description flag is never raised. Since the block is fed to a real YAML parser, only treat a `---` at the expected document level as the terminator and surface a malformed/unterminated frontmatter condition rather than returning empty.
+
+- [ ] **P2-255** `internal/tools/deps.go:99` _bug_
+  `argFloat` parses string arguments verbatim, unlike `argString` which trims. A whitespace-padded numeric string such as `" 2.5 "` (or `"\n7"`) fails `strconv.ParseFloat` and silently falls back to `def`, so a value the client intended to supply is discarded. Trim before parsing for consistency.
+
+- [ ] **P2-256** `internal/tools/deps.go:122` _maintainability_
+  The out-of-range guard is fixed at 32-bit bounds even though the function returns a 64-bit `int` on common platforms. A legitimately large but valid value (e.g. a big `offset`/`max_chars`/`limit` above 2^31) is silently replaced by the caller's default, which is indistinguishable from an omitted argument — exactly the failure mode the comment above tries to avoid. Consider documenting the intentional int32 contract explicitly, or deriving the bound from the platform `int` width (noting float64 cannot represent MaxInt64 exactly, so an inclusive comparison needs care).
+
+- [ ] **P2-257** `internal/tools/deps.go:175` _bug_
+  The comment claims the shallow copy prevents handler mutation from leaking into the caller's argument map, but only the top level is detached: nested `map[string]any`/`[]any` values are still shared by reference. Handlers storing the result (e.g. `plan.MandatoryScenario`) or passing it to `Router.Recommend` can still mutate the caller's nested data. Either deep-copy the nested values or correct the comment to state that only the top level is detached and nested values are shared read-only.
+
+- [ ] **P2-258** `internal/tools/documents.go:197` _bug_
+  Off-by-one at the size boundary: `counter.n > maxDocxXMLBytes` is used to detect truncation, but the reader is limited to `maxDocxXMLBytes+1`. A well-formed `word/document.xml` whose size is exactly `maxDocxXMLBytes+1` is fully consumed and parses to `io.EOF`, so the final check still fires and the caller gets a spurious "exceeded the size limit; text was truncated" warning even though the text is complete. Using a read limit of `maxDocxXMLBytes+2` and flagging only when `counter.n > maxDocxXMLBytes+1` (in both the error branch and the post-loop check) distinguishes "exactly at the boundary" from "genuinely truncated".
+
+- [ ] **P2-259** `internal/tools/documents.go:282` _performance_
+  `len([]rune(text))` is evaluated twice for the same possibly multi-megabyte text (once for the metadata artifact, once for the response), and `snippet(text, 400)` further converts the entire string to runes internally just to return 400 characters. With a text-heavy DOCX near the 64 MiB extraction cap this means several redundant O(n) rune conversions and large transient allocations on the request path. Compute the rune count once and reuse it, and consider a byte-based fast path for the preview.
+
+- [ ] **P2-260** `internal/tools/evaluation.go:39` _bug_
+  Index collision when merging load failures with validation failures: `readReports` numbers its `InvalidReport.Index` over the combined inline+file input (including entries that failed to load), while `AggregateReports` numbers the reports it receives by their position in the already-filtered `reports` slice. A loaded report that fails schema validation can therefore receive the same `Index` as a load-failure entry (e.g. a missing path at index 1 and the next successfully-loaded report rejected at index 1), making the `dropped_invalid` entries ambiguous. Carry the original input index through to aggregation (or renumber after merging) if the index is meant to identify the caller's input.
+
+- [ ] **P2-261** `internal/tools/evaluation.go:590` _bug_
+  `os.CreateTemp` always creates the temp file with mode 0600, and `os.Rename` replaces the destination with it. Persisted artifacts (aggregate.json/calibration.json/decision/ranking) therefore end up 0600 regardless of umask, whereas the previous in-place write produced 0644. Any other repo tooling or judge process running as a different UID can no longer read them. Explicitly set the intended mode (e.g. `os.Chmod(tmpName, 0o644)`) before the rename, or chmod `full` afterwards.
+
+- [ ] **P2-262** `internal/tools/extras.go:293` _bug_
+  `renderChartSVG` dereferences `series[0].Points[0]` without a guard. Today the only caller (`registerCharts`) is protected because `parseChartSeries` guarantees a non-empty series with at least one point, but this is an implicit, undocumented precondition on an unexported general-purpose renderer. A cheap guard makes the invariant explicit and prevents a panic if the function is reused (e.g. a bar/line chart built from another source).
+
+- [ ] **P2-263** `internal/tools/files.go:39` _security_
+  `err.Error()` is forwarded verbatim to the client. `Store.InputPath` wraps the `os.Stat` failure with `%w` (internal/storage/store.go: `cannot stat input %s: %w`), and that inner error embeds the resolved absolute path, so an MCP client can receive server filesystem layout details on permission/ENOTDIR-type failures. Consider returning a generic message (e.g. the relative path) and logging the wrapped error internally.
+
+- [ ] **P2-264** `internal/tools/knowledge.go:92` _bug_
+  `pos` is a byte offset into `lower` (the lowercased text), but `utf8.RuneCountInString(lower[:pos])` yields a rune count in `lower` which is then applied to `r := []rune(text)`. `strings.ToLower` can change the rune count for some inputs (e.g. U+0130 'İ' lowercases to two code points), so the window start can be misaligned and the returned snippet may not contain the matched term. Compute the rune index from the same string used to search, or fold case in a rune-count-preserving way.
+
+- [ ] **P2-265** `internal/tools/knowledge.go:311` _performance_
+  This loop performs up to `maxIndexesPerSearch` file reads plus `json.Unmarshal` of each index with no `ctx.Err()` check, so a cancelled/timed-out request keeps doing I/O and allocating until the loop finishes. Add a `ctx.Err()` check at the top of the loop and return early on cancellation.
+
+- [ ] **P2-266** `internal/tools/knowledge.go:315` _bug_
+  The `maxIndexesPerSearch` guard is only applied when `len(allowed) == 0`. When the caller supplies `index_id`/`index_ids`, `scanned` increments but is never compared, so an explicit scope with a long list of ids forces reading and unmarshalling every matching index with no upper bound. Apply the cap regardless of whether an explicit scope was given (or bound the size of `allowed`).
+
+- [ ] **P2-267** `internal/tools/learning.go:33` _security_
+  Raw store errors are forwarded verbatim to the MCP client via `err.Error()` (same pattern in `learning.recall` and `learning.promote`). The learning store errors embed absolute filesystem paths, e.g. `learning store <abs>/learnings.json: <json error>` from `Store.load` and `write learning lock <abs>/learnings.json.lock: ...` from `Store.lockFile`, so internal paths and storage details leak across the tool boundary. Consider returning a sanitized message and logging the detail server-side.
+
+- [ ] **P2-268** `internal/tools/plan.go:57` _bug_
+  Schema/type mismatch with silent data loss. The stage property is declared as `"type": "number"`, but `argInt(m, "timebox_minutes", 0)` returns the default (0) for any non-integral value (`value != math.Trunc(value)`), so a caller sending `timebox_minutes: 20.5` silently gets a 0 timebox with no error or warning. Worse, a fractional negative such as `-1.5` also collapses to 0, so the `timebox < 0` guard below never fires for it. Either declare the property as `"type": "integer"` (matching the `int` field and rejecting fractions up front), or explicitly treat a supplied-but-unusable timebox as a validation failure in the handler.
+
+- [ ] **P2-269** `internal/tools/plan.go:84` _maintainability_
+  Inconsistent handling of the `stages` argument: a non-array value emits a `stages must be an array; default stages were used` warning, but an explicitly supplied empty array (`stages: []`) silently falls back to `plans.DefaultStages` with no warning. A caller that intended to override the stage list (e.g. an agent that derived an empty list) gets no signal that its input was discarded. Emit the same warning when `stages` is present but yields no usable stages, or document that an empty list intentionally means "use defaults".
+
+- [ ] **P2-270** `internal/tools/quality.go:19` _bug_
+  When the evidence directory exists but every `gate.json` is unreadable/corrupt, `LatestReport` returns `ok=false` with a non-nil `evidenceErr`. This branch then emits *both* "no gate evidence found; run scripts/quality-gate.sh" and "evidence could not be read: ...", which is self-contradictory: evidence was in fact found, it just could not be parsed. Agents keying off the first warning may conclude the gate never ran and simply re-run it instead of investigating the corrupt artifact. `plan.status` (internal/tools/plan.go:239-243) avoids this by replacing the message when an error is present. Prefer selecting the message based on `evidenceErr`.
+
+- [ ] **P2-271** `internal/tools/security.go:79` _documentation_
+  `scanned_chars` is set from `len(text)`, which counts bytes, not characters, and the accompanying warning also says "%d characters" while the limit is applied in bytes. For multibyte input both the reported size and the warning wording are misleading. Use `utf8.RuneCountInString(text)` (and reword the warning) if characters are intended, or rename to reflect bytes.
+
+- [ ] **P2-272** `internal/tools/security.go:205` _bug_
+  The zero-width character set omits common invisible controls such as ZWNJ (U+200C), ZWJ (U+200D), the word joiners (U+2060–U+2064), the soft hyphen (U+00AD) and the Arabic letter mark (U+061C). ZWJ/ZWNJ are frequently used to split tokens and evade pattern matching, so their absence is a detection gap in a tool whose purpose is catching hidden characters.
+
+- [ ] **P2-273** `internal/tools/system.go:97` _security_
+  The raw `err.Error()` from `observability.AppendJSONL` (and from `RecordFlyPrediction` below) is appended into `telemetryWarnings` and then returned to the MCP caller through `env.WithWarnings`; the same happens for `AddFeedback` errors returned via `mcp.Fail(trace(ctx), err.Error())`. These messages can embed absolute filesystem paths and backend details derived from `d.Store.Root()` / the metadata store, leaking internal layout across the tool boundary. Consider wrapping/redacting these errors (the repo already has `redactBackendError`) before surfacing them to callers.
+
+- [ ] **P2-274** `internal/tools/system.go:149` _bug_
+  When `emit_activation` is false (or absent from a caller that disabled it), `snapshot` stays a nil map, yet the handler still appends a `type: "recommend"` record to `fly-neuron-events.jsonl` whose `active_kc`, `mbon`, `kc_total`, `activation_available`, `activation_complete` and `active_kc_count` are all `null`. Reading a nil map is safe, but the emitted event is now indistinguishable from a snapshot that failed to capture, and `activation_available: null` breaks the boolean contract `ActivationSnapshot` uses (it always returns a real bool, never null). Either skip the neuron event when activation was not captured, or write explicit `activation_available: false` plus a reason.
+
+- [ ] **P2-275** `internal/tools/timeseries.go:147` _maintainability_
+  Inconsistent handling of out-of-range numeric args: `window` and `threshold` reset out-of-range values but also emit a warning, whereas `max_points` (here) and `limit` (below) silently coerce to their defaults. A caller passing e.g. `max_points: 10000` gets a truncated 120-point series with no diagnostic and cannot tell the request was altered. Emit a warning (as done for window/threshold) when these values are clamped, or reject them with an error.
+
+- [ ] **P2-276** `internal/tools/util.go:193` _bug_
+  The trailing-dash trim happens before the 60-rune cut, so truncation can leave the slug ending in '-'. Re-trim after slicing to keep the invariant that slugs never end (or start) with a dash.
+
+- [ ] **P2-277** `internal/tools/xlsx.go:288` _bug_
+  This limit check runs at the top of the loop while `out` is only appended on `</si>`, so it triggers only once `len(out)` has already reached `maxXLSXSharedStrings+1` — the cap actually permits one extra entry. Check after appending (or use `>=`) if the intent is to enforce the stated maximum exactly.
+
+- [ ] **P2-278** `internal/tools/xlsx.go:438` _bug_
+  Cells whose reference is at or beyond `maxXLSXCols` are dropped via `continue` *before* `budget.addCells` is charged. A crafted sheet can therefore contain millions of out-of-range cells that are fully decoded/parsed but never counted against `maxXLSXCells`, defeating the per-workbook cell cap (work is only bounded by the 256 MB sheet-byte cap). Charge the budget (or short-circuit the cell) before skipping so the cap still bounds total work.
+
+- [ ] **P2-279** `plugins/hackathonkit/scripts/hackathonkit-mcp-launcher.js:15` _bug_
+  `fs.existsSync` followed by `spawnSync` is a check-then-use race (TOCTOU): the launcher could be removed/replaced between the two calls. Note also that if it disappears before `spawnSync`, `sh`/`cmd.exe` itself still spawns and the failure surfaces as a confusing child error (non-zero status) rather than this clear "not found" message. Rely on the `result.error` path as the authoritative safeguard rather than the pre-check.
+
+- [ ] **P2-280** `plugins/hackathonkit/scripts/hackathonkit-mcp-launcher.js:25` _maintainability_
+  The non-Windows branch hardcodes `sh` and assumes it is resolvable from PATH; if `sh` is unavailable or in an unusual location, the failure message is only the generic spawn error. Consider making the shell overridable via an environment variable and emitting a clearer diagnostic when it cannot be found.
+
+- [ ] **P2-281** `plugins/hackathonkit/scripts/hackathonkit-mcp-launcher.js:31` _bug_
+  Only `result.status` is mapped; `result.signal` is ignored. If the child launcher is terminated by a signal, `status` is `null` and the process reports a generic exit code 1, hiding the real termination cause and making failures harder to diagnose. Consider surfacing the signal in the error message and deriving the exit code from it (e.g., `128 + signal number`).
+
+- [ ] **P2-282** `plugins/hackathonkit/scripts/hackathonkit-mcp-launcher.sh:42` _security_
+  The root validation is satisfied by either artifact (`hooks.js` **or** `go.mod`), so any directory that merely contains a `go.mod` passes and is then trusted as the source of an `exec`'d binary (`$REPO_ROOT/bin/hackathonkit-mcp`). Since the whole point is to guarantee the derived root is a genuine Hackathon Agent Kit checkout, require both markers (or a more specific marker) to make the guard meaningful.
+
+- [ ] **P2-283** `plugins/hackathonkit/scripts/hackathonkit-mcp-launcher.test.sh:56` _test_
+  The launcher is always invoked via `sh`, so its shebang and executable bit are never validated, and only the launcher file is copied into the temp repo. A broken/interpreter-mismatched shebang or a newly sourced sibling helper would go undetected. Consider `chmod +x` the copied launcher and invoking it directly (at least once) so the shebang/exec-bit path is covered.
+
+- [ ] **P2-284** `plugins/hackathonkit/scripts/hackathonkit-mcp-launcher.test.sh:63` _test_
+  This assertion is order- and format-sensitive: it requires the injected `--repo-root` and its value to appear as an exact substring before the passthrough args. Any benign change (extra arguments, quoting, or appending arguments) makes it fail even though the launcher still resolves the correct root. Consider asserting each token/order independently (e.g. that the line starts with `local --repo-root <REPO>` and contains `--list-tools`) or documenting that the ordering is a hard contract.
+
+- [ ] **P2-285** `plugins/hackathonkit/scripts/hooks.js:262` _security_
+  `removeActive` performs a filesystem write (unlink) without the `ROOT_VALID` guard that every other mutating helper applies (`writeActive`, `appendJSONL`, `touchActive`, `ownedByRoot`). It is currently only reached after `ownedByRoot()` returns true, so it is not exploitable today, but it breaks the stated invariant that session state is only touched under a validated root and silently deletes under an unvalidated `safeCwd()` if the call flow ever changes. Add the guard for consistency/defense in depth.
+
+- [ ] **P2-286** `plugins/hackathonkit/scripts/hooks.js:313` _maintainability_
+  The `mtime` property pushed here is never read: sorting uses `started` (which already falls back to `stat.mtimeMs`) and the returned value maps `item.entry` only. This is dead state that also duplicates the fallback logic; drop the field so the intent (mtime as fallback for entries without `started_at`) stays in one place.
+
+- [ ] **P2-287** `scripts/codex-config.test.sh:136` _test_
+  The suite asserts the tracked repo config is untouched, but never hashes `$WORK/.codex/config.toml` even though the generator is pointed at `$WORK` as the project root and reads that file for budget derivation. A regression that rewrites/injects into the scratch project config would go undetected. Capture its hash before the runs and assert equality here alongside the tracked-config check.
+
+- [ ] **P2-288** `scripts/codex-config.test.sh:145` _test_
+  The hostile-value regression only exercises `startup_timeout_sec`. `tool_timeout_sec` is set to the benign `137`, so a fallback or injection bug specific to the `T` extraction path (including other shell metacharacters such as backticks, `$(...)`, or `&&`) would pass unnoticed. Add a second hostile case for `tool_timeout_sec` (and/or a payload using a different metacharacter) asserting it also falls back to the default and does not execute.
+
+- [ ] **P2-289** `scripts/coverage-check.sh:2` _documentation_
+  The header documents the threshold but not the exit statuses this script produces: 0 = at/above target, 1 = test/`go tool cover` failure or below target, 2 = invalid `HACKATHONKIT_COVERAGE_TARGET`. Callers (`internal/quality/quality.go`, CI, `/verify`) interpret the exit code, and this repo already expects scripts to document them (see the OCR-324 convention applied to `scripts/docker-check.sh`). Please document them here.
+
+- [ ] **P2-290** `scripts/coverage-check.sh:13` _maintainability_
+  The percentage validation logic is duplicated: `TARGET` is checked with a character-class glob plus a dot-count glob plus a separate digit requirement, while `TOTAL` repeats the character-class/dot-count globs without the digit arm. The two can easily drift apart (and the edge inputs like `.`, `.5`, `1.`, `1..2`, `101` are only exercised implicitly). Consider extracting a small `valid_percent()` helper used by both call sites and adding a shell test covering those edge values.
+
+- [ ] **P2-291** `scripts/coverage-check.sh:78` _bug_
+  This sorts the entire `go tool cover -func` output, which also contains the aggregate `total:\t(statements)\tNN.N%` line. The summary can therefore show up in the "worst coverage" list (and with few functions it displaces an actionable entry), even though it is not a function. Filter the summary line out before sorting.
+
+- [ ] **P2-292** `scripts/docker-check.sh:127` _bug_
+  Silent fallback: when the `docker compose port` scrape yields nothing (container not yet up, unexpected output format, or a resolution error), the script silently assumes host port 9000 and probes it. That can produce a false pass against an unrelated service already bound to 9000, or a confusing 'minio did not become ready' failure. Consider failing loudly (or reporting the raw `docker compose port` output) instead of guessing the port.
+
+- [ ] **P2-293** `scripts/doctor.ps1:139` _maintainability_
+  Unlike the `plugin-check.ps1`/`smoke.ps1` checks, the hook test has no existence guard. If `hooks.test.js` is missing, node exits non-zero and the failure is reported as a generic "session ownership test" failure, hiding the actual cause. The sibling `scripts/doctor.sh` guards for this; mirror that behavior here.
+
+- [ ] **P2-294** `scripts/doctor.ps1:168` _bug_
+  `[bool]$p.enabled` mis-parses string values: in PowerShell `[bool]"false"` is `$true` (any non-empty string is truthy). If the codex JSON ever encodes `enabled` as a string, an installed-but-disabled plugin would be reported as enabled. Compare explicitly.
+
+- [ ] **P2-295** `scripts/doctor.sh:36` _bug_
+  When jq is present but the CLI output is malformed or uses an unexpected schema, both `jq -e` calls fail and `PLUGIN_STATE` keeps its initial value `missing`, so a parse problem is reported as "run scripts/setup.sh". The python3/awk fallbacks distinguish this case via `unknown`; make jq consistent by validating the JSON first and setting `unknown` on failure.
+
+- [ ] **P2-296** `scripts/doctor.sh:129` _bug_
+  The mirror check mixes semantics: it compares the set of top-level directories against a recursive `SKILL.md` count. Matching top-level names plus equal recursive counts can still pass on divergent trees (e.g. a nested `SKILL.md` appearing under one existing skill while another skill loses its own), and `-name SKILL.md` matches directories too. Compare full relative file lists with `-type f`, or otherwise compare the same depth/kind on both sides.
+
+- [ ] **P2-297** `scripts/doctor.sh:179` _maintainability_
+  The pattern requires `"version"` to begin a line, so minified/compact JSON or a differently formatted file produces a spurious "could not parse" failure, and a nested `"version"` key could be picked up instead. Prefer a real JSON parser (jq/python3 are already used elsewhere) or relax the pattern.
+
+- [ ] **P2-298** `scripts/doctor.sh:206` _bug_
+  This direct binary invocation (as well as the `--validate-skills` call above) is not wrapped in `run_bounded`, so the timeout protection described in the header comment does not actually cover every external process. Route these calls through `run_bounded` for consistent bounding.
+
+- [ ] **P2-299** `scripts/doctor.sh:207` _bug_
+  If the local binary exists but neither jq nor python3 is available, `RESOURCES_PRESENT` stays `false`, so the check silently reports "not configured (run scripts/setup-resources.sh)" even when resources are configured. Add an explicit unknown/not-verifiable outcome, or an awk/grep fallback, so the result is not misleading.
+
+- [ ] **P2-300** `scripts/env-set-test.sh:0` _maintainability_
+  `file_mode` calls `exit 2` from inside `$(...)` when neither stat syntax works. Because it runs in a subshell the exit status is swallowed, only a stderr line is emitted, and the caller then produces an ordinary `[fail]` with an empty mode/detail. A broken harness therefore looks like a product bug. Prefer detecting the stat variant once up front (failing loudly) or propagating a distinguishable sentinel rather than a silent `exit 2` buried in command substitution.
+
+- [ ] **P2-301** `scripts/env-set-test.sh:0` _test_
+  Only a single negative path is covered (one invalid key). Other rejection branches of the helper are untested: empty FILE/KEY (usage, exit 2), symlink resolution failure / too many hops, the fatal mode-restore and chown failures, and stdin larger/multi-line negatives. Consider adding cases for these so regressions in the error paths are caught.
+
+- [ ] **P2-302** `scripts/env-set-test.sh:0` _performance_
+  Both live-lock cases force the helper through its full retry loop (10 iterations of `sleep 1`), so each blocked-writer invocation adds ~10s and these two tests add ~20s to the suite. If the helper can be given a shorter/overridable lock timeout (or the tests run in parallel), do so to keep the regression suite fast.
+
+- [ ] **P2-303** `scripts/env-set.sh:41` _bug_
+  `$(cat)` already strips *all* trailing newlines, so the following `${VALUE%"\n"}` is dead code, and intentional trailing blank lines in a supplied value are silently dropped rather than the "single trailing newline" the comment describes. If preserving trailing content matters, read the value without command substitution (e.g. via a temp file / `IFS= read -r` loop); otherwise adjust the comment to state that all trailing newlines are removed.
+
+- [ ] **P2-304** `scripts/env-set.sh:159` _bug_
+  `on_signal_env_set` always exits 130 regardless of the signal received. For SIGTERM the conventional exit status is 143; using 130 unconditionally misreports a terminal signal as an interrupt to callers/tests that inspect the status.
+
+- [ ] **P2-305** `scripts/env-set.sh:206` _bug_
+  The final install does not guard against `$FILE` being an existing directory (e.g. a symlink that resolves to a directory, or a typo). In that case `[ -f "$FILE" ]` was false so `INPUT=/dev/null`, and `mv` will move the temp file *into* the directory under its temp name, reporting success while the intended env file was never written. Add an explicit check (reject directories / non-regular targets) before the rename.
+
+- [ ] **P2-306** `scripts/gen-codex-config.sh:47` _security_
+  `toml_escape` only escapes backslash and double quote. A launcher path containing a control character (notably a literal newline, but also TAB/CR) would emit an invalid or multi-line TOML basic string, and on hosts without `python3` the validation that would otherwise catch it is skipped. Escape/handle control characters (or reject a path that is not a plain single-line string) to guarantee a well-formed `args` entry.
+
+- [ ] **P2-307** `scripts/gen-mcp-manifest.ps1:24` _maintainability_
+  `Resolve-Path` normalizes relative/`..` segments to an absolute path, but it does not reliably dereference symlinks/junctions (on Windows PowerShell 5.1 it returns the link path itself rather than its target). The preceding comment therefore overstates the guarantee that a symlinked root 'cannot ... redirect the launcher'. The absolute-path goal is met, but either correct the comment or resolve the link target explicitly if symlink dereferencing is actually required.
+
+- [ ] **P2-308** `scripts/gen-mcp-manifest.ps1:30` _bug_
+  On Windows PowerShell 5.1 `Get-Content -Raw` without `-Encoding` decodes a BOM-less file using the system ANSI code page, so a template containing non-ASCII bytes would be mojibake'd here and then re-written as UTF-8 into the manifest. The current template is ASCII-only, but the read should be explicit to avoid silently corrupting future non-ASCII content.
+
+- [ ] **P2-309** `scripts/gen-mcp-manifest.ps1:39` _bug_
+  The two substitutions are chained, so the second `Replace` re-scans the text inserted by the first. If the canonical root literally contains `{{MCP_LAUNCHER}}` (a directory named that), it is silently rewritten to `hackathonkit-mcp-launcher.cmd`, corrupting the recorded repository path while still producing valid JSON — the placeholder guard cannot catch this because no braces remain. Substitute in a single pass over the original template that never re-scans inserted values (or reject roots containing `{{`/`}}` with an explicit message).
+
+- [ ] **P2-310** `scripts/gen-mcp-manifest.ps1:46` _bug_
+  This guard scans the *rendered* manifest for any `{{...}}` sequence, but the canonical root has already been spliced in at this point. A repository whose absolute path legitimately contains double braces (e.g. `C:\work\{{demo}}\hackathonkit`, or a UNC path with such a share) therefore makes this check fail and aborts a perfectly valid manifest — the braces came from the root path as data, not from an unexpanded template placeholder. Prefer validating the *template* for unknown placeholders before substitution, or at minimum match only the two known tokens and treat braces in the resolved root as legitimate data.
+
+- [ ] **P2-311** `scripts/gen-mcp-manifest.sh:12` _maintainability_
+  `TEMPLATE` is derived from the pre-canonical `$ROOT` (line 12) but is used after `ROOT` has been rewritten to the canonical `pwd -P` value, and the `-d`/`-f` checks all validate the pre-canonical path while the manifest is written under the canonical path. Today this happens to work only because the script never `cd`s, but it makes the checks and the actual target implicitly depend on the current working directory. Recompute `TEMPLATE` after the canonicalisation block so every path is derived from the single resolved root.
+
+- [ ] **P2-312** `scripts/gen-mcp-manifest.sh:21` _bug_
+  `'${1:-}'` is empty whenever the caller did not pass a root, which is exactly the case where the *default* root (derived from `$0`/`dirname`) failed to resolve — so the diagnostic reports nothing useful and hides the offending path. Interpolate the resolved value (`$ROOT`) so the user can see (and act on) the path that actually failed.
+
+- [ ] **P2-313** `scripts/gen-mcp-manifest.sh:62` _bug_
+  The post-render guard greps the *output* for the two known tokens, but the awk loop above already replaces every occurrence of each token, so a leftover can only ever mean the substituted value itself contains the token. That makes this check ineffective at its stated purpose and able to false-positive: a canonical root that legitimately contains the literal `{{REPO_ROOT}}`/`{{MCP_LAUNCHER}}` (a valid directory name) aborts a perfectly good run. Conversely an unknown placeholder (e.g. `{{SOMETHING_ELSE}}`) in the template is never caught. Grep the *template* for placeholder tokens generically (or verify the awk exit status) instead of re-scanning the substituted output.
+
+- [ ] **P2-314** `scripts/install-prompts.ps1:27` _bug_
+  `IsPathRooted` also returns true for a drive-relative path such as `C:` (volume separator with no root), so a value like `CODEX_HOME=C:` passes validation and `Join-Path "C:" "prompts"` resolves relative to the current directory on that drive, writing prompts to an unintended location. Reject bare drive specs explicitly to guarantee the resolved destination is fully rooted.
+
+- [ ] **P2-315** `scripts/install-prompts.sh:16` _security_
+  `DEST_DIR` is derived directly from `CODEX_HOME`/`HOME` without normalization or validation, so a mis-set or attacker-influenced value can direct writes (install) and content-matching deletions (remove) into arbitrary directories. Consider normalizing/validating the value (e.g. reject relative or unexpected paths) before using it.
+
+- [ ] **P2-316** `scripts/install-prompts.sh:70` _bug_
+  `status` also follows symlinks: a symlinked destination that happens to match the source content is reported as installed, yet `install` would skip it as a non-regular destination. This makes `status` report success while install/remove behave differently. Treat non-regular destinations consistently (e.g. count them as missing or out of date).
+
+- [ ] **P2-317** `scripts/plugin-check.ps1:8` _bug_
+  `$codexCmd` is only used to test presence; the actual invocation uses bare `codex`, which is resolved anew with normal command precedence (alias/function before application). If a function or alias named `codex` exists it would run instead, yielding misleading results (and possibly invoking an unintended binary). Invoke the already-resolved executable explicitly.
+
+- [ ] **P2-318** `scripts/plugin-check.ps1:191` _maintainability_
+  The response validation only asserts that the `result` property exists and that `isError` is falsy. As written, `"result": null` passes (property present, `$null.isError` is falsy), an empty `tools/list` passes, and an `initialize` result is never checked for `protocolVersion`. Since the script's purpose is to prove the server actually works, validate at least that `result` is non-null and that ids 2/3 contain meaningful payloads. Also note duplicate ids silently overwrite the earlier response in `$responses`.
+
+- [ ] **P2-319** `scripts/plugin-check.sh:129` _bug_
+  `os.path.realpath()` does not require the path to exist; it resolves non-existent components lexically. So a missing/typo'd command (or a manifest pointing at a directory) passes the containment check and only fails later inside `subprocess.run` with an opaque OSError/IsADirectoryError, rather than a clear "command does not exist" message. The PowerShell sibling (`plugin-check.ps1:76`) explicitly checks existence. Also note `real_command == source` is allowed, which lets the plugin root directory itself qualify as a "command". Add an `os.path.isfile(real_command)` check (mirroring the PS script) before executing.
+
+- [ ] **P2-320** `scripts/plugin-check.sh:138` _bug_
+  The manifest's `env` block (if any) is ignored, so a server configured to rely on manifest-provided environment variables is started without them and the check reports a false failure. Consider merging `server.get("env")` into the subprocess environment, e.g. `env={**os.environ, **manifest_env}` when it is a dict.
+
+- [ ] **P2-321** `scripts/quality-gate.sh:67` _maintainability_
+  This EXIT trap duplicates the explicit `chown_evidence` call made just before each `exit`, and it is not failure-safe: `rm -rf "$TMP_DIR"` runs under `set -e`, so if the removal fails the trap aborts before `chown_evidence` and overrides the gate's real exit status. Let the removal failure be non-fatal so cleanup and the child's status are always preserved.
+
+- [ ] **P2-322** `scripts/redact.sh:15` _security_
+  Only the availability of `sed -E` is verified up front; there is no check that the actual redaction invocation succeeds. Because sed streams and buffers output, a runtime failure could still emit partial (potentially unredacted) output before `set -e` terminates the script, so the fail-closed guarantee described in the header is not fully upheld. Consider buffering through a temp file (redact to temp, then emit only on success) or trapping the exit to suppress output.
+
+- [ ] **P2-323** `scripts/redact.sh:23` _security_
+  This rule only fires for tokens that contain `://` and greedily consumes up to the last `@`, so scheme-less credentials (`user:pass@host`), and credential forms using other delimiters, pass through unredacted; conversely it over-redacts benign `user@host` tokens in paths/queries. The header acknowledges the over-redaction trade-off but the missed scheme-less credential case is a real gap if such inputs can occur.
+
+- [ ] **P2-324** `scripts/redact.test.sh:44` _maintainability_
+  Several assertions (here and on the two-quoted-value / json / unquoted-quote cases) rely on exact full-output equality. That is brittle: any harmless change in spacing or formatting in the redactor output makes the suite fail, discouraging legitimate refactors. Prefer targeted assertions (key redacted + secret absent + surrounding text intact) where the exact byte layout is not the behaviour under test.
+
+- [ ] **P2-325** `scripts/repair.ps1:21` _maintainability_
+  Inconsistent failure policy: sync-harness/gen-mcp-manifest/write-install-state abort the run on non-zero exit, but install-prompts only warns. If prompts are genuinely optional this is fine, but the asymmetry is easy to misread and no state is recorded that prompts were skipped. Either document the intentional difference or log it clearly so a partial install is discoverable.
+
+- [ ] **P2-326** `scripts/repair.sh:46` _bug_
+  Docker is only considered when both `docker` and `timeout` exist, so on hosts where `timeout` is unavailable (notably macOS without coreutils) the MCP image check is skipped entirely and RUNTIME silently degrades to `binary`, forcing a local Go rebuild or an outright failure even though a usable Docker image exists. If this is the intended tradeoff, consider documenting it here; otherwise bound the probe portably (background the command and kill it after a short wait) rather than gating on `timeout`.
+
+- [ ] **P2-327** `scripts/set-version.sh:24` _maintainability_
+  The regex accepts leading zeros (`01.002.0003`) and rejects valid SemVer forms such as `1.2.3-rc.1`/`1.2.3+build`. If leading-zero versions are never intended, the check is too permissive and could silently publish a malformed version; if prerelease/build metadata is intended to be supported, the pattern is too strict. Please confirm the intended semantics and tighten/document accordingly.
+
+- [ ] **P2-328** `scripts/set-version.sh:34` _maintainability_
+  `sed -i.bak` is not POSIX (the script declares `#!/usr/bin/env sh`) and its behavior varies across implementations. More importantly, because `set -e` is active, if `sed` fails (or the process is interrupted) the script aborts *before* `rm -f` runs, leaving stale `*.bak` files next to the target. Consider a temp-file + `mv` approach, or register a `trap 'rm -f "$MAIN.bak"' EXIT INT TERM` so backups are always cleaned up.
+
+- [ ] **P2-329** `scripts/set-version.sh:55` _bug_
+  This verification uses `$VERSION` inside an ERE, so the dots are treated as "any character". Version `0.17.0` would also match a value like `0x17y0`, weakening the edit verification. Since `sed` always writes the exact literal `"version": "$VERSION"`, verify with a fixed string instead.
+
+- [ ] **P2-330** `scripts/set-version.sh:65` _bug_
+  Same unescaped-regex issue as the JSON check: `$VERSION` is matched as a regex, so dots match any character. The `sed` above always emits `Status: v$VERSION.` literally, so a fixed-string match is both stricter and simpler.
+
+- [ ] **P2-331** `scripts/set-version.test.sh:53` _test_
+  This no-argument re-run reads the version from main.go and is *expected* to change nothing, so the idempotency comparison passes even if the re-run is a complete silent no-op. The separate exit-status check catches a crash, but not a regression where the no-arg path stops syncing altogether. To actually exercise re-sync, deliberately drift one file to a wrong version before the no-arg run and assert it gets corrected; also assert the exit status explicitly rather than relying on the `if/else` report.
+
+- [ ] **P2-332** `scripts/setup-resources.sh:47` _maintainability_
+  An empty value is treated as a no-op that leaves the key untouched, so re-running the questionnaire with an empty answer can neither clear a previously stored secret nor overwrite it — a stale credential silently survives while `resources.json` may flip the provider to `false`, leaving `.env` and the profile inconsistent. Either document this explicitly or provide a way to clear the key (e.g. write the empty value) so the stored state matches the recorded answer.
+
+- [ ] **P2-333** `scripts/setup.ps1:68` _security_
+  The placeholder blacklist only matches exact values, so common shipped placeholders such as `change-me-in-production`, `my-token` or `secret` are treated as real tokens and never regenerated, leaving the demo API protected by a guessable value. Since this decision governs the fail-closed auth, consider requiring the existing value to look random (e.g. a 32-char hex string) rather than enumerating a few known placeholders.
+
+- [ ] **P2-334** `scripts/setup.ps1:76` _maintainability_
+  `RandomNumberGenerator.Create()` returns an `IDisposable` that is never disposed (the whole call chain result is dropped). Prefer `using` / explicit disposal so the cryptographic provider handle is released deterministically.
+
+- [ ] **P2-335** `scripts/setup.sh:151` _bug_
+  The script still attempts `codex plugin add` even when the preceding `marketplace add` failed. Registering the plugin cannot succeed while the marketplace is unregistered, so this only produces a confusing second failure. The PowerShell sibling deliberately skips the install in this case (setup.ps1:197-207); gate the `plugin add` on the marketplace add succeeding.
+
+- [ ] **P2-336** `scripts/smoke.ps1:55` _bug_
+  `$proc` is a `System.Diagnostics.Process` obtained via `Start-Process -PassThru` and is never disposed in either branch, so its OS process handle stays open until GC. Dispose it (ideally in a `finally`) after the wait completes to release the handle deterministically.
+
+- [ ] **P2-337** `scripts/smoke.test.sh:35` _maintainability_
+  `check()` and `write_responder()` assign to `name`/`ok`/`detail`/`path`/`marker` as plain shell variables. POSIX sh has no `local`, so these leak into the global scope and can be clobbered by callers or by the command substitutions spanning the calls, which makes the harness fragile if reused or reordered. Use a subshell or subshell-scoped function bodies (or at minimum unique/`_`-prefixed names) to avoid accidental cross-talk.
+
+- [ ] **P2-338** `scripts/smoke.test.sh:49` _maintainability_
+  The marker is interpolated into the sed replacement unescaped. `marker` happens to be a fixed literal today (`binary`/`docker`), but any value containing `/`, `&`, or a newline would corrupt the generated stub or make sed fail. Escape the value or use a safely-quoted replacement so `write_responder` cannot silently produce a broken stub.
+
+- [ ] **P2-339** `scripts/smoke.test.sh:95` _test_
+  Forcing staleness with `sleep 1` relies on filesystem timestamp granularity. On coarse-mtime filesystems (or when both writes land in the same tick) `find ... -newer` can consider the binary not stale, so this test would nondeterministically use the local binary instead of compose. Set the binary's mtime explicitly to an old value so the ordering is guaranteed regardless of the clock resolution.
+
+- [ ] **P2-340** `scripts/sync-harness.sh:210` _bug_
+  `cmp` is used for mirror verification without first confirming it exists (unlike `sync-skills.sh`, which probes `diff`/`cmp` and refuses to publish otherwise). If `cmp` is unavailable, the command fails and every mirror is reported as "missing or stale", causing a spurious hard failure. Guard the availability of `cmp` (or fall back to `diff`/a byte-wise comparison) before treating a mismatch as fatal.
+
+- [ ] **P2-341** `scripts/sync-skills.ps1:124` _maintainability_
+  Orphan cleanup keys solely off the PID embedded in the directory name. If a PID is recycled to an unrelated live process, the orphan becomes invisible to the sweep forever and accumulates on disk; there is no age-based fallback. Consider also checking the artifact's age (or an owner-token file) in addition to liveness before skipping removal.
+
+- [ ] **P2-342** `scripts/sync-skills.ps1:156` _bug_
+  `Move-Item` to a destination that already exists as a directory moves the source *inside* it rather than replacing it. If an `$old` path with this PID already exists (PID reuse after a crash), `$dst` ends up nested under `$old`, and the later `Remove-Item $old -Recurse` then deletes the real mirror. Delete/guard an existing `$old` first, or use a guaranteed-unique backup name.
+
+- [ ] **P2-343** `scripts/sync-skills.sh:32` _bug_
+  The rollback only fires when `$DST` is absent, so a destination that is present but incomplete/wrong (e.g. a partially moved or externally-created directory) is left as-is while the good backup is deleted by the `rm -rf "$OLD"` below — the success path clears `OLD`, so this branch is only reached from `finish()`, where `$DST` existing means "swap succeeded". Also note `rm -rf "$OLD"` follows the path; if `$DST` were replaced by a symlink the existence test and removal semantics differ from what the comment claims. Make the restore condition explicit about "swap never happened" and validate that `$DST` is a real directory before deleting the backup.
+
+- [ ] **P2-344** `scripts/sync-skills.sh:125` _bug_
+  The lock is released (`rm -rf "$LOCK"`) before `LOCKED=0`, and the traps are not cleared until `trap - ...` below. A signal arriving in that window makes `finish()` remove `$LOCK` a second time (harmless) but more importantly `LOCKED` still reads `1`; set `LOCKED=0`/disable the lock cleanup before removing the directory so the state variables and filesystem stay consistent, and clear the traps as early as the work is actually complete.
+
+- [ ] **P2-345** `scripts/uninstall.ps1:109` _maintainability_
+  The dry-run preview hardcodes `$HOME\.codex`, but the actual removal is delegated to `install-prompts.ps1`, which honors `$env:CODEX_HOME` (and `$HOME` only as a fallback). When `CODEX_HOME` is set the printed path is wrong/misleading. Resolve the same prompts directory (or re-use the helper) for the message.
+
+- [ ] **P2-346** `scripts/uninstall.ps1:115` _test_
+  There is no test coverage for this destructive script (no test files reference `uninstall.ps1`). The riskiest logic — repo-root containment guard, reparse-point handling in `Remove-TreeNoReparse`, and the `Test-SameTree` user-skill preservation heuristic — has no automated boundary tests; consider adding dry-run/Pester tests around these paths.
+
+- [ ] **P2-347** `scripts/uninstall.sh:90` _maintainability_
+  Inconsistent failure accounting: this removal failure is only emitted as a "note" and does not increment CODEX_FAIL, whereas the failure in the corresponding branch above does. If the intent is best-effort, the note should say so explicitly; otherwise set CODEX_FAIL so the final exit code reflects it.
+
+- [ ] **P2-348** `scripts/uninstall.sh:110` _bug_
+  Inaccurate preview path: the prompts target is `${CODEX_HOME:-$HOME/.codex}/prompts`, not `$HOME/.codex/prompts`. When `CODEX_HOME` is set the dry-run message points at the wrong directory.
+
+- [ ] **P2-349** `scripts/validate-skills.sh:35` _test_
+  The wrapper exposes three distinct runtime paths and exit codes (0 = success, 1 = failure, 2 = no runtime) but has no self-test/harness reference, unlike sibling scripts covered by `scripts/smoke.test.sh`. A regression in any branch (e.g. the exit-code collapse above, a change to the guard, or the no-runtime path) would go unnoticed. Add cases that stub `bin/hackathonkit-mcp` and `go` on `PATH` and assert the exact status codes, stdout/stderr labels, and the no-runtime exit 2.
+
+- [ ] **P2-350** `scripts/verify-command.test.sh:47` _maintainability_
+  Ordering is inferred from the FIRST occurrence of each name across the whole file. If `build.md` mentions `system-design-expert` anywhere before the `cp-expert-refactoring` invocation (e.g. a summary, comment, or checklist), the assertion produces a false failure, and the `cut` at the end of the pipeline means a grep miss is never surfaced by `set -e`. Prefer checking the actual invocation order (e.g. line numbers of the specific invocation lines, or a targeted pattern) rather than raw byte offsets of the first mention.
+
+- [ ] **P2-351** `scripts/verify-command.test.sh:105` _maintainability_
+  These assertions encode installer internals (that `remove` keeps a modified `verify.md` but deletes an unmodified `plan.md`). They read as a behavior contract, but if `install-prompts.sh` changes strategy (e.g. removes the whole prompts dir or compares against a checksum instead of content) these checks silently depend on implementation details rather than a documented contract. Add a comment documenting the intended contract, or make the installer's preservation rules explicit so the test and implementation stay in sync.
+
+- [ ] **P2-352** `scripts/write-install-state.ps1:19` _security_
+  Validation of `docker-compose.yml`/`go.mod` is performed against the caller-supplied `$Root` before it is canonicalized, and the resolved path is then trusted for every read and for the final write. A symlink swapped between the validation step and this `Resolve-Path` call redirects the resolved root to an arbitrary directory whose writes are never validated. Resolve (canonicalize) the path first and then re-validate the canonical root before using it.
+
+- [ ] **P2-353** `scripts/write-install-state.sh:32` _bug_
+  The fallback regex allows arbitrary leading whitespace (`^[[:space:]]*`), so it is not anchored to the top-level key and will match an indented/nested `"version":` field (e.g. inside a dependency block) that appears before the top-level one, returning the wrong value. Consider anchoring to a column-0 key (`^"version"`) or, when the value cannot be reliably determined, warn instead of guessing.
