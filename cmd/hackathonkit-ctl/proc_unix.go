@@ -4,6 +4,8 @@ package main
 
 import (
 	"os"
+	"path/filepath"
+	"strconv"
 	"syscall"
 )
 
@@ -21,4 +23,20 @@ func processAlive(pid int) bool {
 // terminateProcess asks the process to stop gracefully (SIGTERM on POSIX).
 func terminateProcess(process *os.Process) error {
 	return process.Signal(syscall.SIGTERM)
+}
+
+// processMatchesPath reports whether the running process at pid is the recorded
+// executable, comparing /proc/<pid>/exe (tolerating a " (deleted)" marker after
+// the binary was replaced).
+func processMatchesPath(pid int, recorded string) bool {
+	if pid == os.Getpid() {
+		if self, err := os.Executable(); err == nil {
+			return samePath(self, recorded)
+		}
+	}
+	resolved, err := os.Readlink(filepath.Join("/proc", strconv.Itoa(pid), "exe"))
+	if err != nil {
+		return false
+	}
+	return samePath(resolved, recorded)
 }

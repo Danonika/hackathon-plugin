@@ -3,6 +3,25 @@
 set -e
 ROOT="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
 
+# When running as root (e.g. the docker `quality` service), hand evidence written
+# through the bind mount back to the host user so later non-root runs can write
+# it. HACKATHONKIT_UID/GID come from the environment, or from .env (which the docker
+# bind mount provides) when the service did not export them.
+chown_evidence() {
+  [ "$(id -u 2>/dev/null || echo 0)" = "0" ] || return 0
+  owner="${HACKATHONKIT_UID:-}:${HACKATHONKIT_GID:-}"
+  if [ "$owner" = ":" ] && [ -f "$ROOT/.env" ]; then
+    uid=$(sed -n 's/^HACKATHONKIT_UID=\([0-9][0-9]*\).*/\1/p' "$ROOT/.env" | head -n 1)
+    gid=$(sed -n 's/^HACKATHONKIT_GID=\([0-9][0-9]*\).*/\1/p' "$ROOT/.env" | head -n 1)
+    owner="${uid:-}:${gid:-}"
+  fi
+  [ "$owner" != ":" ] || return 0
+  [ -d "$ROOT/evals/quality" ] || return 0
+  if ! chown -R "$owner" "$ROOT/evals/quality" 2>/dev/null; then
+    echo "[quality-gate] warning: could not hand evals/quality back to $owner" >&2
+  fi
+}
+
 BIN="$ROOT/bin/hackathonkit-mcp"
 USE_BIN=0
 if [ -x "$BIN" ]; then
@@ -35,19 +54,11 @@ if [ -x "$BIN" ]; then
   fi
 fi
 if [ "$USE_BIN" = "1" ]; then
-  exec "$BIN" --repo-root "$ROOT" --quality-gate
+  status=0
+  "$BIN" --repo-root "$ROOT" --quality-gate || status=$?
+  chown_evidence
+  exit "$status"
 fi
-
-# When running as root (e.g. the docker `quality` service), hand evidence written
-# through the bind mount back to the host user so later non-root runs can write
-# it. HACKATHONKIT_UID/GID are recorded in .env by scripts/setup.sh.
-chown_evidence() {
-  [ "$(id -u 2>/dev/null || echo 0)" = "0" ] || return 0
-  owner="${HACKATHONKIT_UID:-}:${HACKATHONKIT_GID:-}"
-  [ "$owner" != ":" ] || return 0
-  [ -d "$ROOT/evals" ] || return 0
-  chown -R "$owner" "$ROOT/evals/quality" 2>/dev/null || true
-}
 
 if command -v go >/dev/null 2>&1; then
   TMP_DIR=$(mktemp -d "${TMPDIR:-/tmp}/hackathonkit-mcp-quality.XXXXXX")
@@ -63,11 +74,12 @@ if command -v go >/dev/null 2>&1; then
     echo "[quality-gate] go build failed" >&2
     exit 1
   }
-  # No exec: the EXIT trap must run to remove the temporary binary.
-  "$TMP_BIN" --repo-root "$ROOT" --quality-gate
-  status=$?
+  # No exec: the EXIT trap must run to remove the temporary binary. `|| status=$?`
+  # keeps `set -e` from skipping the chown and the exit code.
+  status=0
+  "$TMP_BIN" --repo-root "$ROOT" --quality-gate || status=$?
   chown_evidence
-  exit $status
+  exit "$status"
 fi
 
 echo "[quality-gate] no runtime available; build one with scripts/setup.sh" >&2

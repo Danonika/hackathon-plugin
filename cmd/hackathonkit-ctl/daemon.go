@@ -254,24 +254,11 @@ func readPID(root string) (int, bool) {
 	return pid, true
 }
 
-// processMatchesPath reports whether the running process at pid is the recorded
-// executable. On Linux it compares /proc/<pid>/exe; elsewhere it compares the
-// recorded path with this binary's path when the pid is our own process.
-func processMatchesPath(pid int, recorded string) bool {
-	if pid == os.Getpid() {
-		self, err := os.Executable()
-		if err == nil {
-			return samePath(self, recorded)
-		}
-	}
-	if resolved, err := os.Readlink(filepath.Join("/proc", strconv.Itoa(pid), "exe")); err == nil {
-		return samePath(resolved, recorded)
-	}
-	// No way to resolve the running executable: do not claim ownership.
-	return false
-}
-
+// samePath reports whether two paths refer to the same file, tolerating
+// symlinks and a trailing " (deleted)" marker on Linux.
 func samePath(a, b string) bool {
+	a = strings.TrimSuffix(a, " (deleted)")
+	b = strings.TrimSuffix(b, " (deleted)")
 	ra, errA := filepath.EvalSymlinks(a)
 	if errA != nil {
 		ra = a
@@ -283,9 +270,9 @@ func samePath(a, b string) bool {
 	return ra == rb
 }
 
-// processLooksLikeDaemon verifies the process identity on Linux (via
-// /proc/<pid>/cmdline). Without /proc the identity cannot be verified, so it
-// reports false rather than assuming ownership.
+// processLooksLikeDaemon verifies the process identity via /proc/<pid>/cmdline.
+// Without /proc the identity cannot be verified, so it reports false rather than
+// assuming ownership.
 func processLooksLikeDaemon(pid int) bool {
 	cmdline, err := os.ReadFile(filepath.Join("/proc", strconv.Itoa(pid), "cmdline"))
 	if err != nil {

@@ -22,7 +22,9 @@ __pycache__
 .venv
 **/.venv
 coverage
+**/coverage
 htmlcov
+**/htmlcov
 /tmp
 **/*.log
 # Generated install state (never committed).
