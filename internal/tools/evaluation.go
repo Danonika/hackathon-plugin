@@ -549,7 +549,10 @@ func resolveRepoPath(root, rel string) (string, error) {
 	if resolved != resolvedRoot && !strings.HasPrefix(resolved, resolvedRoot+string(filepath.Separator)) {
 		return "", fmt.Errorf("path resolves outside the repository root: %s", rel)
 	}
-	return full, nil
+	// Return the resolved path, not the original: using the unresolved path
+	// would let a symlink swapped in after this check redirect a later
+	// open/write outside the root (TOCTOU).
+	return resolved, nil
 }
 
 // resolveExistingPath resolves symlinks on the longest existing prefix of path.

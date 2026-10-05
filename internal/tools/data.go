@@ -396,10 +396,21 @@ func registerData(reg *mcp.Registry, d Deps) {
 				name   string
 				values []float64
 			}
+			// Cap how many numeric columns are parsed so peak memory is bounded
+			// by maxCorrelationColumns, not by every numeric column.
+			totalNumeric := 0
+			for _, p := range profiles {
+				if p.Kind == "numeric" {
+					totalNumeric++
+				}
+			}
 			cols := []numericCol{}
 			for i, p := range profiles {
 				if p.Kind != "numeric" {
 					continue
+				}
+				if len(cols) >= maxCorrelationColumns {
+					break
 				}
 				idx := indices[i]
 				values := make([]float64, len(t.Rows))
@@ -414,9 +425,8 @@ func registerData(reg *mcp.Registry, d Deps) {
 				}
 				cols = append(cols, numericCol{name: p.Name, values: values})
 			}
-			if len(cols) > maxCorrelationColumns {
-				warnings = append(warnings, fmt.Sprintf("%d numeric columns; correlations are computed for the first %d", len(cols), maxCorrelationColumns))
-				cols = cols[:maxCorrelationColumns]
+			if totalNumeric > maxCorrelationColumns {
+				warnings = append(warnings, fmt.Sprintf("%d numeric columns; correlations are computed for the first %d", totalNumeric, maxCorrelationColumns))
 			}
 			type corr struct {
 				A, B string

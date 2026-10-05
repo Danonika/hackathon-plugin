@@ -190,8 +190,9 @@ func registerKnowledge(reg *mcp.Registry, d Deps) {
 						return mcp.Fail(trace(ctx), err.Error()), nil
 					}
 					// Not materialized locally: fall back to the store read
-					// path (object-store rehydrate), then bound the result.
-					raw, err = d.Store.ReadArtifact(artifactID)
+					// path (object-store rehydrate), bounded so a huge remote
+					// object cannot be fully materialized.
+					raw, err = d.Store.ReadArtifactCapped(artifactID, int64(maxRawTextBytes))
 					if err != nil {
 						return mcp.Fail(trace(ctx), err.Error()), nil
 					}

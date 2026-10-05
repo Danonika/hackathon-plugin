@@ -166,19 +166,13 @@ func (r *Router) embeddingCategoryScores(ctx context.Context, task string) (map[
 		// Every centroid mismatched the task vector. This may be a genuinely
 		// stale cache (e.g. a hash-encoder fallback persisted under the primary
 		// model tag) or a transient dimension change from the chain embedder.
-		// Drop the in-memory copy and the on-disk cache, then rebuild once so a
-		// legitimate change recovers instead of disabling the embedding signal
-		// for the process lifetime.
+		// Clear the in-memory copy and rebuild BYPASSING the on-disk cache
+		// (rather than deleting it) so a transient mismatch cannot destroy a
+		// valid shared cache; a successful rebuild overwrites it.
 		r.mu.Lock()
 		r.centroids = nil
-		cachePath := r.cachePath
 		r.mu.Unlock()
-		if cachePath != "" {
-			if err := os.Remove(cachePath); err != nil && !os.IsNotExist(err) {
-				log.Printf("fly: cannot drop stale embedding cache %s: %v", cachePath, err)
-			}
-		}
-		rebuilt, ok := r.ensureCentroids(ctx)
+		rebuilt, ok := r.ensureCentroidsWith(ctx, false)
 		if !ok {
 			return nil, false
 		}
@@ -241,6 +235,13 @@ func (r *Router) embeddingCategoryScores(ctx context.Context, task string) (map[
 }
 
 func (r *Router) ensureCentroids(ctx context.Context) (map[string][]float64, bool) {
+	return r.ensureCentroidsWith(ctx, true)
+}
+
+// ensureCentroidsWith builds (or returns) centroids. useCache=false forces a
+// fresh embed round-trip, ignoring any on-disk cache, so a caller can recover
+// from a stale/mismatched cache without deleting it.
+func (r *Router) ensureCentroidsWith(ctx context.Context, useCache bool) (map[string][]float64, bool) {
 	if r.embedder == nil {
 		return nil, false
 	}
@@ -281,7 +282,7 @@ func (r *Router) ensureCentroids(ctx context.Context) (map[string][]float64, boo
 				centroids, ok = nil, false
 			}
 		}()
-		centroids, ok = r.buildCentroids(ctx)
+		centroids, ok = r.buildCentroids(ctx, useCache)
 	}()
 
 	r.mu.Lock()
@@ -303,9 +304,9 @@ func (r *Router) ensureCentroids(ctx context.Context) (map[string][]float64, boo
 // buildCentroids performs the cache read, embedding round-trip and atomic
 // cache write without holding the router lock, so concurrent callers can wait
 // on the single in-flight build and observe their own context deadline.
-func (r *Router) buildCentroids(ctx context.Context) (map[string][]float64, bool) {
+func (r *Router) buildCentroids(ctx context.Context, useCache bool) (map[string][]float64, bool) {
 	hash := exemplarHash()
-	if r.cachePath != "" {
+	if useCache && r.cachePath != "" {
 		if data, err := os.ReadFile(r.cachePath); err == nil {
 			var cache embeddingCache
 			if json.Unmarshal(data, &cache) == nil &&

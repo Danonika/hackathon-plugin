@@ -124,4 +124,18 @@ func (c *Client) Get(ctx context.Context, name string) ([]byte, error) {
 	return data, nil
 }
 
+// GetCapped reads at most limit+1 bytes, so a caller can detect truncation
+// (len > limit) without materializing an unbounded object.
+func (c *Client) GetCapped(ctx context.Context, name string, limit int64) ([]byte, error) {
+	if limit < 0 {
+		limit = 0
+	}
+	obj, err := c.client.GetObject(ctx, c.bucket, name, minio.GetObjectOptions{})
+	if err != nil {
+		return nil, err
+	}
+	defer obj.Close()
+	return io.ReadAll(io.LimitReader(obj, limit+1))
+}
+
 const maxObjectBytes = 64 << 20

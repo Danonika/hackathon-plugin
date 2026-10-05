@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -267,6 +268,47 @@ func (s *Store) ReadArtifact(rel string) ([]byte, error) {
 		return remote, nil
 	}
 	return nil, err
+}
+
+// ReadArtifactCapped reads at most limit+1 bytes of an artifact (local or from
+// the object store), so a caller can detect truncation (len > limit) without
+// materializing an unbounded object. It does not rehydrate/cache the object.
+func (s *Store) ReadArtifactCapped(rel string, limit int64) ([]byte, error) {
+	if limit < 0 {
+		limit = 0
+	}
+	clean, err := sanitize(rel)
+	if err != nil {
+		return nil, err
+	}
+	full := filepath.Join(s.root, s.artifactDir, clean)
+	if err := s.ensureWithin(full); err != nil {
+		return nil, err
+	}
+	if f, oerr := os.Open(full); oerr == nil {
+		defer f.Close()
+		return io.ReadAll(io.LimitReader(f, limit+1))
+	} else if !os.IsNotExist(oerr) {
+		return nil, oerr
+	}
+	if s.objects == nil {
+		return nil, os.ErrNotExist
+	}
+	ctx, cancel := backendContext()
+	defer cancel()
+	if capped, ok := s.objects.(interface {
+		GetCapped(context.Context, string, int64) ([]byte, error)
+	}); ok {
+		return capped.GetCapped(ctx, filepath.ToSlash(clean), limit)
+	}
+	remote, oerr := s.objects.Get(ctx, filepath.ToSlash(clean))
+	if oerr != nil {
+		return nil, oerr
+	}
+	if int64(len(remote)) > limit+1 {
+		remote = remote[:limit+1]
+	}
+	return remote, nil
 }
 
 func (s *Store) WriteIndex(rel string, data []byte) (string, error) {
