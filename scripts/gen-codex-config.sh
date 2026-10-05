@@ -62,33 +62,38 @@ fi
 # Derive the timeout budgets from the committed config so the override cannot
 # silently shorten them when the project defaults change. One scan: enter the
 # [mcp_servers.hackathonkit] table, capture the two keys, leave on the next table
-# header. The header matcher requires a line that is *only* a table header (so
-# a multi-line array bracket does not reset the scope).
+# header. Output is a bare integer on its own line, read with `read` (never
+# `eval`), so a hostile value cannot execute.
 PROJECT_CONFIG="$ROOT/.codex/config.toml"
 STARTUP_TIMEOUT=""
 TOOL_TIMEOUT=""
 if [ -f "$PROJECT_CONFIG" ]; then
-  eval "$(awk '
-    function is_header(line) {
-      # A table header line: optional space, [, optional space, optional
-      # quoted key, ., optional quoted key, optional space, ], optional space,
-      # optional comment. Nothing else on the line.
-      return line ~ /^[[:space:]]*\[[[:space:]]*"?[A-Za-z_][A-Za-z0-9_-]*"?[[:space:]]*\.[[:space:]]*"?[A-Za-z_][A-Za-z0-9_-]*"?[[:space:]]*\][[:space:]]*(#.*)?$/
+  BUDGETS=$(awk '
+    # A table header: the whole line is `[ key (. key)? ]` with optional
+    # spaces/quotes and an optional trailing comment. A multi-line array element
+    # such as `  [3, 4]` has a comma/space and does not match.
+    function table_header(line) {
+      return line ~ /^[[:space:]]*\[[[:space:]]*[A-Za-z_][A-Za-z0-9_-]*([[:space:]]*\.[[:space:]]*[A-Za-z_][A-Za-z0-9_-]*)*[[:space:]]*\][[:space:]]*(#.*)?$/
     }
-    function is_any_header(line) {
-      return line ~ /^[[:space:]]*\[[^]]*\][[:space:]]*(#.*)?$/
+    # Whole-line comment or blank lines never change table scope.
+    /^[[:space:]]*(#|$)/ { next }
+    table_header($0) {
+      in_target = ($0 ~ /mcp_servers/ && $0 ~ /hackathonkit/) ? 1 : 0
+      next
     }
-    is_header($0) && $0 ~ /mcp_servers/ && $0 ~ /hackathonkit/ { in_table = 1; next }
-    is_any_header($0) { in_table = 0 }
-    in_table && /^[[:space:]]*startup_timeout_sec[[:space:]]*=/ { print "STARTUP_TIMEOUT=" extract() }
-    in_table && /^[[:space:]]*tool_timeout_sec[[:space:]]*=/ { print "TOOL_TIMEOUT=" extract() }
-    function extract(   v) {
+    in_target && /^[[:space:]]*startup_timeout_sec[[:space:]]*=/ { print "S " int_of($0) }
+    in_target && /^[[:space:]]*tool_timeout_sec[[:space:]]*=/ { print "T " int_of($0) }
+    function int_of(   v) {
       v = $0
       sub(/^[^=]*=[[:space:]]*/, "", v)
       sub(/[[:space:]#].*$/, "", v)
-      return v
+      # Accept only a run of digits; anything else becomes empty.
+      if (v ~ /^[0-9]+$/) return v
+      return ""
     }
-  ' "$PROJECT_CONFIG")"
+  ' "$PROJECT_CONFIG")
+  STARTUP_TIMEOUT=$(printf '%s\n' "$BUDGETS" | awk '$1=="S"{print $2; exit}')
+  TOOL_TIMEOUT=$(printf '%s\n' "$BUDGETS" | awk '$1=="T"{print $2; exit}')
 fi
 case "$STARTUP_TIMEOUT" in ''|*[!0-9]*) STARTUP_TIMEOUT=180 ;; esac
 case "$TOOL_TIMEOUT" in ''|*[!0-9]*) TOOL_TIMEOUT=180 ;; esac
