@@ -33,11 +33,16 @@ func processAlive(pid int) bool {
 	handle, err := syscall.OpenProcess(processQueryLimitedInformation, false, uint32(pid))
 	if err != nil {
 		// Only a nonexistent pid (ERROR_INVALID_PARAMETER) is definitively dead.
-		// Any other failure (ACCESS_DENIED, or a transient/environmental error
-		// such as ERROR_NOT_ENOUGH_MEMORY) fails closed and reports the process
-		// as alive, so a probe error cannot make a running daemon look stopped
-		// and get its pid file dropped.
-		return !errors.Is(err, windows.ERROR_INVALID_PARAMETER)
+		// Any other failure (ACCESS_DENIED, or a transient/environmental error)
+		// fails closed and reports the process as alive, so a probe error cannot
+		// make a running daemon look stopped and get its pid file dropped.
+		// syscall.OpenProcess returns a syscall.Errno, while
+		// windows.ERROR_INVALID_PARAMETER is a distinct named type, so compare
+		// the numeric value instead of using errors.Is (which never matches).
+		if errno, ok := err.(syscall.Errno); ok && errno == syscall.Errno(windows.ERROR_INVALID_PARAMETER) {
+			return false
+		}
+		return true
 	}
 	defer syscall.CloseHandle(handle)
 	var code uint32
