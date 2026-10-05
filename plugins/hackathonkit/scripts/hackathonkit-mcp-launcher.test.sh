@@ -28,16 +28,21 @@ check() {
 REPO="$TMP/repo"
 mkdir -p "$REPO/plugins/hackathonkit/scripts" "$REPO/bin" "$TMP/bin"
 cp "$LAUNCHER" "$REPO/plugins/hackathonkit/scripts/hackathonkit-mcp-launcher.sh"
+# Make the copied launcher executable so it is invoked via its shebang below,
+# exercising the interpreter/exec-bit path rather than always `sh <file>`.
+chmod +x "$REPO/plugins/hackathonkit/scripts/hackathonkit-mcp-launcher.sh"
 printf 'module example.test/repo\n' > "$REPO/go.mod"
 printf 'services: {}\n' > "$REPO/docker-compose.yml"
 
 cat > "$TMP/bin/docker" <<'EOF'
 #!/usr/bin/env sh
 printf 'docker %s\n' "$*" >> "$DOCKER_MARKER"
-if [ "$1" = "compose" ] && [ "$2" = "version" ]; then
-  exit 0
-fi
-exit "${DOCKER_STATUS:-0}"
+# Only `compose ... run` carries the status under test; every preflight
+# subcommand (compose version, ...) must succeed regardless of DOCKER_STATUS.
+case " $* " in
+  *" run "*) exit "${DOCKER_STATUS:-0}" ;;
+  *) exit 0 ;;
+esac
 EOF
 chmod +x "$TMP/bin/docker"
 
@@ -51,21 +56,32 @@ chmod +x "$REPO/bin/hackathonkit-mcp"
 run_launcher() {
   PATH="$TMP/bin:$PATH" \
   LOCAL_MARKER="$TMP/local" \
+  LOCAL_STATUS="${LOCAL_STATUS:-0}" \
   DOCKER_MARKER="$TMP/docker" \
   DOCKER_STATUS="${DOCKER_STATUS:-0}" \
-  sh "$REPO/plugins/hackathonkit/scripts/hackathonkit-mcp-launcher.sh" "$@"
+  "$REPO/plugins/hackathonkit/scripts/hackathonkit-mcp-launcher.sh" "$@"
 }
 
 # --- Local executable binary wins and receives the derived root -------------
 : > "$TMP/local"
 : > "$TMP/docker"
 run_launcher --list-tools
-if grep -q "local --repo-root $REPO --list-tools" "$TMP/local"; then
+# Assert the tokens independently instead of one order-sensitive substring.
+if grep -q "^local --repo-root $REPO" "$TMP/local" && grep -q -- "--list-tools" "$TMP/local"; then
   check "local binary is preferred with --repo-root and args" 1
 else
   check "local binary is preferred with --repo-root and args" 0 "marker=$(cat "$TMP/local")"
 fi
 check "docker is not invoked when the local binary exists" "$( [ -s "$TMP/docker" ] && echo 0 || echo 1 )"
+
+# --- Local exit status is propagated ----------------------------------------
+chmod +x "$REPO/bin/hackathonkit-mcp"
+if LOCAL_STATUS=5 run_launcher --list-tools; then
+  local_status=0
+else
+  local_status=$?
+fi
+check "local exit status is propagated" "$( [ "$local_status" = "5" ] && echo 1 || echo 0 )" "status=$local_status"
 
 # --- Non-executable local binary falls through to docker compose ------------
 chmod -x "$REPO/bin/hackathonkit-mcp"
@@ -78,6 +94,9 @@ else
 fi
 
 # --- Docker exit status is propagated ---------------------------------------
+# Set up the non-executable state explicitly so this does not depend on the
+# previous block, and give DOCKER_STATUS a passthrough for the run subcommand.
+chmod -x "$REPO/bin/hackathonkit-mcp"
 : > "$TMP/docker"
 if DOCKER_STATUS=7 run_launcher; then
   status=0
@@ -98,6 +117,33 @@ if [ "$dup" -ne 0 ] && grep -q "must not be passed again" "$TMP/err"; then
 else
   check "duplicate --repo-root is rejected" 0 "status=$dup err=$(cat "$TMP/err")"
 fi
+
+# The `--repo-root=<value>` spelling is guarded too.
+if run_launcher --repo-root=/tmp >/dev/null 2>"$TMP/err2"; then
+  dup=0
+else
+  dup=$?
+fi
+if [ "$dup" -ne 0 ] && grep -q "must not be passed again" "$TMP/err2"; then
+  check "duplicate --repo-root= is rejected" 1
+else
+  check "duplicate --repo-root= is rejected" 0 "status=$dup err=$(cat "$TMP/err2")"
+fi
+
+# The guard runs before the binary/docker branch, so it also applies when the
+# local binary is non-executable (docker fallback path).
+chmod -x "$REPO/bin/hackathonkit-mcp"
+if run_launcher --repo-root=/tmp >/dev/null 2>"$TMP/err3"; then
+  dup=0
+else
+  dup=$?
+fi
+if [ "$dup" -ne 0 ] && grep -q "must not be passed again" "$TMP/err3"; then
+  check "duplicate --repo-root is rejected on the docker path" 1
+else
+  check "duplicate --repo-root is rejected on the docker path" 0 "status=$dup err=$(cat "$TMP/err3")"
+fi
+chmod +x "$REPO/bin/hackathonkit-mcp"
 
 if [ "$FAIL" -gt 0 ]; then
   echo "[launcher-test] $FAIL assertion(s) failed"

@@ -102,6 +102,10 @@ else
 fi
 printf '\ncustom edit\n' >> "$TMPHOME/prompts/verify.md"
 CODEX_HOME="$TMPHOME" sh "$ROOT/scripts/install-prompts.sh" remove >/dev/null 2>&1
+# Contract: `install-prompts.sh remove` deletes only prompts whose installed
+# content still matches the shipped source; a prompt the user modified is kept.
+# These assertions pin that behavior, so an installer change (e.g. removing the
+# whole prompts directory, or switching to checksums) must update them too.
 check "prompt installer preserves a user-modified prompt" "$([ -f "$TMPHOME/prompts/verify.md" ] && grep -q 'custom edit' "$TMPHOME/prompts/verify.md" && echo 1 || echo 0)"
 check "prompt installer removes unmodified prompts" "$([ -f "$TMPHOME/prompts/plan.md" ] && echo 0 || echo 1)"
 

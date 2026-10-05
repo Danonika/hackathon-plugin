@@ -9,12 +9,32 @@ echo "[repair] repository root: $ROOT"
 # install-state write. Note that replacing a binary in place while an MCP/demo
 # process is running causes version skew until that process is restarted.
 LOCK="$ROOT/.repair.lock"
+# Reclaim a stale lock with an atomic rename-aside + identity re-check, not a
+# bare `rm -rf`: two runs that both judged the same lock stale would otherwise
+# have the slower one delete the faster one's freshly created live lock.
 if [ -d "$LOCK" ]; then
   HOLDER=$(cat "$LOCK/pid" 2>/dev/null || true)
-  # A missing/empty pid means the previous run died between mkdir and the pid
-  # write; treat it as stale or the lock blocks every future repair forever.
-  if [ -z "$HOLDER" ] || ! kill -0 "$HOLDER" 2>/dev/null; then
-    rm -rf "$LOCK"
+  STALE=0
+  if [ -n "$HOLDER" ]; then
+    kill -0 "$HOLDER" 2>/dev/null || STALE=1
+  else
+    # A missing/empty pid means the previous run died between mkdir and the pid
+    # write; only reclaim after a grace period so a live mkdir-then-write
+    # window is not stolen.
+    now=$(date +%s 2>/dev/null || echo 0)
+    mtime=$(stat -c %Y "$LOCK" 2>/dev/null || stat -f %m "$LOCK" 2>/dev/null || echo "$now")
+    [ $((now - mtime)) -ge 30 ] && STALE=1
+  fi
+  if [ "$STALE" = "1" ]; then
+    ASIDE="$LOCK.stale.$$"
+    if mv "$LOCK" "$ASIDE" 2>/dev/null; then
+      NOW_HOLDER=$(cat "$ASIDE/pid" 2>/dev/null || true)
+      if [ "$NOW_HOLDER" = "$HOLDER" ]; then
+        rm -rf "$ASIDE"
+      elif [ ! -e "$LOCK" ]; then
+        mv "$ASIDE" "$LOCK" 2>/dev/null || true
+      fi
+    fi
   fi
 fi
 if ! mkdir "$LOCK" 2>/dev/null; then
@@ -45,7 +65,11 @@ fi
 RUNTIME="binary"
 # Only probe docker when the probe can be bounded; an unbounded `docker info`
 # can hang the repair on hosts without `timeout` (e.g. macOS).
-if command -v docker >/dev/null 2>&1 && command -v timeout >/dev/null 2>&1; then
+if command -v docker >/dev/null 2>&1 && ! command -v timeout >/dev/null 2>&1; then
+  # Surface the degradation: without `timeout` the probe could hang, so docker
+  # is ignored and a local rebuild is forced even when a usable image exists.
+  echo "[repair] warning: docker is present but timeout(1) is unavailable; skipping the docker probe and using local binaries" >&2
+elif command -v docker >/dev/null 2>&1 && command -v timeout >/dev/null 2>&1; then
   if timeout 5 docker info >/dev/null 2>&1; then
     # A live daemon is not sufficient: the built MCP image must exist, otherwise
     # the Go rebuild is skipped and the MCP runtime stays unavailable.

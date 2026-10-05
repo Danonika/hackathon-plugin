@@ -332,7 +332,7 @@ function readActive() {
           } catch (_) {}
           continue;
         }
-        entries.push({ entry, mtime: stat.mtimeMs, started: Date.parse(entry.started_at || "") || stat.mtimeMs });
+        entries.push({ entry, started: Date.parse(entry.started_at || "") || stat.mtimeMs });
       } catch (_) {}
     }
     // Oldest first by start time; lastActiveID takes the tail (most recently

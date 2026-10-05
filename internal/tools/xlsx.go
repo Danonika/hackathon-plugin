@@ -491,16 +491,17 @@ func (m *maxBytesReader) Read(p []byte) (int, error) {
 		// Probe one extra byte so an entry whose decompressed size is exactly
 		// the limit ends with a clean io.EOF instead of a false overrun.
 		var one [1]byte
-		for {
-			n, err := m.r.Read(one[:])
-			if n > 0 {
-				m.remaining = -1
-				return 0, fmt.Errorf("zip entry exceeds the configured size limit")
-			}
-			if err != nil {
-				return 0, err
-			}
+		n, err := m.r.Read(one[:])
+		if n > 0 {
+			m.remaining = -1
+			return 0, fmt.Errorf("zip entry exceeds the configured size limit")
 		}
+		if err != nil {
+			return 0, err
+		}
+		// A (0, nil) read is legal but discouraged; without this guard the
+		// probe would loop forever.
+		return 0, fmt.Errorf("zip entry read made no progress")
 	}
 	if int64(len(p)) > m.remaining {
 		p = p[:m.remaining]

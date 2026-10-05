@@ -468,8 +468,9 @@ func (s *Store) DeleteCursor(ctx context.Context, name string) error {
 	return err
 }
 
-// CountEventsByType counts events of one type for a session (all sessions when
-// sessionID is empty) without materializing event rows.
+// CountEventsByType counts events of one type for a session without
+// materializing event rows. An empty sessionID counts only session-less/global
+// events (session_id = ”), not all sessions.
 func (s *Store) CountEventsByType(ctx context.Context, sessionID, eventType string) (int, error) {
 	var count int
 	err := s.db.QueryRowContext(ctx,

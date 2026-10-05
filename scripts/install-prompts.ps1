@@ -27,6 +27,11 @@ if ($env:CODEX_HOME) {
 if (-not [System.IO.Path]::IsPathRooted($CodexHome)) {
   Fail "[prompts] the prompts home must be an absolute path: $CodexHome"
 }
+# IsPathRooted accepts drive-relative specs like "C:", which Join-Path would
+# resolve against the current directory on that drive; require a full path.
+if ($CodexHome -match '^[A-Za-z]:$') {
+  Fail "[prompts] the prompts home must be a fully rooted path, not a bare drive: $CodexHome"
+}
 $DestDir = Join-Path $CodexHome "prompts"
 
 if (-not (Test-Path -LiteralPath $SrcDir)) { Fail "[prompts] source not found: $SrcDir" }

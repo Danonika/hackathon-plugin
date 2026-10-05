@@ -75,6 +75,8 @@ echo "[coverage] total ${TOTAL}% (target ${TARGET}%)"
 
 if ! awk -v total="$TOTAL" -v target="$TARGET" 'BEGIN { exit (total + 0 >= target + 0) ? 0 : 1 }'; then
   echo "[coverage] below target: ${TOTAL}% < ${TARGET}%" >&2
-  sort -k3 -n "$COVER_LOG" | head -15 >&2
+  # Exclude the aggregate "total:" row so it cannot displace an actionable
+  # function in the worst-coverage list.
+  grep -v '^total:' "$COVER_LOG" | sort -k3 -n | head -15 >&2
   exit 1
 fi

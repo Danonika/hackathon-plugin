@@ -281,7 +281,12 @@ func registerTimeSeries(reg *mcp.Registry, d Deps) {
 					m := sum / float64(n)
 					variance := (sumSq - sum*sum/float64(n)) / float64(n-1)
 					if variance < 0 {
-						variance = 0
+						// Catastrophic cancellation in the incrementally
+						// maintained sums can yield a tiny negative variance.
+						// Recompute with a numerically stable two-pass pass
+						// instead of clamping to zero, which would misclassify
+						// a non-constant window as constant.
+						m, variance = windowMeanVariance(points[start:i])
 					}
 					s := math.Sqrt(variance)
 					if s == 0 {
@@ -343,6 +348,30 @@ func registerTimeSeries(reg *mcp.Registry, d Deps) {
 			return env, nil
 		},
 	))
+}
+
+// windowMeanVariance computes the mean and sample variance with a two-pass
+// algorithm, avoiding the catastrophic cancellation of the one-pass
+// sumSq-sum*sum/n expression.
+func windowMeanVariance(points []seriesPoint) (float64, float64) {
+	n := len(points)
+	if n == 0 {
+		return 0, 0
+	}
+	var sum float64
+	for _, p := range points {
+		sum += p.V
+	}
+	mean := sum / float64(n)
+	if n == 1 {
+		return mean, 0
+	}
+	var dev float64
+	for _, p := range points {
+		d := p.V - mean
+		dev += d * d
+	}
+	return mean, dev / float64(n-1)
 }
 
 func minOf(values []float64) float64 {

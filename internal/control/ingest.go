@@ -31,7 +31,10 @@ type IngestResult struct {
 }
 
 // Ingest replays the append-only JSONL streams into SQLite using per-file byte
-// cursors, so repeated runs never duplicate records.
+// cursors. The cursor is persisted after each record is applied, so ingestion is
+// at-least-once: a crash between applying a record and persisting the cursor
+// replays that record on the next run. The events table has no dedup key, so
+// such a replay can produce a duplicate row.
 func (s *Store) Ingest(ctx context.Context, root string) (IngestResult, error) {
 	res := IngestResult{}
 	jsonl := []struct {
@@ -196,8 +199,9 @@ func (s *Store) ingestJSONL(ctx context.Context, name, path string, handle func(
 		}
 		count++
 		lastGood = consumed
-		// Persist the cursor after every applied record so a crash cannot
-		// replay already-ingested records on the next run.
+		// Persist the cursor after every applied record. This is
+		// at-least-once, not exactly-once: a crash between handle() and this
+		// write replays the record on the next run (see Ingest's doc comment).
 		if cerr := flush(lastGood); cerr != nil {
 			return count, skipped, rotated, cerr
 		}
@@ -371,15 +375,23 @@ func contentHash(data []byte) uint64 {
 	return h.Sum64()
 }
 
-// readFileBounded reads at most max bytes so a large or growing decision file
-// cannot exhaust memory.
+// readFileBounded reads a file but errors if it exceeds max bytes, instead of
+// silently truncating an oversized decision file (which would then never parse
+// and never be surfaced).
 func readFileBounded(path string, max int64) ([]byte, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, err
 	}
 	defer f.Close()
-	return io.ReadAll(io.LimitReader(f, max))
+	data, err := io.ReadAll(io.LimitReader(f, max+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(data)) > max {
+		return nil, fmt.Errorf("file exceeds the %d-byte ingestion limit", max)
+	}
+	return data, nil
 }
 
 // errMalformedRecord marks a record that parsed as JSON but is structurally

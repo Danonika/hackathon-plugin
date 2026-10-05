@@ -17,8 +17,11 @@ if [ ! -d "$ROOT" ]; then
 fi
 # Canonicalise to an absolute physical path so a relative/`..`/symlinked caller
 # value cannot be written into the manifest as a relative path.
+REQUESTED_ROOT="$ROOT"
 ROOT="$(CDPATH= cd -- "$ROOT" 2>/dev/null && pwd -P)" || {
-  echo "[mcp-manifest] cannot resolve repository root: '${1:-}'" >&2
+  # Report the value that actually failed, not just an empty caller argument:
+  # the default (derived) root is exactly the interesting case.
+  echo "[mcp-manifest] cannot resolve repository root: '$REQUESTED_ROOT'" >&2
   exit 1
 }
 if [ ! -f "$TEMPLATE" ]; then
@@ -27,10 +30,17 @@ if [ ! -f "$TEMPLATE" ]; then
 fi
 
 json_escape() {
-  # JSON escaper for path-like values: backslash and quote are escaped and every
-  # control character is dropped (such bytes cannot appear in a path and would
-  # otherwise produce invalid JSON).
-  printf '%s' "$1" | LC_ALL=C tr -d '[:cntrl:]' | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g'
+  # JSON escaper for path-like values: backslash and quote are escaped. Control
+  # characters are rejected rather than deleted: a path may legally contain C0
+  # bytes, and dropping them would publish a manifest pointing at a different
+  # path (a silent corruption) while a raw control byte is invalid JSON.
+  case "$1" in
+    *[[:cntrl:]]*)
+      echo "[mcp-manifest] path contains control characters; refusing to write it" >&2
+      return 1
+      ;;
+  esac
+  printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g'
 }
 
 MANIFEST="$ROOT/plugins/hackathonkit/.mcp.json"
@@ -40,7 +50,12 @@ trap cleanup_manifest EXIT
 trap 'cleanup_manifest; exit 130' INT
 trap 'cleanup_manifest; exit 143' TERM
 
-ROOT_JSON="$(json_escape "$ROOT")" LAUNCHER_JSON="$(json_escape "hackathonkit-mcp-launcher.sh")" awk '
+# Capture the escapes separately so a rejected (control-char) value fails the
+# script under `set -e` instead of being silently swallowed by the awk command.
+ROOT_JSON=$(json_escape "$ROOT") || exit 1
+LAUNCHER_JSON=$(json_escape "hackathonkit-mcp-launcher.sh") || exit 1
+export ROOT_JSON LAUNCHER_JSON
+awk '
   BEGIN { root = ENVIRON["ROOT_JSON"]; launcher = ENVIRON["LAUNCHER_JSON"] }
   {
     pos = 1

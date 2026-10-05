@@ -93,6 +93,12 @@ func (m Matrix) Validate() error {
 				return fmt.Errorf("resource matrix capability %q repeats variant id %q", capability, variant.ID)
 			}
 			seen[variant.ID] = true
+			// Fail fast on a typo'd provider (e.g. "openai" instead of
+			// "openai_api") instead of letting it silently degrade a
+			// capability to its deterministic fallback at plan time.
+			if provider := strings.TrimSpace(variant.Provider); provider != "" && !knownProvider(provider) {
+				return fmt.Errorf("resource matrix capability %q variant %q references unknown provider %q", capability, variant.ID, provider)
+			}
 		}
 	}
 	for trackID, plan := range m.Tracks {

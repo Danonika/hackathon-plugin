@@ -123,9 +123,14 @@ done
 # Derive the host port from the compose published mapping. HACKATHONKIT_MINIO_PORT
 # is not referenced by docker-compose.yml, so an exported value would probe a
 # port unrelated to the one compose actually publishes.
-MINIO_PORT=$(docker compose port minio 9000 2>/dev/null | sed -n 's/.*:\([0-9][0-9]*\)$/\1/p' | head -n 1)
+MINIO_PORT_OUTPUT=$(docker compose port minio 9000 2>&1 || true)
+MINIO_PORT=$(printf '%s\n' "$MINIO_PORT_OUTPUT" | sed -n 's/.*:\([0-9][0-9]*\)$/\1/p' | head -n 1)
 if [ -z "$MINIO_PORT" ]; then
-  MINIO_PORT=9000
+  # Do not guess 9000: probing an unrelated service bound to that port could
+  # produce a false pass. Surface the raw output and fail loudly instead.
+  echo "[docker-check] could not resolve the published minio port from 'docker compose port minio 9000':" >&2
+  printf '%s\n' "$MINIO_PORT_OUTPUT" >&2
+  exit 1
 fi
 if command -v curl >/dev/null 2>&1; then
   tries=0

@@ -49,6 +49,11 @@ type DopamineStats struct {
 
 var (
 	brainMu sync.Mutex
+	// brainSaveMu serializes brain load-modify-persist-publish sequences
+	// process-wide, not per Router: two Routers may share the same brain file,
+	// and a per-Router lock would let them clobber each other's learned
+	// weights. Scoring readers still use the separate brainMu.
+	brainSaveMu sync.Mutex
 )
 
 func (r *Router) WithBrain(path string) *Router {
@@ -284,11 +289,12 @@ func (r *Router) applyDopamine(ctx context.Context, ev FeedbackEvent) bool {
 	if !ok {
 		return false
 	}
-	// Serialize writers with a dedicated mutex so load-modify-persist-publish
-	// cannot lose an update, while scoring readers are not blocked behind the
-	// disk write.
-	r.brainSaveMu.Lock()
-	defer r.brainSaveMu.Unlock()
+	// Serialize writers with a process-global mutex so
+	// load-modify-persist-publish cannot lose an update (including across
+	// Routers sharing the same brain file), while scoring readers are not
+	// blocked behind the disk write.
+	brainSaveMu.Lock()
+	defer brainSaveMu.Unlock()
 	base := r.loadBrain()
 	if base == nil {
 		return false

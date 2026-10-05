@@ -307,7 +307,7 @@ func TestCmdSessionsShowAndResume(t *testing.T) {
 	}
 
 	resume := runSessionsOut(t, "resume", "s-1")
-	for _, want := range []string{"Session handoff", "s-1", "plan: demo-plan", "learnings to reuse", "pending eval decisions: 1"} {
+	for _, want := range []string{"Session handoff", "s-1", "plan: demo-plan", "learnings to reuse", "recent eval decisions: 1"} {
 		if !strings.Contains(resume, want) {
 			t.Fatalf("resume output missing %q:\n%s", want, resume)
 		}

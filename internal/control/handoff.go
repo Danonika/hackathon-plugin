@@ -11,13 +11,16 @@ import (
 )
 
 type Handoff struct {
-	Session          Session             `json:"session"`
-	Plan             *plans.Plan         `json:"plan,omitempty"`
-	Learnings        []learning.Learning `json:"learnings,omitempty"`
-	RecentEvents     []Event             `json:"recent_events,omitempty"`
-	Outputs          []Output            `json:"outputs,omitempty"`
-	PendingDecisions int                 `json:"pending_decisions"`
-	Notes            []string            `json:"notes,omitempty"`
+	Session      Session             `json:"session"`
+	Plan         *plans.Plan         `json:"plan,omitempty"`
+	Learnings    []learning.Learning `json:"learnings,omitempty"`
+	RecentEvents []Event             `json:"recent_events,omitempty"`
+	Outputs      []Output            `json:"outputs,omitempty"`
+	// PendingDecisions counts eval_decision events in the session window. These
+	// record decisions that were already made, so the value is "recent eval
+	// decisions", not an unresolved workload.
+	PendingDecisions int      `json:"pending_decisions"`
+	Notes            []string `json:"notes,omitempty"`
 }
 
 // BuildHandoff assembles the context a new agent session needs to resume work.
@@ -119,7 +122,7 @@ func RenderHandoff(h Handoff) string {
 		}
 	}
 	if h.PendingDecisions > 0 {
-		fmt.Fprintf(&b, "- pending eval decisions: %d\n", h.PendingDecisions)
+		fmt.Fprintf(&b, "- recent eval decisions: %d\n", h.PendingDecisions)
 	}
 	if len(h.Notes) > 0 {
 		b.WriteString("- warnings (handoff degraded):\n")

@@ -12,11 +12,12 @@ function Fail([string]$Message) {
 if (-not $Root -or -not (Test-Path -LiteralPath $Root -PathType Container)) {
   Fail "[install-state] root directory not found: $Root"
 }
+# Canonicalize FIRST, then re-validate the resolved root: a symlink swapped
+# between validation and resolution cannot redirect the reads/writes below.
+$Root = (Resolve-Path -LiteralPath $Root).Path
 if (-not (Test-Path -LiteralPath (Join-Path $Root "docker-compose.yml")) -or -not (Test-Path -LiteralPath (Join-Path $Root "go.mod"))) {
   Fail "[install-state] refusing: '$Root' does not look like the hackathonkit repository root"
 }
-# Canonicalize so a caller-supplied relative/symlinked root cannot redirect writes.
-$Root = (Resolve-Path -LiteralPath $Root).Path
 if ($Profile -notin @("core", "full")) {
   Fail "[install-state] invalid profile: $Profile (expected core or full)"
 }
@@ -106,11 +107,25 @@ try {
   $tmp = "$out.tmp.$PID"
   try {
     [System.IO.File]::WriteAllText($tmp, $json, (New-Object System.Text.UTF8Encoding($false)))
-    if (Test-Path -LiteralPath $out) {
+    $published = $false
+    try {
       [System.IO.File]::Replace($tmp, $out, $null)
-    } else {
+      $published = $true
+    } catch [System.PlatformNotSupportedException] {
+      # File.Replace is unsupported on .NET Framework and some non-Windows
+      # filesystems; Copy -Force overwrites without a check-then-act window.
+      [System.IO.File]::Copy($tmp, $out, $true)
+      $published = $true
+    } catch [System.IO.FileNotFoundException] {
+      # Destination does not exist yet: a plain move is the right call.
       [System.IO.File]::Move($tmp, $out)
+      $published = $true
+    } catch [System.IO.IOException] {
+      # The destination may have appeared concurrently; overwrite in place.
+      [System.IO.File]::Copy($tmp, $out, $true)
+      $published = $true
     }
+    if (-not $published) { throw "atomic install-state write did not complete" }
   } finally {
     if (Test-Path -LiteralPath $tmp) { Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue }
   }

@@ -80,7 +80,15 @@ func chunkSnippet(text string, terms map[string]bool, limit int) string {
 	if len(r) <= limit {
 		return string(r)
 	}
-	lower := strings.ToLower(text)
+	// Fold case rune-by-rune (a 1:1 mapping) rather than with strings.ToLower,
+	// which can change the rune count (e.g. U+0130 lowercases to two code
+	// points). A count-preserving fold keeps the byte offset found here aligned
+	// with r, so the window actually contains the matched term.
+	folded := make([]rune, len(r))
+	for i, c := range r {
+		folded[i] = unicode.ToLower(c)
+	}
+	lower := string(folded)
 	pos := -1
 	for term := range terms {
 		if idx := strings.Index(lower, term); idx >= 0 && (pos < 0 || idx < pos) {
@@ -187,10 +195,14 @@ func registerKnowledge(reg *mcp.Registry, d Deps) {
 					if err != nil {
 						return mcp.Fail(trace(ctx), err.Error()), nil
 					}
-					if len(raw) > maxRawTextBytes {
-						raw = raw[:maxRawTextBytes]
-						warnings = append(warnings, fmt.Sprintf("artifact truncated to %d bytes for indexing", maxRawTextBytes))
-					}
+				}
+				if len(raw) > maxRawTextBytes {
+					// The local read is bounded at max+1 bytes so an oversized
+					// artifact is detected here instead of silently truncated
+					// with no warning. Cut rune-safely so the indexed text does
+					// not begin or end with a split multi-byte rune.
+					raw = []byte(truncateRunes(string(raw), maxRawTextBytes))
+					warnings = append(warnings, fmt.Sprintf("artifact truncated to %d bytes for indexing", maxRawTextBytes))
 				}
 				text = string(raw)
 				source = artifactID
@@ -312,8 +324,8 @@ func registerKnowledge(reg *mcp.Registry, d Deps) {
 				if len(allowed) > 0 && !allowed[name] {
 					continue
 				}
-				if len(allowed) == 0 && scanned >= maxIndexesPerSearch {
-					warnings = append(warnings, fmt.Sprintf("knowledge index is large; only the first %d indexes were searched; narrow the query with index_id", maxIndexesPerSearch))
+				if scanned >= maxIndexesPerSearch {
+					warnings = append(warnings, fmt.Sprintf("knowledge index is large; only the first %d matching indexes were searched", maxIndexesPerSearch))
 					break
 				}
 				scanned++

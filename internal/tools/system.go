@@ -96,7 +96,7 @@ func registerSystem(reg *mcp.Registry, d Deps) {
 			telemetryWarnings := []string{}
 			logJSONL := func(path string, record map[string]any) {
 				if err := observability.AppendJSONL(path, record); err != nil {
-					telemetryWarnings = append(telemetryWarnings, "telemetry append failed: "+err.Error())
+					telemetryWarnings = append(telemetryWarnings, "telemetry append failed: "+redactBackendError(err))
 				}
 			}
 			attachTelemetryWarnings := func(env mcp.Envelope) mcp.Envelope {
@@ -150,21 +150,28 @@ func registerSystem(reg *mcp.Registry, d Deps) {
 				if emitActivation {
 					snapshot = d.Router.ActivationSnapshot(ctx, task, 64)
 				}
-				logJSONL(filepath.Join(d.Store.Root(), "logs", "fly-neuron-events.jsonl"), map[string]any{
-					"ts":                   time.Now().UTC().Format(time.RFC3339Nano),
-					"type":                 "recommend",
-					"trace_id":             trace(ctx),
-					"task":                 snippet(task, 200),
-					"route":                res.Route,
-					"encoder":              res.Encoder,
-					"max_score":            res.MaxScore,
-					"active_kc":            snapshot["active_kc"],
-					"mbon":                 snapshot["mbon"],
-					"kc_total":             snapshot["kc_total"],
-					"activation_available": snapshot["activation_available"],
-					"activation_complete":  snapshot["activation_complete"],
-					"active_kc_count":      snapshot["active_kc_count"],
-				})
+				// Only emit the neuron event when the snapshot was actually
+				// captured: with emit_activation disabled the snapshot is nil,
+				// and an event full of nulls is indistinguishable from a failed
+				// capture (and would break the boolean activation_available
+				// contract).
+				if emitActivation && snapshot != nil {
+					logJSONL(filepath.Join(d.Store.Root(), "logs", "fly-neuron-events.jsonl"), map[string]any{
+						"ts":                   time.Now().UTC().Format(time.RFC3339Nano),
+						"type":                 "recommend",
+						"trace_id":             trace(ctx),
+						"task":                 snippet(task, 200),
+						"route":                res.Route,
+						"encoder":              res.Encoder,
+						"max_score":            res.MaxScore,
+						"active_kc":            snapshot["active_kc"],
+						"mbon":                 snapshot["mbon"],
+						"kc_total":             snapshot["kc_total"],
+						"activation_available": snapshot["activation_available"],
+						"activation_complete":  snapshot["activation_complete"],
+						"active_kc_count":      snapshot["active_kc_count"],
+					})
+				}
 			}
 			if d.Meta != nil && d.Meta.Enabled() {
 				if err := d.Meta.RecordFlyPrediction(ctx, metadata.FlyPrediction{
@@ -176,7 +183,7 @@ func registerSystem(reg *mcp.Registry, d Deps) {
 					CategoryScores:  res.CategoryScores,
 					Recommendations: res.Recommendations,
 				}); err != nil {
-					telemetryWarnings = append(telemetryWarnings, "fly prediction not recorded: "+err.Error())
+					telemetryWarnings = append(telemetryWarnings, "fly prediction not recorded: "+redactBackendError(err))
 				}
 			}
 			return attachTelemetryWarnings(env), nil
@@ -220,7 +227,7 @@ func registerSystem(reg *mcp.Registry, d Deps) {
 				InputMetadata: argMap(args, "input_metadata"),
 			})
 			if err != nil {
-				return mcp.Fail(trace(ctx), err.Error()), nil
+				return mcp.Fail(trace(ctx), redactBackendError(err)), nil
 			}
 			if d.Metrics != nil {
 				d.Metrics.Inc("fly_feedback_total")
@@ -228,7 +235,7 @@ func registerSystem(reg *mcp.Registry, d Deps) {
 			telemetryWarnings := []string{}
 			logJSONL := func(path string, record map[string]any) {
 				if err := observability.AppendJSONL(path, record); err != nil {
-					telemetryWarnings = append(telemetryWarnings, "telemetry append failed: "+err.Error())
+					telemetryWarnings = append(telemetryWarnings, "telemetry append failed: "+redactBackendError(err))
 				}
 			}
 			if d.Store != nil {

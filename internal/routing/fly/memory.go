@@ -249,8 +249,10 @@ func (r *Router) AddFeedback(ctx context.Context, ev FeedbackEvent) (int, bool, 
 				return err
 			}
 			// Only the write path quarantines a corrupt file so the next save
-			// does not overwrite recoverable data.
-			if rerr := os.Rename(r.memoryPath, r.memoryPath+".corrupt"); rerr != nil {
+			// does not overwrite recoverable data. A unique suffix keeps an
+			// earlier quarantine from being silently replaced by a later one.
+			backup := fmt.Sprintf("%s.corrupt.%d", r.memoryPath, time.Now().UnixNano())
+			if rerr := os.Rename(r.memoryPath, backup); rerr != nil {
 				return fmt.Errorf("quarantine corrupt fly memory %s: %w", r.memoryPath, rerr)
 			}
 			mem = memoryFile{}

@@ -1,5 +1,23 @@
 $ErrorActionPreference = "Continue"
 
+# Resolve symlinks/junctions to their final target. Resolve-Path only follows
+# links on PowerShell 6+; on Windows PowerShell 5.1 it returns the link path, so
+# a symlink inside the plugin pointing outside it could pass a containment
+# check. Walk reparse points explicitly instead.
+function Resolve-LinkTarget([string]$Path) {
+  $full = [System.IO.Path]::GetFullPath($Path)
+  for ($i = 0; $i -lt 40; $i++) {
+    $item = Get-Item -LiteralPath $full -Force -ErrorAction Stop
+    if (-not ($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint)) { return $item.FullName }
+    $target = $item.Target
+    if ($target -is [System.Array]) { $target = $target[0] }
+    if (-not $target) { throw "cannot resolve link target for $full" }
+    if ([System.IO.Path]::IsPathRooted($target)) { $full = $target }
+    else { $full = Join-Path (Split-Path -Parent $full) $target }
+  }
+  throw "too many reparse points resolving $Path"
+}
+
 $codexCmd = Get-Command codex -CommandType Application -ErrorAction SilentlyContinue
 if (-not $codexCmd) {
   Write-Host "[plugin-check] codex executable not found on PATH"
@@ -77,9 +95,16 @@ if (-not (Test-Path -LiteralPath $cmdFull)) {
   Write-Host "[plugin-check] MCP command does not exist: $cmdFull"
   exit 1
 }
-# Resolve symlinks/junctions so a link inside the plugin cannot point outside it.
-$cmdResolved = (Resolve-Path -LiteralPath $cmdFull).Path
-$sourceResolved = (Resolve-Path -LiteralPath $sourceFullRoot).Path
+# Resolve symlinks/junctions so a link inside the plugin cannot point outside
+# it. A resolution failure (broken or replaced link, race) is a clean
+# diagnostic and exit 1, not an unhandled error.
+try {
+  $cmdResolved = Resolve-LinkTarget $cmdFull
+  $sourceResolved = Resolve-LinkTarget $sourceFullRoot
+} catch {
+  Write-Host "[plugin-check] cannot resolve the installed plugin command path: $($_.Exception.Message)"
+  exit 1
+}
 $comparison = if ($env:OS -eq "Windows_NT") { [System.StringComparison]::OrdinalIgnoreCase } else { [System.StringComparison]::Ordinal }
 $sourcePrefix = $sourceResolved.TrimEnd([System.IO.Path]::DirectorySeparatorChar, '/', '\') + [System.IO.Path]::DirectorySeparatorChar
 if (-not $cmdResolved.StartsWith($sourcePrefix, $comparison)) {

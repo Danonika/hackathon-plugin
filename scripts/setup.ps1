@@ -61,11 +61,13 @@ $hasToken = $false
 if (Test-Path -LiteralPath $envPath) {
   $hasToken = [bool](Select-String -LiteralPath $envPath -Pattern '^HACKATHONKIT_DEMO_TOKEN=.' -Quiet -ErrorAction SilentlyContinue)
   if ($hasToken) {
-    # A shipped placeholder must not be mistaken for a real secret.
+    # Fail closed on a guessable value: only a random-looking 32-char hex token
+    # counts as real, so shipped placeholders (change-me-in-production,
+    # my-token, secret, ...) are regenerated rather than protecting the demo.
     $tokenMatch = Select-String -LiteralPath $envPath -Pattern '^HACKATHONKIT_DEMO_TOKEN=(.*)$' -ErrorAction SilentlyContinue | Select-Object -First 1
     if ($tokenMatch) {
       $tokenValue = $tokenMatch.Matches[0].Groups[1].Value.Trim()
-      if ($tokenValue -match '^(?i)(changeme|change-me|your-token-here|your_token_here|replace-me|placeholder|example|demo|demo-token|<[^>]*>)$') {
+      if ($tokenValue -notmatch '^[0-9a-fA-F]{32}$') {
         $hasToken = $false
       }
     }

@@ -143,12 +143,31 @@ ALTER TABLE eval_runs ADD COLUMN IF NOT EXISTS noise_floor DOUBLE PRECISION;
 ALTER TABLE eval_runs ADD COLUMN IF NOT EXISTS decision TEXT;
 ALTER TABLE eval_runs ADD COLUMN IF NOT EXISTS payload JSONB;
 ALTER TABLE eval_runs ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT now();
-UPDATE routing_runs SET mode='' WHERE mode IS NULL;
-UPDATE routing_runs SET version=0 WHERE version IS NULL;
-ALTER TABLE routing_runs ALTER COLUMN mode SET NOT NULL;
-ALTER TABLE routing_runs ALTER COLUMN version SET NOT NULL;
-UPDATE eval_runs SET kind='' WHERE kind IS NULL;
-ALTER TABLE eval_runs ALTER COLUMN kind SET NOT NULL;
+DO $$
+BEGIN
+  -- ALTER COLUMN ... SET NOT NULL takes ACCESS EXCLUSIVE and validates the
+  -- column, which can block concurrent access and scan a large table. Only run
+  -- it (with the backfill) while the column is still nullable, so an already
+  -- migrated deployment pays no blocking DDL on startup.
+  IF EXISTS (SELECT 1 FROM information_schema.columns
+             WHERE table_schema = current_schema() AND table_name = 'routing_runs'
+               AND column_name = 'mode' AND is_nullable = 'YES') THEN
+    UPDATE routing_runs SET mode='' WHERE mode IS NULL;
+    ALTER TABLE routing_runs ALTER COLUMN mode SET NOT NULL;
+  END IF;
+  IF EXISTS (SELECT 1 FROM information_schema.columns
+             WHERE table_schema = current_schema() AND table_name = 'routing_runs'
+               AND column_name = 'version' AND is_nullable = 'YES') THEN
+    UPDATE routing_runs SET version=0 WHERE version IS NULL;
+    ALTER TABLE routing_runs ALTER COLUMN version SET NOT NULL;
+  END IF;
+  IF EXISTS (SELECT 1 FROM information_schema.columns
+             WHERE table_schema = current_schema() AND table_name = 'eval_runs'
+               AND column_name = 'kind' AND is_nullable = 'YES') THEN
+    UPDATE eval_runs SET kind='' WHERE kind IS NULL;
+    ALTER TABLE eval_runs ALTER COLUMN kind SET NOT NULL;
+  END IF;
+END $$;
 `
 
 // isDuplicateDDL tolerates a concurrent creator winning the DDL race.
@@ -157,13 +176,38 @@ func isDuplicateDDL(err error) bool {
 	if !errors.As(err, &pgErr) {
 		return false
 	}
-	// 42P07 = duplicate_table, 42710 = duplicate_object.
-	return pgErr.Code == "42P07" || pgErr.Code == "42710"
+	switch pgErr.Code {
+	case "42P07", // duplicate_table
+		"42710", // duplicate_object
+		"42701", // duplicate_column
+		"23505": // unique_violation (e.g. pg_type/pg_class index during CREATE TABLE IF NOT EXISTS)
+		return true
+	}
+	return false
 }
 
 type Postgres struct {
-	mu   sync.RWMutex
-	pool pgExecutor
+	mu     sync.RWMutex
+	pool   pgExecutor
+	closed bool
+}
+
+// errRecorderClosed is returned when a record is dropped because Close already
+// tore down the pool, so callers can distinguish a lost record from a
+// successful write. A zero-value Postgres that was never opened still reports
+// success (it is simply disabled).
+var errRecorderClosed = errors.New("metadata: recorder closed")
+
+// recordWriteTimeout bounds a write whose caller supplied no deadline, so a
+// stalled query cannot hold the read lock (and therefore block Close)
+// indefinitely.
+const recordWriteTimeout = 10 * time.Second
+
+func boundedWriteCtx(ctx context.Context) (context.Context, context.CancelFunc) {
+	if _, ok := ctx.Deadline(); ok {
+		return context.WithCancel(ctx)
+	}
+	return context.WithTimeout(ctx, recordWriteTimeout)
 }
 
 func OpenPostgres(ctx context.Context, dsn string) (*Postgres, error) {
@@ -219,12 +263,17 @@ func (p *Postgres) RecordArtifact(ctx context.Context, rec ArtifactRecord) error
 	}
 	// Hold the read lock across Exec so Close cannot tear the pool down while
 	// the write is in flight (which would silently drop the record).
+	writeCtx, cancel := boundedWriteCtx(ctx)
+	defer cancel()
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 	if p.pool == nil {
+		if p.closed {
+			return errRecorderClosed
+		}
 		return nil
 	}
-	_, err := p.pool.Exec(ctx,
+	_, err := p.pool.Exec(writeCtx,
 		`INSERT INTO artifacts (artifact_id, kind, source, bytes, sha256) VALUES ($1,$2,$3,$4,$5)`,
 		rec.ArtifactID, rec.Kind, rec.Source, rec.Bytes, rec.SHA256)
 	return err
@@ -237,9 +286,14 @@ func (p *Postgres) RecordRoutingRun(ctx context.Context, run RoutingRun) error {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 	if p.pool == nil {
+		if p.closed {
+			return errRecorderClosed
+		}
 		return nil
 	}
-	_, err := p.pool.Exec(ctx,
+	writeCtx, cancel := boundedWriteCtx(ctx)
+	defer cancel()
+	_, err := p.pool.Exec(writeCtx,
 		`INSERT INTO routing_runs (mode, version) VALUES ($1,$2)`,
 		run.Mode, run.Version)
 	return err
@@ -260,9 +314,14 @@ func (p *Postgres) RecordFlyPrediction(ctx context.Context, pred FlyPrediction) 
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 	if p.pool == nil {
+		if p.closed {
+			return errRecorderClosed
+		}
 		return nil
 	}
-	_, err = p.pool.Exec(ctx,
+	writeCtx, cancel := boundedWriteCtx(ctx)
+	defer cancel()
+	_, err = p.pool.Exec(writeCtx,
 		`INSERT INTO fly_predictions (trace_id, route, encoder, max_score, threshold, category_scores, recommendations)
 		 VALUES ($1,$2,$3,$4,$5,$6,$7)`,
 		pred.TraceID, pred.Route, pred.Encoder, pred.MaxScore, pred.Threshold, scores, recs)
@@ -280,9 +339,14 @@ func (p *Postgres) RecordEvalRun(ctx context.Context, run EvalRun) error {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 	if p.pool == nil {
+		if p.closed {
+			return errRecorderClosed
+		}
 		return nil
 	}
-	_, err = p.pool.Exec(ctx,
+	writeCtx, cancel := boundedWriteCtx(ctx)
+	defer cancel()
+	_, err = p.pool.Exec(writeCtx,
 		`INSERT INTO eval_runs (kind, snapshot_sha, score, target, noise_floor, decision, payload)
 		 VALUES ($1,$2,$3,$4,$5,$6,$7)`,
 		run.Kind, run.SnapshotSHA, run.Score, run.Target, run.NoiseFloor, run.Decision, payload)
@@ -296,6 +360,7 @@ func (p *Postgres) Close() {
 	p.mu.Lock()
 	pool := p.pool
 	p.pool = nil
+	p.closed = true
 	p.mu.Unlock()
 	if pool != nil {
 		pool.Close()

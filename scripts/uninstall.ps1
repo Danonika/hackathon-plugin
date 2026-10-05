@@ -146,7 +146,18 @@ foreach ($rel in $targets) {
         continue
       }
       if ($Yes) {
-        try { Remove-TreeNoReparse $skillTarget }
+        try {
+          # Test-SameTree hashed the tree above; re-fetch and re-validate
+          # immediately before deleting so a path swapped for a reparse point in
+          # between cannot defeat the junction/user-skill protection.
+          $final = Get-Item -LiteralPath $skillTarget -Force -ErrorAction Stop
+          if ($final.Attributes -band [System.IO.FileAttributes]::ReparsePoint -or $final.FullName -ne $item.FullName) {
+            Write-Warning "[uninstall] $rel\$($skill.Name) changed before removal; skipping"
+            $Failures++
+            continue
+          }
+          Remove-TreeNoReparse $final.FullName
+        }
         catch { Write-Warning "[uninstall] failed to remove ${rel}\$($skill.Name): $($_.Exception.Message)"; $Failures++ }
       } else {
         Write-Host "would remove: $rel\$($skill.Name)"

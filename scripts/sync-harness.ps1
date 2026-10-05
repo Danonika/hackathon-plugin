@@ -91,11 +91,20 @@ for ($i = 0; $i -lt 100; $i++) {
       $stale = $false
       $holderPid = 0
       if ($holder -and [int]::TryParse(("$holder").Trim(), [ref]$holderPid) -and $holderPid -gt 0) {
-        if (-not (Get-Process -Id $holderPid -ErrorAction SilentlyContinue)) {
+        $holderProc = Get-Process -Id $holderPid -ErrorAction SilentlyContinue
+        if (-not $holderProc) {
           try {
             $agePid = (Get-Date) - (Get-Item -LiteralPath $ClaudeLock -Force -ErrorAction Stop).LastWriteTime
             if ($agePid.TotalSeconds -gt 60) { $stale = $true }
           } catch { $stale = $true }
+        } else {
+          # PID existence alone is not proof of ownership: if the process
+          # started after the lock was created, the PID was recycled by an
+          # unrelated process and the lock is genuinely stale.
+          try {
+            $lockItem = Get-Item -LiteralPath $ClaudeLock -Force -ErrorAction Stop
+            if ($holderProc.StartTime -gt $lockItem.LastWriteTime.AddSeconds(2)) { $stale = $true }
+          } catch { }
         }
       } else {
         try {

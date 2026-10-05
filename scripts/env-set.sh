@@ -218,4 +218,11 @@ if [ -n "$OWNER" ]; then
     exit 1
   fi
 fi
+# Symlinks were resolved above, so a directory/FIFO/device here is a real
+# non-regular target. `mv` would move the temp file *into* a directory under
+# its temp name (reporting success while writing nothing useful), so refuse.
+if [ -L "$FILE" ] || { [ -e "$FILE" ] && [ ! -f "$FILE" ]; }; then
+  echo "env-set: refusing to replace non-regular file $FILE" >&2
+  exit 1
+fi
 mv "$TMP" "$FILE"

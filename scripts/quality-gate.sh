@@ -30,18 +30,21 @@ if [ -x "$BIN" ]; then
   # sources are newer and a toolchain is available.
   if command -v go >/dev/null 2>&1; then
     NEWEST=""
-    # Scan the whole module (not just cmd/ and internal/) so go.mod-only or
-    # root-level changes are not missed; prune non-source trees for speed.
-    # `find -print | head -n 1` is used instead of the non-POSIX `-quit`.
+    # Scan the whole module for every build-affecting input (Go sources, the
+    # module files and embedded assets/templates/SQL), pruning non-source trees
+    # for speed. `find -print | head -n 1` is used instead of the non-POSIX
+    # `-quit`. Surface find errors rather than hiding them: an unreadable
+    # subtree must not be silently treated as up to date.
+    FIND_ERR=$(mktemp "${TMPDIR:-/tmp}/hackathonkit-freshness.XXXXXX")
     NEWEST=$(find "$ROOT" \
         \( -path "$ROOT/.git" -o -path "$ROOT/node_modules" -o -path "$ROOT/data" -o -path "$ROOT/evals" -o -path "$ROOT/plugins" -o -path "$ROOT/bin" \) -prune -o \
-        -name '*.go' -newer "$BIN" -print 2>/dev/null | head -n 1)
-    for extra in "$ROOT/go.mod" "$ROOT/go.sum"; do
-      if [ -f "$extra" ] && [ -n "$(find "$extra" -newer "$BIN" -print 2>/dev/null | head -n 1)" ]; then
-        NEWEST="$extra"
-        break
-      fi
-    done
+        \( -name '*.go' -o -name 'go.mod' -o -name 'go.sum' -o -name '*.html' -o -name '*.js' -o -name '*.css' -o -name '*.sql' -o -name '*.tmpl' -o -name '*.tpl' \) -newer "$BIN" -print 2>"$FIND_ERR" | head -n 1)
+    if [ -s "$FIND_ERR" ]; then
+      echo "[quality-gate] warning: source freshness scan reported errors; rebuilding to be safe:" >&2
+      cat "$FIND_ERR" >&2
+      NEWEST="${NEWEST:-$ROOT (source scan incomplete)}"
+    fi
+    rm -f "$FIND_ERR"
     if [ -n "$NEWEST" ]; then
       echo "[quality-gate] bin/hackathonkit-mcp is older than $NEWEST; rebuilding" >&2
       USE_BIN=0

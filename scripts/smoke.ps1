@@ -21,7 +21,24 @@ $binary = Join-Path $root "bin\hackathonkit-mcp.exe"
 $useLocal = switch ($Runtime) {
   "local"  { $true }
   "docker" { $false }
-  default  { Test-Path -LiteralPath $binary }
+  default  {
+    $exists = Test-Path -LiteralPath $binary
+    if ($exists) {
+      # Warn when the local binary predates the sources: auto would otherwise
+      # silently test a stale artifact and never exercise the container path.
+      $binTime = (Get-Item -LiteralPath $binary).LastWriteTime
+      $newest = Get-ChildItem -Path (Join-Path $root "cmd"), (Join-Path $root "internal") -Recurse -Filter *.go -File -ErrorAction SilentlyContinue |
+        Where-Object { $_.LastWriteTime -gt $binTime } |
+        Sort-Object LastWriteTime -Descending | Select-Object -First 1
+      if ($newest -and -not $Quiet) {
+        Write-Host "[smoke] warning: $binary is older than $($newest.FullName); the container path is not being exercised"
+      }
+    }
+    $exists
+  }
+}
+if (-not $Quiet) {
+  Write-Host ("[smoke] runtime: " + $(if ($useLocal) { "local" } else { "docker" }))
 }
 if ($useLocal) {
   # Run with a bounded wait and inspect the exit code: a server that prints

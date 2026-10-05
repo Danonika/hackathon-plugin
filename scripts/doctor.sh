@@ -20,7 +20,28 @@ check() {
 if command -v timeout >/dev/null 2>&1; then
   run_bounded() { timeout 180 "$@"; }
 else
-  run_bounded() { "$@"; }
+  # POSIX fallback for hosts without `timeout(1)`: run the child in the
+  # background with a watchdog that kills it after the same 180s bound and
+  # reports 124 (like `timeout`), so a hanging check cannot block doctor.sh.
+  run_bounded() {
+    _rb_marker=$(mktemp "${TMPDIR:-/tmp}/hackathonkit-bounded.XXXXXX" 2>/dev/null || echo "")
+    "$@" &
+    _rb_pid=$!
+    ( sleep 180; if [ -n "$_rb_marker" ]; then printf 1 > "$_rb_marker"; fi; kill -TERM "$_rb_pid" 2>/dev/null; sleep 5; kill -KILL "$_rb_pid" 2>/dev/null ) &
+    _rb_watchdog=$!
+    _rb_status=0
+    wait "$_rb_pid" 2>/dev/null || _rb_status=$?
+    kill "$_rb_watchdog" 2>/dev/null || true
+    wait "$_rb_watchdog" 2>/dev/null || true
+    if [ -n "$_rb_marker" ]; then
+      if [ -s "$_rb_marker" ]; then
+        rm -f "$_rb_marker"
+        return 124
+      fi
+      rm -f "$_rb_marker"
+    fi
+    return "$_rb_status"
+  }
 fi
 
 if [ -f "$ROOT/docker-compose.yml" ]; then check "repository root" 1 "$ROOT"; else check "repository root" 0 "$ROOT"; fi
@@ -93,7 +114,9 @@ print(state)
       0) check "plugin runtime" 1 "installed plugin starts MCP from a foreign cwd" ;;
       124) check "plugin runtime" 0 "timed out; run scripts/plugin-check.sh for details" ;;
       2) echo "[info] plugin runtime check skipped (codex/python3 unavailable)" ;;
-      *) check "plugin runtime" 0 "$(printf '%s' "$PLUGIN_CHECK_OUT" | tail -n 5)" ;;
+      # Report only the exit code: the child's output may contain secrets or
+      # credential-bearing URLs, which must not leak into terminal/CI logs.
+      *) check "plugin runtime" 0 "failed (exit $PLUGIN_RUNTIME); run scripts/plugin-check.sh for details" ;;
     esac
   else
     echo "[info] plugin runtime check skipped (plugin not installed or disabled)"
@@ -176,7 +199,23 @@ else
 fi
 
 if [ -f "$ROOT/configs/install-state.json" ]; then
-  STATE_VERSION=$(sed -n 's/^[[:space:]]*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$ROOT/configs/install-state.json" | head -n 1)
+  # Prefer a real JSON parser: the line-anchored sed missed compact JSON and
+  # could pick up a nested "version" key.
+  STATE_VERSION=""
+  if command -v jq >/dev/null 2>&1; then
+    STATE_VERSION=$(jq -r 'if (.version|type)=="string" then .version else empty end' "$ROOT/configs/install-state.json" 2>/dev/null || true)
+  elif command -v python3 >/dev/null 2>&1; then
+    STATE_VERSION=$(python3 -c 'import json, sys
+try:
+    d = json.load(open(sys.argv[1]))
+except Exception:
+    sys.exit(0)
+v = d.get("version") if isinstance(d, dict) else None
+if isinstance(v, str):
+    print(v)' "$ROOT/configs/install-state.json" 2>/dev/null || true)
+  else
+    STATE_VERSION=$(sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$ROOT/configs/install-state.json" | head -n 1)
+  fi
   if [ -n "$STATE_VERSION" ]; then
     check "install state" 1 "version $STATE_VERSION"
   else
@@ -253,7 +292,8 @@ if [ "$SMOKE_STATUS" = "0" ]; then
 elif [ "$SMOKE_STATUS" = "124" ]; then
   check "mcp handshake" 0 "timed out; run scripts/smoke.sh for details"
 else
-  check "mcp handshake" 0 "$(printf '%s' "$SMOKE_OUT" | tail -n 5)"
+  # Do not echo the child's output: it may carry secrets into the logs.
+  check "mcp handshake" 0 "failed (exit $SMOKE_STATUS); run scripts/smoke.sh for details"
 fi
 
 if [ "$FAIL" = "0" ]; then

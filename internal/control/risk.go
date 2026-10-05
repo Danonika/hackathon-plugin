@@ -7,6 +7,7 @@ import (
 	"log"
 	"math"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -74,11 +75,22 @@ var (
 	// panic, so "no panic observed", "without panic", "panic-free" and
 	// "0 panics" are not counted as panic events.
 	panicNegation = regexp.MustCompile(`(no|without|zero|0)\s+(errors?\s+or\s+)?panics?|panics?[\s_-]*free|panics?[_ ]?(count)?[\s:=]*(zero|0)`)
+	// panicFieldKey matches a structured panic flag/count such as "panic",
+	// "panics" or "panic_count". These carry an explicit boolean/numeric state
+	// and must be interpreted by value, not by the key name appearing in text.
+	panicFieldKey = regexp.MustCompile(`(?i)^panics?(_count|_total)?$`)
 )
 
+// payloadHasPanic reports whether the payload records a panic. A structured
+// panic field ({"panic":false}, {"panics":0}, {"panic_count":3}) is
+// authoritative and read by value; free-text payloads fall back to matching the
+// word "panic" after stripping negated prose.
 func payloadHasPanic(payload map[string]any) bool {
 	if len(payload) == 0 {
 		return false
+	}
+	if found, asserted := scanPanicFields(payload); found {
+		return asserted
 	}
 	data, err := json.Marshal(payload)
 	if err != nil {
@@ -89,6 +101,70 @@ func payloadHasPanic(payload map[string]any) bool {
 	// Strip common negated prose before matching.
 	text = panicNegation.ReplaceAllString(text, "")
 	return panicWord.MatchString(text)
+}
+
+// scanPanicFields walks the payload (including nested maps and slices) looking
+// for explicit panic fields. It reports whether any were found and whether any
+// of them asserted a panic, so a benign {"panic":false} is not scored as a
+// panic merely because the key contains the word.
+func scanPanicFields(v any) (found, asserted bool) {
+	switch value := v.(type) {
+	case map[string]any:
+		for key, item := range value {
+			if panicFieldKey.MatchString(key) {
+				found = true
+				if panicValueAsserted(item) {
+					asserted = true
+				}
+				continue
+			}
+			f, a := scanPanicFields(item)
+			found = found || f
+			asserted = asserted || a
+		}
+	case []any:
+		for _, item := range value {
+			f, a := scanPanicFields(item)
+			found = found || f
+			asserted = asserted || a
+		}
+	}
+	return found, asserted
+}
+
+// panicValueAsserted interprets a structured panic field's value. Only an
+// explicit boolean/numeric (or numeric string) truthy value counts as a panic;
+// unknown shapes are treated as not asserted rather than defaulting to a panic.
+func panicValueAsserted(v any) bool {
+	switch value := v.(type) {
+	case bool:
+		return value
+	case float64:
+		return value > 0
+	case float32:
+		return value > 0
+	case int:
+		return value > 0
+	case int32:
+		return value > 0
+	case int64:
+		return value > 0
+	case json.Number:
+		f, err := value.Float64()
+		return err == nil && f > 0
+	case string:
+		switch strings.TrimSpace(strings.ToLower(value)) {
+		case "true", "yes":
+			return true
+		case "", "false", "no", "none", "0":
+			return false
+		}
+		if f, err := strconv.ParseFloat(strings.TrimSpace(value), 64); err == nil {
+			return f > 0
+		}
+		return false
+	}
+	return false
 }
 
 // RecomputeRisk refreshes risk for every session, attributing global MCP call

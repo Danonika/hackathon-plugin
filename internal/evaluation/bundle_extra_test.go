@@ -164,7 +164,10 @@ func TestWriteBundleMeta(t *testing.T) {
 }
 
 func TestCompileExcludesAndIsExcluded(t *testing.T) {
-	rules := compileExcludes([]string{"  ", "data\\artifacts", "*.min.js", "a/b", "a/b"})
+	rules, err := compileExcludes([]string{"  ", "data\\artifacts", "*.min.js", "a/b", "a/b"})
+	if err != nil {
+		t.Fatal(err)
+	}
 	if len(rules) != 3 {
 		t.Fatalf("rules = %+v, want three after normalization and dedup", rules)
 	}

@@ -424,12 +424,23 @@ func registerData(reg *mcp.Registry, d Deps) {
 				N    int
 			}
 			corrs := []corr{}
+			// Reuse one pair of scratch buffers across every column pair
+			// instead of allocating two fresh slices per pair (there can be
+			// hundreds of pairs over millions of rows).
+			scratchCap := 0
+			for _, col := range cols {
+				if len(col.values) > scratchCap {
+					scratchCap = len(col.values)
+				}
+			}
+			xs := make([]float64, 0, scratchCap)
+			ys := make([]float64, 0, scratchCap)
 			for i := 0; i < len(cols); i++ {
 				if err := ctx.Err(); err != nil {
 					return mcp.Fail(trace(ctx), err.Error()), nil
 				}
 				for j := i + 1; j < len(cols); j++ {
-					var xs, ys []float64
+					xs, ys = xs[:0], ys[:0]
 					for k := range cols[i].values {
 						a, b := cols[i].values[k], cols[j].values[k]
 						if !math.IsNaN(a) && !math.IsNaN(b) {

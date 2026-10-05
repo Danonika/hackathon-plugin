@@ -172,8 +172,9 @@ func argStringSlice(args map[string]any, key string) []string {
 
 func argMap(args map[string]any, key string) map[string]any {
 	if v, ok := args[key].(map[string]any); ok {
-		// Return a shallow copy so later in-place mutation by a handler does
-		// not leak into the caller's argument map.
+		// Return a shallow copy so adding/removing top-level keys in a handler
+		// does not leak into the caller's argument map. Nested maps/slices are
+		// shared by reference and must be treated as read-only.
 		out := make(map[string]any, len(v))
 		for k, item := range v {
 			out[k] = item

@@ -46,12 +46,21 @@ printf '%s\n' \
 '{"jsonrpc":"2.0","id":2,"result":{"tools":[]}}' \
 '{"jsonrpc":"2.0","id":3,"result":{"content":[],"isError":false}}'
 EOF
-  sed "s/@MARKER@/$marker/" "$path" > "$path.new" && mv "$path.new" "$path"
+  # Escape replacement metacharacters (backslash, slash, ampersand) so a marker
+  # containing them cannot corrupt the generated stub.
+  escaped_marker=$(printf '%s' "$marker" | sed -e 's/\\/\\\\/g' -e 's/\//\\\//g' -e 's/&/\\&/g')
+  sed "s/@MARKER@/$escaped_marker/" "$path" > "$path.new" && mv "$path.new" "$path"
   chmod +x "$path"
 }
 
 # Derive the expected request count from smoke.sh instead of hard-coding it.
-EXPECTED_STDIN=$(grep -c '^{"jsonrpc":"2.0","id":' "$ROOT/scripts/smoke.sh")
+# `grep -c` exits 1 on no match and would abort the whole suite under `set -e`,
+# so derive it non-fatally and assert it explicitly.
+EXPECTED_STDIN=$(grep -c '^{"jsonrpc":"2.0","id":' "$ROOT/scripts/smoke.sh" 2>/dev/null || true)
+if [ -z "$EXPECTED_STDIN" ] || [ "$EXPECTED_STDIN" -lt 1 ]; then
+  echo "[smoke-test] could not derive the request count from scripts/smoke.sh" >&2
+  exit 1
+fi
 
 write_responder "$REPO/bin/hackathonkit-mcp" binary
 write_responder "$TMP/bin/docker" docker
@@ -92,7 +101,9 @@ check "--auto skips docker" "$(grep -q '^docker ' "$TMP/marker" 2>/dev/null && e
 
 # --auto detects a stale local binary (a newer .go source) and uses compose.
 mkdir -p "$REPO/cmd" "$REPO/internal"
-sleep 1
+# Force a guaranteed ordering regardless of filesystem timestamp granularity:
+# backdate the binary so the freshly written source is unambiguously newer.
+touch -t 200001010000 "$REPO/bin/hackathonkit-mcp"
 printf 'package main\n' > "$REPO/cmd/main.go"
 rm -f "$TMP/marker"
 if run_smoke --auto >/dev/null 2>&1; then

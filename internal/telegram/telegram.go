@@ -579,18 +579,16 @@ func ChunkHTML(text string, limit int) []string {
 		budget := limit - len([]rune(prefix)) - closersBudget
 		if budget < 1 {
 			// The open tags need more than `limit` runes to reopen and close,
-			// so no valid chunk can be produced with this prefix. Close the
-			// pending tags in their own chunk and restart with a clean stack
-			// instead of emitting an oversized chunk Telegram rejects.
-			closers := ""
-			for i := len(stack) - 1; i >= 0; i-- {
-				closers += "</" + stack[i].name + ">"
+			// so no valid formatted chunk can be produced with this stack.
+			// Chunks already emitted closed all prior tags via scanTags, so
+			// emitting the closers here would be an unmatched end tag Telegram
+			// rejects. Drop the formatting for the remainder and emit the rest
+			// as plain text (tags stripped) so the message stays parseable.
+			rest := htmlTagPattern.ReplaceAllString(string(runes[pos:]), "")
+			if rest != "" {
+				chunks = append(chunks, ChunkText(rest, limit)...)
 			}
-			if closers != "" {
-				chunks = append(chunks, closers)
-			}
-			stack = nil
-			continue
+			return chunks
 		}
 		cut := pos + budget
 		if cut > len(runes) {

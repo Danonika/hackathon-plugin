@@ -29,15 +29,19 @@ case "$ACTION" in
     for f in "$SRC_DIR"/*.md; do
       [ -f "$f" ] || continue
       dest="$DEST_DIR/$(basename -- "$f")"
-      # A directory or symlink destination would make cp write into it or follow
-      # the link; refuse rather than clobber an unexpected target.
-      if [ -L "$dest" ] || [ -d "$dest" ]; then
+      # Any existing non-regular destination (directory, symlink, FIFO, socket,
+      # device) is refused: cp would write into it, follow it, or block on it.
+      if [ -L "$dest" ] || { [ -e "$dest" ] && [ ! -f "$dest" ]; }; then
         echo "[prompts] skipping $dest (not a regular file)" >&2
         skipped=$((skipped + 1))
         continue
       fi
       if [ -f "$dest" ] && ! cmp -s "$f" "$dest"; then
-        echo "[prompts] warning: overwriting locally modified prompt $dest" >&2
+        if cp -p "$dest" "$dest.bak" 2>/dev/null; then
+          echo "[prompts] warning: backing up locally modified prompt $dest to $dest.bak before overwriting" >&2
+        else
+          echo "[prompts] warning: overwriting locally modified prompt $dest (backup failed)" >&2
+        fi
       fi
       cp "$f" "$dest"
       n=$((n + 1))
@@ -53,7 +57,9 @@ case "$ACTION" in
       for f in "$SRC_DIR"/*.md; do
         [ -f "$f" ] || continue
         dest="$DEST_DIR/$(basename -- "$f")"
-        if [ -f "$dest" ] && cmp -s "$f" "$dest"; then
+        # `[ -f ]` follows symlinks; require a non-symlink regular file so a
+        # user-created link is never deleted, matching the install guard.
+        if [ -f "$dest" ] && [ ! -L "$dest" ] && cmp -s "$f" "$dest"; then
           rm -f "$dest"
           removed=$((removed + 1))
         fi
@@ -67,7 +73,9 @@ case "$ACTION" in
     for f in "$SRC_DIR"/*.md; do
       [ -f "$f" ] || continue
       dest="$DEST_DIR/$(basename -- "$f")"
-      if [ ! -f "$dest" ]; then
+      # Count non-regular destinations (symlinks, directories, ...) as missing:
+      # install would skip them, so reporting them installed would be a lie.
+      if [ -L "$dest" ] || [ ! -f "$dest" ]; then
         missing=$((missing + 1))
       elif ! cmp -s "$f" "$dest"; then
         stale=$((stale + 1))

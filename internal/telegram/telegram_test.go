@@ -303,6 +303,22 @@ func TestChunkHTMLNestedTags(t *testing.T) {
 	}
 }
 
+func TestChunkHTMLDeeplyNestedStaysValid(t *testing.T) {
+	text := strings.Repeat("<b>", 590) + strings.Repeat("x", 60) + strings.Repeat("</b>", 590)
+	chunks := ChunkHTML(text, MaxMessageChars)
+	if len(chunks) == 0 {
+		t.Fatal("expected chunks")
+	}
+	for i, chunk := range chunks {
+		if len([]rune(chunk)) > MaxMessageChars {
+			t.Fatalf("chunk %d has %d runes", i, len([]rune(chunk)))
+		}
+		if !balancedHTML(chunk) {
+			t.Fatalf("chunk %d is not balanced: %q", i, chunk)
+		}
+	}
+}
+
 func TestChunkHTMLEscapedEntitiesAreNotTags(t *testing.T) {
 	text := "&lt;b&gt;" + strings.Repeat("z", 200)
 	chunks := ChunkHTML(text, 50)

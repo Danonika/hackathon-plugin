@@ -41,11 +41,11 @@ type Router struct {
 	llm       LLMClassifier
 	building  chan struct{}
 
-	// brainSaveMu serializes brain writers without blocking scoring readers;
 	// memoryMu serializes this router's memory-file access (per router, so
-	// unrelated routers do not serialize on each other's disk I/O).
-	brainSaveMu sync.Mutex
-	memoryMu    sync.Mutex
+	// unrelated routers do not serialize on each other's disk I/O). Brain
+	// writers use the process-global brainSaveMu (in mb.go) because two
+	// Routers may share the same brain file.
+	memoryMu sync.Mutex
 
 	embedCacheMu   sync.Mutex
 	embedCacheTask string

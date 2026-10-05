@@ -172,6 +172,13 @@ func Load(root string) (Profile, bool, error) {
 	}
 	profile.CodexPro = profile.Claimed["codex_pro"] || profile.CodexPro
 	profile.Claimed["codex_pro"] = profile.CodexPro
+	// Normalize a persisted track reference (mirroring Save) so a hand-edited
+	// or legacy value cannot propagate an invalid track into routing.variant.
+	if track, ok := LookupTrack(profile.Track); ok {
+		profile.Track = track.ID
+	} else {
+		profile.Track = ""
+	}
 	return profile, true, nil
 }
 
@@ -199,8 +206,10 @@ func Save(root string, profile Profile) error {
 	if profile.Claimed == nil {
 		profile.Claimed = map[string]bool{}
 	}
-	// CodexPro is authoritative for the legacy field; mirror it into Claimed so
-	// the two representations stay consistent.
+	// Reconcile CodexPro and Claimed["codex_pro"] with an OR-merge (matching
+	// Load and Statuses) so a caller that set only one of the two
+	// representations does not have its claim silently reverted on save.
+	profile.CodexPro = profile.CodexPro || profile.Claimed["codex_pro"]
 	profile.Claimed["codex_pro"] = profile.CodexPro
 	if _, ok := LookupTrack(profile.Track); ok {
 		track, _ := LookupTrack(profile.Track)

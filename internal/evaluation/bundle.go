@@ -150,7 +150,10 @@ func FreezeBundle(opts BundleOptions) (Bundle, error) {
 	if err := validateExcludes(excludes); err != nil {
 		return Bundle{}, err
 	}
-	excludeRules := compileExcludes(excludes)
+	excludeRules, err := compileExcludes(excludes)
+	if err != nil {
+		return Bundle{}, err
+	}
 
 	outEntries, readErr := os.ReadDir(outAbs)
 	switch {
@@ -373,8 +376,10 @@ type excludeRule struct {
 // compileExcludes turns the exclude list into rules. A pattern with a slash
 // matches a repository-relative path prefix, a pattern without a slash matches
 // any file or directory base name, and patterns containing glob metacharacters
-// are matched against both the full relative path and the base name.
-func compileExcludes(patterns []string) []excludeRule {
+// are matched against both the full relative path and the base name. An invalid
+// glob is reported rather than silently dropped (which would leak files that
+// were meant to be excluded).
+func compileExcludes(patterns []string) ([]excludeRule, error) {
 	rules := make([]excludeRule, 0, len(patterns))
 	seen := map[string]struct{}{}
 	for _, pattern := range patterns {
@@ -392,11 +397,15 @@ func compileExcludes(patterns []string) []excludeRule {
 			glob:     strings.ContainsAny(pattern, "*?["),
 		}
 		if rule.glob {
-			rule.re, _ = globToRegexp(pattern)
+			re, err := globToRegexp(pattern)
+			if err != nil {
+				return nil, fmt.Errorf("invalid exclude pattern %q: %w", pattern, err)
+			}
+			rule.re = re
 		}
 		rules = append(rules, rule)
 	}
-	return rules
+	return rules, nil
 }
 
 // globToRegexp translates a path glob into an anchored regexp. Unlike

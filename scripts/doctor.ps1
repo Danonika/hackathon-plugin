@@ -3,12 +3,15 @@ $ErrorActionPreference = "Continue"
 # A bounded TCP connect is far faster than Test-NetConnection's ICMP+TCP probe.
 function Test-TcpPort([string]$HostName, [int]$Port) {
   $client = $null
+  $async = $null
   try {
     $client = New-Object System.Net.Sockets.TcpClient
     $async = $client.BeginConnect($HostName, $Port, $null, $null)
     if (-not $async.AsyncWaitHandle.WaitOne(1000)) {
-      # Abort the in-flight connect and leave the wait handle to the runtime.
-      $client.Close()
+      # Complete the pending connect to observe its outcome, then return; the
+      # finally block releases the wait handle and closes the client exactly
+      # once (Close() does not reliably abort an in-flight connect).
+      try { $client.EndConnect($async) } catch { }
       return $false
     }
     $client.EndConnect($async)
@@ -16,6 +19,7 @@ function Test-TcpPort([string]$HostName, [int]$Port) {
   } catch {
     return $false
   } finally {
+    if ($async) { $async.AsyncWaitHandle.Close() }
     if ($client) { $client.Close() }
   }
 }
@@ -67,6 +71,11 @@ if ($engine) {
 }
 Check "mcp runtime" ($binary -or $image) $(if ($binary) { "local binary" } elseif ($image) { "docker image" } else { "run scripts/setup.ps1" })
 
+# Get-FileHash raises for locked/unreadable files; under
+# $ErrorActionPreference = "Continue" that would silently yield a null hash and
+# let two unreadable files compare equal. Record every failure and force the
+# mirror check to fail instead.
+$script:hashErrors = 0
 $srcSkillsPath = Join-Path $root "plugins\hackathonkit\skills"
 $srcFiles = @()
 if (Test-Path -LiteralPath $srcSkillsPath) {
@@ -74,7 +83,13 @@ if (Test-Path -LiteralPath $srcSkillsPath) {
     Where-Object { -not ($_.Attributes -band [System.IO.FileAttributes]::ReparsePoint) } |
     ForEach-Object {
       $rel = $_.FullName.Substring($srcSkillsPath.Length).TrimStart('\', '/')
-      "$rel|$((Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash)"
+      try {
+        "$rel|$((Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256 -ErrorAction Stop).Hash)"
+      } catch {
+        $script:hashErrors++
+        Write-Warning "[doctor] cannot hash $($_.FullName): $($_.Exception.Message)"
+        "$rel|unreadable"
+      }
     } | Sort-Object)
 }
 $dstPath = Join-Path $root ".agents\skills"
@@ -84,11 +99,17 @@ if (Test-Path -LiteralPath $dstPath) {
     Where-Object { -not ($_.Attributes -band [System.IO.FileAttributes]::ReparsePoint) } |
     ForEach-Object {
       $rel = $_.FullName.Substring($dstPath.Length).TrimStart('\', '/')
-      "$rel|$((Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash)"
+      try {
+        "$rel|$((Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256 -ErrorAction Stop).Hash)"
+      } catch {
+        $script:hashErrors++
+        Write-Warning "[doctor] cannot hash $($_.FullName): $($_.Exception.Message)"
+        "$rel|unreadable"
+      }
     } | Sort-Object)
 }
 $mirrorDiff = @(Compare-Object -ReferenceObject $srcFiles -DifferenceObject $dstFiles)
-$mirrorOk = ($srcFiles.Count -gt 0) -and ($mirrorDiff.Count -eq 0)
+$mirrorOk = ($srcFiles.Count -gt 0) -and ($mirrorDiff.Count -eq 0) -and ($script:hashErrors -eq 0)
 Check "skills mirror" $mirrorOk "plugin=$($srcFiles.Count) files fallback=$($dstFiles.Count)"
 
 $hooksFile = Join-Path $root "plugins\hackathonkit\hooks\codex-hooks.json"

@@ -69,6 +69,17 @@ if [ "$CLAUDE_LOCKED" != "1" ]; then
   echo "[sync-harness] another run holds $CLAUDE_LOCK; aborting" >&2
   exit 1
 fi
+# Reconcile staging/backup directories orphaned by a SIGKILL between the two
+# rename halves of a previous swap. We hold the lock, so any such directory
+# belongs to a dead run and can be removed; the next run's $$ suffix would
+# otherwise never match them, leaking them forever.
+for stale in \
+  "$ROOT/.claude/skills.old."* "$ROOT/.claude/skills.tmp."* \
+  "$ROOT/.opencode/commands.old."* "$ROOT/.opencode/commands.tmp."* \
+  "$ROOT/.claude/commands.old."* "$ROOT/.claude/commands.tmp."*; do
+  [ -e "$stale" ] || [ -L "$stale" ] || continue
+  rm -rf "$stale"
+done
 CLAUDE_TMP="$CLAUDE_DST.tmp.$$"
 CLAUDE_OLD=""
 CMDS_STAGE=""
@@ -207,13 +218,23 @@ for f in $ADAPTERS; do
     MISSING=$((MISSING + 1))
   fi
 done
+# Probe the comparison tool first: without this, an absent `cmp` would fail
+# every comparison and misreport all mirrors as missing or stale.
+if command -v cmp >/dev/null 2>&1; then
+  files_equal() { cmp -s "$1" "$2"; }
+elif command -v diff >/dev/null 2>&1; then
+  files_equal() { diff -q "$1" "$2" >/dev/null 2>&1; }
+else
+  echo "[sync-harness] neither cmp nor diff is available; cannot verify command mirrors" >&2
+  exit 1
+fi
 # Verify the command mirrors just written match their canonical source, so a
 # silent failure of the mirroring loop cannot be reported as "adapters ready".
 for dest in "$ROOT/.opencode/commands" "$ROOT/.claude/commands"; do
   for f in "$CMDS_SRC"/*.md; do
     [ -f "$f" ] || continue
     name=$(basename -- "$f")
-    if [ ! -f "$dest/$name" ] || ! cmp -s "$f" "$dest/$name"; then
+    if [ ! -f "$dest/$name" ] || ! files_equal "$f" "$dest/$name"; then
       echo "[sync-harness] command mirror missing or stale: $dest/$name" >&2
       MISSING=$((MISSING + 1))
     fi

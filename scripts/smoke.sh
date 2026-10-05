@@ -28,17 +28,24 @@ trap 'cleanup_smoke; exit 130' INT
 trap 'cleanup_smoke; exit 143' TERM
 
 # Bound the MCP invocation so a hanging server fails the smoke test instead of
-# stalling CI forever. `timeout` may be absent (e.g. macOS); then run directly.
+# stalling CI forever. Both bounds are configurable; a compose run may need to
+# pull an image and start containers, so it gets a larger default. When
+# `timeout` is absent (e.g. macOS) the warning makes the unbounded run visible.
+SMOKE_TIMEOUT="${HACKATHONKIT_SMOKE_TIMEOUT:-60}"
+SMOKE_COMPOSE_TIMEOUT="${HACKATHONKIT_SMOKE_COMPOSE_TIMEOUT:-180}"
 run_with_timeout() {
+  _limit="$1"
+  shift
   if command -v timeout >/dev/null 2>&1; then
-    timeout 60 "$@"
+    timeout "$_limit" "$@"
   else
+    echo "[smoke] warning: timeout(1) unavailable; running the MCP server without a time bound" >&2
     "$@"
   fi
 }
 
 run_binary() {
-  printf '%s\n' "$REQUESTS" | run_with_timeout "$ROOT/bin/hackathonkit-mcp" --repo-root "$ROOT" 2>"$ERR_FILE"
+  printf '%s\n' "$REQUESTS" | run_with_timeout "$SMOKE_TIMEOUT" "$ROOT/bin/hackathonkit-mcp" --repo-root "$ROOT" 2>"$ERR_FILE"
 }
 
 fail_with_stderr() {
@@ -50,7 +57,7 @@ fail_with_stderr() {
 }
 
 run_compose() {
-  printf '%s\n' "$REQUESTS" | run_with_timeout "$DOCKER_BIN" compose -f "$ROOT/docker-compose.yml" run --rm -T hackathonkit-mcp 2>"$ERR_FILE"
+  printf '%s\n' "$REQUESTS" | run_with_timeout "$SMOKE_COMPOSE_TIMEOUT" "$DOCKER_BIN" compose -f "$ROOT/docker-compose.yml" run --rm -T hackathonkit-mcp 2>"$ERR_FILE"
 }
 
 case "$TRANSPORT" in
@@ -79,7 +86,13 @@ case "$TRANSPORT" in
       if [ -n "${HACKATHONKIT_SMOKE_SKIP_STALE:-}" ]; then
         NEWEST=""
       else
-        NEWEST=$(find "$ROOT/cmd" "$ROOT/internal" -name '*.go' -newer "$ROOT/bin/hackathonkit-mcp" 2>/dev/null | LC_ALL=C sort | head -n 1)
+        # Scan the whole module for every build-affecting input (sources, the
+        # module files, Makefile and embedded assets), not just *.go under
+        # cmd//internal/, so a go.mod-only or asset change still marks the
+        # binary stale.
+        NEWEST=$(find "$ROOT" \
+            \( -path "$ROOT/.git" -o -path "$ROOT/node_modules" -o -path "$ROOT/data" -o -path "$ROOT/evals" -o -path "$ROOT/plugins" -o -path "$ROOT/bin" -o -path "$ROOT/logs" -o -path "$ROOT/models" \) -prune -o \
+            \( -name '*.go' -o -name 'go.mod' -o -name 'go.sum' -o -name 'Makefile' -o -name '*.html' -o -name '*.js' -o -name '*.css' -o -name '*.sql' -o -name '*.tmpl' -o -name '*.tpl' \) -newer "$ROOT/bin/hackathonkit-mcp" -print 2>/dev/null | LC_ALL=C sort | head -n 1)
       fi
       if [ -n "$NEWEST" ] && command -v "$DOCKER_BIN" >/dev/null 2>&1; then
         echo "[smoke] bin/hackathonkit-mcp is older than $NEWEST; using the compose runtime" >&2
@@ -88,7 +101,7 @@ case "$TRANSPORT" in
         fi
       else
         if [ -n "$NEWEST" ]; then
-          echo "[smoke] warning: bin/hackathonkit-mcp is older than $NEWEST" >&2
+          echo "[smoke] warning: bin/hackathonkit-mcp is older than $NEWEST and docker is unavailable; the smoke result may reflect stale sources (rebuild with scripts/repair.sh or pass --binary)" >&2
         fi
         if ! OUT="$(run_binary)"; then
           fail_with_stderr "local binary failed"
@@ -145,7 +158,14 @@ for rid in (1, 2, 3):
 else
   # Reject duplicate and missing integer ids: sorting without de-duplication
   # would let three responses that are all id=1 pass as a valid handshake.
-  GOT_IDS_RAW=$(printf '%s\n' "$OUT" | grep -o '"id"[[:space:]]*:[[:space:]]*[0-9]*' | sed 's/.*[^0-9]\([0-9]*\)$/\1/')
+  # Take only the first "id" per line (the top-level JSON-RPC id); a nested
+  # "id" inside a system.context result must not inflate the count.
+  GOT_IDS_RAW=$(printf '%s\n' "$OUT" | awk '
+    match($0, /"id"[[:space:]]*:[[:space:]]*[0-9]+/) {
+      s = substr($0, RSTART, RLENGTH)
+      sub(/.*[^0-9]/, "", s)
+      print s
+    }')
   GOT_ID_COUNT=$(printf '%s\n' "$GOT_IDS_RAW" | grep -c . || true)
   GOT_IDS=$(printf '%s\n' "$GOT_IDS_RAW" | sort | uniq | paste -sd, -)
   if [ "$GOT_ID_COUNT" != "3" ] || [ "$GOT_IDS" != "1,2,3" ]; then

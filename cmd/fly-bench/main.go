@@ -194,7 +194,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		GeneratedAt: time.Now().UTC(),
 		Suite:       *suite,
 		Summary:     summarize(results, topK),
-		Determinism: "warm router, full ranked order compared across repeats (caches primed before the loop)",
+		Determinism: "warm router, full ranked order and scores compared across repeats (caches primed before the loop)",
 		Rows:        results,
 	}
 	path, err := save(root, rep)
@@ -263,14 +263,15 @@ func top1(recs []fly.Recommendation) string {
 	return recs[0].Capability
 }
 
-// sameOrder reports whether two recommendation lists are identical, including
-// their full ranked order (not just the top-1 capability).
+// sameOrder reports whether two recommendation lists are identical, comparing
+// both the full ranked order and each entry's score (the field that actually
+// drives ordering and is persisted in the router output).
 func sameOrder(a, b []fly.Recommendation) bool {
 	if len(a) != len(b) {
 		return false
 	}
 	for i := range a {
-		if a[i].Capability != b[i].Capability {
+		if a[i].Capability != b[i].Capability || a[i].Score != b[i].Score {
 			return false
 		}
 	}

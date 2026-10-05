@@ -32,14 +32,18 @@ func processAlive(pid int) bool {
 	}
 	handle, err := syscall.OpenProcess(processQueryLimitedInformation, false, uint32(pid))
 	if err != nil {
-		// ERROR_ACCESS_DENIED means the process exists but cannot be queried;
-		// only a nonexistent pid (ERROR_INVALID_PARAMETER) is not alive.
-		return errors.Is(err, windows.ERROR_ACCESS_DENIED)
+		// Only a nonexistent pid (ERROR_INVALID_PARAMETER) is definitively dead.
+		// Any other failure (ACCESS_DENIED, or a transient/environmental error
+		// such as ERROR_NOT_ENOUGH_MEMORY) fails closed and reports the process
+		// as alive, so a probe error cannot make a running daemon look stopped
+		// and get its pid file dropped.
+		return !errors.Is(err, windows.ERROR_INVALID_PARAMETER)
 	}
 	defer syscall.CloseHandle(handle)
 	var code uint32
 	if err := syscall.GetExitCodeProcess(handle, &code); err != nil {
-		return false
+		// Fail closed on a query failure rather than assuming the process died.
+		return true
 	}
 	return code == stillActive
 }

@@ -31,7 +31,7 @@ func useSSLEnv() bool {
 }
 
 func SettingsFromEnv() Settings {
-	bucket := os.Getenv("MINIO_BUCKET")
+	bucket := strings.TrimSpace(os.Getenv("MINIO_BUCKET"))
 	if bucket == "" {
 		bucket = "hackathonkit"
 	}
@@ -55,6 +55,13 @@ func Open(ctx context.Context, s Settings) (*Client, error) {
 	s.Endpoint = strings.TrimSpace(s.Endpoint)
 	s.AccessKey = strings.TrimSpace(s.AccessKey)
 	s.SecretKey = strings.TrimSpace(s.SecretKey)
+	// A whitespace-only bucket (common in a CRLF .env) is not a valid name;
+	// treat it as unset and fall back to the default rather than passing it to
+	// minio-go, which would reject it and silently disable object storage.
+	s.Bucket = strings.TrimSpace(s.Bucket)
+	if s.Bucket == "" {
+		s.Bucket = "hackathonkit"
+	}
 	if s.Endpoint == "" {
 		return nil, fmt.Errorf("objectstore: MINIO_ENDPOINT is not set")
 	}

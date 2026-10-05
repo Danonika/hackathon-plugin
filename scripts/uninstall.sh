@@ -70,7 +70,9 @@ if ! command -v codex >/dev/null 2>&1; then
 elif [ "$APPLY" = "1" ]; then
   # A removal failure is only a real problem when the plugin/marketplace was
   # actually registered; a benign "not installed" no-op must not fail the run.
-  if codex plugin list 2>/dev/null | grep -q hackathonkit; then
+  # Boundary-anchored so a plugin whose name merely contains "hackathonkit"
+  # (hackathonkit-tools, my-hackathonkit) cannot trigger a destructive remove.
+  if codex plugin list 2>/dev/null | grep -Eq '(^|[^A-Za-z0-9_-])hackathonkit([^A-Za-z0-9_-]|$)'; then
     if ! codex plugin remove hackathonkit >/dev/null 2>&1; then
       echo "[uninstall] warning: codex plugin remove failed" >&2
       CODEX_FAIL=1
@@ -79,7 +81,8 @@ elif [ "$APPLY" = "1" ]; then
     echo "[uninstall] hackathonkit plugin is not registered; skipping plugin remove"
   fi
   if MARKETPLACES=$(codex plugin marketplace list 2>/dev/null); then
-    if printf '%s' "$MARKETPLACES" | grep -q hackathonkit-local; then
+    # Boundary-anchored: hackathonkit-local-v2 must not match the exact name.
+    if printf '%s' "$MARKETPLACES" | grep -Eq '(^|[^A-Za-z0-9_-])hackathonkit-local([^A-Za-z0-9_-]|$)'; then
       if ! codex plugin marketplace remove hackathonkit-local >/dev/null 2>&1; then
         echo "[uninstall] warning: codex marketplace remove failed" >&2
         CODEX_FAIL=1
@@ -88,7 +91,9 @@ elif [ "$APPLY" = "1" ]; then
       echo "[uninstall] hackathonkit-local marketplace is not registered; skipping marketplace remove"
     fi
   elif ! codex plugin marketplace remove hackathonkit-local >/dev/null 2>&1; then
-    echo "[uninstall] note: could not remove hackathonkit-local marketplace (it may not be registered)" >&2
+    # Best-effort: `marketplace list` failed, so a remove failure here most
+    # likely means it was never registered; do not fail the run for it.
+    echo "[uninstall] note: could not remove hackathonkit-local marketplace (best-effort; it may not be registered)" >&2
   fi
   if [ "$CODEX_FAIL" -eq 0 ]; then
     echo "[uninstall] removed hackathonkit plugin and marketplace"
@@ -96,8 +101,22 @@ elif [ "$APPLY" = "1" ]; then
     echo "[uninstall] plugin/marketplace removal reported warnings" >&2
   fi
 else
-  echo "would run: codex plugin remove hackathonkit"
-  echo "would run: codex plugin marketplace remove hackathonkit-local"
+  # Mirror the apply-path conditions (registration checks) so the preview does
+  # not advertise a removal that apply would actually skip.
+  if codex plugin list 2>/dev/null | grep -Eq '(^|[^A-Za-z0-9_-])hackathonkit([^A-Za-z0-9_-]|$)'; then
+    echo "would run: codex plugin remove hackathonkit"
+  else
+    echo "[uninstall] hackathonkit plugin is not registered; skipping plugin remove"
+  fi
+  if MARKETPLACES=$(codex plugin marketplace list 2>/dev/null); then
+    if printf '%s' "$MARKETPLACES" | grep -Eq '(^|[^A-Za-z0-9_-])hackathonkit-local([^A-Za-z0-9_-]|$)'; then
+      echo "would run: codex plugin marketplace remove hackathonkit-local"
+    else
+      echo "[uninstall] hackathonkit-local marketplace is not registered; skipping marketplace remove"
+    fi
+  else
+    echo "would run: codex plugin marketplace remove hackathonkit-local (marketplace list unavailable)"
+  fi
 fi
 
 # Remove the /verify custom prompt this installer placed for Codex.

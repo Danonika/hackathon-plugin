@@ -431,7 +431,7 @@ func TestRenderHandoffBranches(t *testing.T) {
 		PendingDecisions: 2,
 	}
 	text := RenderHandoff(handoff)
-	for _, want := range []string{"worktree: wt-1", "risk reasons: failed calls", "next:", "mcp_call data.inspect [ok]", "pending eval decisions: 2"} {
+	for _, want := range []string{"worktree: wt-1", "risk reasons: failed calls", "next:", "mcp_call data.inspect [ok]", "recent eval decisions: 2"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("handoff missing %q:\n%s", want, text)
 		}
@@ -453,6 +453,18 @@ func TestPayloadHasPanic(t *testing.T) {
 	}
 	if payloadHasPanic(map[string]any{"bad": make(chan int)}) {
 		t.Fatal("unmarshalable payload must not panic")
+	}
+	if payloadHasPanic(map[string]any{"panic": false}) {
+		t.Fatal(`{"panic":false} must not count as a panic`)
+	}
+	if payloadHasPanic(map[string]any{"panics": float64(0), "panic_count": float64(0)}) {
+		t.Fatal(`zero panic counts must not count as a panic`)
+	}
+	if !payloadHasPanic(map[string]any{"panic": true}) {
+		t.Fatal(`{"panic":true} must count as a panic`)
+	}
+	if !payloadHasPanic(map[string]any{"panic_count": float64(2)}) {
+		t.Fatal("a positive panic count must count as a panic")
 	}
 }
 

@@ -29,16 +29,19 @@ LOCK="$DST.lock"
 LOCKED=0
 OLD=""
 finish() {
-  if [ -d "$OLD" ] && [ ! -d "$DST" ]; then
+  # Restore only when the swap never completed: the backup exists and the live
+  # path is truly absent (an existing-but-wrong or dangling-symlink $DST means
+  # the swap did complete or an external writer intervened, so do not clobber).
+  if [ -n "$OLD" ] && [ -d "$OLD" ] && [ ! -e "$DST" ] && [ ! -L "$DST" ]; then
     if mv "$OLD" "$DST" 2>/dev/null; then
       OLD=""
     else
       echo "[sync-skills] WARNING: could not restore $DST from $OLD; leaving the backup in place" >&2
     fi
   fi
-  # Only delete the backup once the live mirror is known to exist, so a failed
-  # restore never destroys the only good copy.
-  if [ -n "$OLD" ] && [ -d "$DST" ]; then
+  # Delete the backup only when the live mirror is a real directory (not a
+  # symlink), so a swapped-in link cannot cause the good copy to be discarded.
+  if [ -n "$OLD" ] && [ -d "$DST" ] && [ ! -L "$DST" ]; then
     rm -rf "$OLD"
   fi
   rm -rf "$TMP"
@@ -77,13 +80,25 @@ elif command -v cmp >/dev/null 2>&1; then
     echo "[sync-skills] mirror file list differs from the source" >&2
     exit 1
   fi
-  cd "$SRC" || exit 1
-  for rel in $A_LIST; do
-    if ! cmp -s "$SRC/$rel" "$TMP/$rel"; then
-      echo "[sync-skills] mirror content differs: $rel" >&2
-      exit 1
-    fi
-  done
+  # Compare by path via find -exec: find passes each path as a whole argument,
+  # so spaces/tabs cannot split it. Newline-containing names are rejected, as
+  # they cannot be represented unambiguously in the line-based list.
+  if ! find "$SRC" -type f -exec sh -c '
+      src_root=$1; dst_root=$2
+      # Command substitution strips trailing newlines, so append a sentinel and
+      # remove it to obtain a literal newline character.
+      newline=$(printf "\nX"); newline=${newline%X}
+      shift 2
+      for src do
+        rel=${src#"$src_root"/}
+        case "$rel" in
+          *"$newline"*) echo "[sync-skills] refusing: source filename contains a newline: $rel" >&2; exit 1 ;;
+        esac
+        cmp -s "$src" "$dst_root/$rel" || { echo "[sync-skills] mirror content differs: $rel" >&2; exit 1; }
+      done
+    ' sh "$SRC" "$TMP" {} +; then
+    exit 1
+  fi
 else
   echo "[sync-skills] neither diff nor cmp is available; refusing to publish an unverified mirror" >&2
   exit 1

@@ -90,8 +90,9 @@ func cloneSlice(in []any) []any {
 }
 
 // cloneValue deep-copies the JSON-like containers used by input schemas,
-// including typed slices, maps and nested combinations, so callers can never
-// mutate registry state through a returned schema.
+// including typed slices, maps and nested combinations. Pointers, structs and
+// arrays fall through unchanged (schemas are built from JSON-like values only),
+// so callers must not rely on those being detached.
 func cloneValue(v any) any {
 	switch value := v.(type) {
 	case nil:
