@@ -20,9 +20,11 @@ func newTestFlyFeed(t *testing.T) *flyLiveFeed {
 	if err := os.Mkdir(filepath.Join(root, "logs"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	feed := newFlyLiveHandler(root).(*flyLiveFeed)
+	// Build without the poller, configure, then start it explicitly.
+	feed := newFlyLiveFeed(root)
 	feed.pollInterval = time.Millisecond
 	feed.heartbeat = time.Hour
+	feed.close() // keep the poller stopped; tests drive refresh deterministically
 	return feed
 }
 
@@ -41,11 +43,11 @@ func appendFlyLog(t *testing.T, feed *flyLiveFeed, text string) {
 
 func TestFlyLiveTailPreservesHistoryAndWaitsForWholeEvents(t *testing.T) {
 	feed := newTestFlyFeed(t)
-	if first := feed.snapshot(true); first.FeedAvailable || first.Recommendation != nil {
+	if first := feed.refreshSnapshot(true); first.FeedAvailable || first.Recommendation != nil {
 		t.Fatalf("missing log should be waiting, not fake activity: %+v", first)
 	}
 	appendFlyLog(t, feed, "{\"type\":\"recommend\",\"ts\":\"2026-09-21T10:00:00Z\",\"active_kc\":[{\"index\":4000,\"activation\":0.04}],\"kc_total\":4133}\n")
-	first := feed.snapshot(true)
+	first := feed.refreshSnapshot(true)
 	if !first.Initial || !first.FeedAvailable || first.Recommendation == nil {
 		t.Fatalf("missing initial history: %+v", first)
 	}
@@ -54,20 +56,20 @@ func TestFlyLiveTailPreservesHistoryAndWaitsForWholeEvents(t *testing.T) {
 	if event["activation_complete"] != false || event["activation_available"] != true || event["event_id"] == "" {
 		t.Fatalf("legacy truncated data was not labelled correctly: %v", event)
 	}
-	if unchanged := feed.snapshot(false); unchanged.Revision != first.Revision || unchanged.Initial {
+	if unchanged := feed.refreshSnapshot(false); unchanged.Revision != first.Revision || unchanged.Initial {
 		t.Fatalf("unchanged poll replayed an event: %+v", unchanged)
 	}
 	appendFlyLog(t, feed, "{\"type\":\"feedback\",\"ts\":\"2026-09-21T10:00:01Z\"")
-	if partial := feed.snapshot(false); partial.Revision != first.Revision || partial.Feedback != nil {
+	if partial := feed.refreshSnapshot(false); partial.Revision != first.Revision || partial.Feedback != nil {
 		t.Fatalf("unfinished JSON was emitted: %+v", partial)
 	}
 	appendFlyLog(t, feed, ",\"reward\":true}\n")
-	updated := feed.snapshot(false)
+	updated := feed.refreshSnapshot(false)
 	if updated.Initial || updated.Revision == first.Revision || updated.Feedback == nil || !bytes.Equal(updated.Recommendation, first.Recommendation) {
 		t.Fatalf("feedback update lost coordinated recommendation: %+v", updated)
 	}
 	// A new consumer restores the same feedback ID, not a new reward.
-	if reconnected := feed.snapshot(true); !reconnected.Initial || !bytes.Equal(reconnected.Feedback, updated.Feedback) || reconnected.Revision != updated.Revision {
+	if reconnected := feed.refreshSnapshot(true); !reconnected.Initial || !bytes.Equal(reconnected.Feedback, updated.Feedback) || reconnected.Revision != updated.Revision {
 		t.Fatalf("reconnection changed event identity: %+v", reconnected)
 	}
 }
@@ -76,14 +78,14 @@ func TestFlyLiveBoundedTailAndRotation(t *testing.T) {
 	feed := newTestFlyFeed(t)
 	prefix := strings.Repeat(" ", int(flyLiveReadLimit)+100)
 	appendFlyLog(t, feed, prefix+"\n{\"type\":\"feedback\",\"ts\":\"old\",\"reward\":true}\n")
-	first := feed.snapshot(true)
+	first := feed.refreshSnapshot(true)
 	if first.Feedback == nil || int64(len(feed.pending)) > flyLiveReadLimit {
 		t.Fatalf("bounded tail did not find latest complete record: %+v", first)
 	}
 	if err := os.WriteFile(feed.path, []byte("{\"type\":\"feedback\",\"ts\":\"new\",\"reward\":false}\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	rotated := feed.snapshot(false)
+	rotated := feed.refreshSnapshot(false)
 	if rotated.Revision == first.Revision || !bytes.Contains(rotated.Feedback, []byte(`"ts":"new"`)) {
 		t.Fatalf("truncated/rotated log not followed: %+v", rotated)
 	}
@@ -126,8 +128,23 @@ func readFlyFrame(t *testing.T, frames <-chan string) flyLiveSnapshot {
 }
 
 func TestFlyLiveSSEOnlyChangesAndStopsOnCancel(t *testing.T) {
-	feed := newTestFlyFeed(t)
+	// The poller must be running: this test asserts an appended event reaches a
+	// connected subscriber.
+	root := t.TempDir()
+	if err := os.Mkdir(filepath.Join(root, "logs"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	feed := newFlyLiveFeed(root)
+	feed.pollInterval = time.Millisecond
+	feed.heartbeat = time.Hour
+	go feed.run()
+	t.Cleanup(feed.close)
 	appendFlyLog(t, feed, "{\"type\":\"feedback\",\"ts\":\"initial\",\"reward\":true}\n")
+	// Wait until the poller has picked up the initial event.
+	deadline := time.Now().Add(2 * time.Second)
+	for feed.snapshot(true).Feedback == nil && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	recorder := &flyStreamRecorder{header: make(http.Header), frames: make(chan string, 8)}

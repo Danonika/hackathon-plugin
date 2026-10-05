@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -43,14 +44,89 @@ type flyLiveFeed struct {
 	feedback       json.RawMessage
 	pollInterval   time.Duration
 	heartbeat      time.Duration
+
+	// published is the latest immutable snapshot, read by every subscriber and
+	// the ?snapshot=1 endpoint without touching the file or the lock. A single
+	// poller goroutine owns the file state and publishes new values.
+	published atomic.Pointer[flyLiveSnapshot]
+	stop      chan struct{}
+	stopOnce  sync.Once
 }
 
 func newFlyLiveHandler(root string) http.Handler {
+	f := newFlyLiveFeed(root)
+	f.publish(false)
+	go f.run()
+	return f
+}
+
+// newFlyLiveFeed builds the feed without starting the poller, so callers can
+// configure intervals before `run` reads them.
+func newFlyLiveFeed(root string) *flyLiveFeed {
 	return &flyLiveFeed{
 		path:         filepath.Join(root, "logs", "fly-neuron-events.jsonl"),
 		pollInterval: 250 * time.Millisecond,
 		heartbeat:    15 * time.Second,
+		stop:         make(chan struct{}),
 	}
+}
+
+// run is the single owner of the file state: it refreshes on every poll and
+// publishes an immutable snapshot, so readers never perform disk I/O or block
+// one another behind the mutex.
+func (f *flyLiveFeed) run() {
+	ticker := time.NewTicker(f.pollInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-f.stop:
+			return
+		case <-ticker.C:
+			f.publish(false)
+		}
+	}
+}
+
+// close stops the poller. Safe to call more than once.
+func (f *flyLiveFeed) close() {
+	f.stopOnce.Do(func() { close(f.stop) })
+}
+
+// publish refreshes the file state under the lock and stores the resulting
+// immutable snapshot for lock-free readers.
+func (f *flyLiveFeed) publish(initial bool) {
+	f.mu.Lock()
+	f.refresh()
+	snapshot := &flyLiveSnapshot{
+		SchemaVersion:  1,
+		Revision:       strconv.FormatUint(f.revision, 10),
+		SentAt:         time.Now().UTC().Format(time.RFC3339Nano),
+		Initial:        initial,
+		FeedAvailable:  f.available,
+		Recommendation: append(json.RawMessage(nil), f.recommendation...),
+		Feedback:       append(json.RawMessage(nil), f.feedback...),
+	}
+	f.mu.Unlock()
+	f.published.Store(snapshot)
+}
+
+// snapshot returns the latest published snapshot, or a synthesized empty one if
+// the poller has not run yet. It never blocks on the file. The SSE and REST
+// paths call this; only the poller goroutine performs disk I/O.
+func (f *flyLiveFeed) snapshot(initial bool) flyLiveSnapshot {
+	if snap := f.published.Load(); snap != nil {
+		out := *snap
+		out.Initial = initial
+		return out
+	}
+	return flyLiveSnapshot{SchemaVersion: 1, Revision: "0", Initial: initial, SentAt: time.Now().UTC().Format(time.RFC3339Nano)}
+}
+
+// refreshSnapshot refreshes the file state and returns the fresh snapshot. It is
+// used by tests and direct callers; the serving paths use snapshot().
+func (f *flyLiveFeed) refreshSnapshot(initial bool) flyLiveSnapshot {
+	f.publish(initial)
+	return f.snapshot(initial)
 }
 
 func (f *flyLiveFeed) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -116,21 +192,9 @@ func (f *flyLiveFeed) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (f *flyLiveFeed) snapshot(initial bool) flyLiveSnapshot {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.refresh()
-	return flyLiveSnapshot{
-		SchemaVersion: 1,
-		Revision:      strconv.FormatUint(f.revision, 10),
-		SentAt:        time.Now().UTC().Format(time.RFC3339Nano),
-		Initial:       initial, FeedAvailable: f.available,
-		Recommendation: f.recommendation, Feedback: f.feedback,
-	}
-}
-
-// refresh is called under mu. Unchanged polls only stat the file. Appends are
-// consumed once, shared by all subscribers, including split/unfinished lines.
+// refresh is called under mu by the poller. Unchanged polls only stat the file.
+// Appends are consumed once and published to all subscribers, including
+// split/unfinished lines.
 func (f *flyLiveFeed) refresh() {
 	info, err := os.Stat(f.path)
 	if err != nil {
