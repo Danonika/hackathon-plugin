@@ -39,10 +39,14 @@ func redactURLUserinfo(text string) string {
 		idx += i
 		b.WriteString(text[i : idx+3])
 		rest := text[idx+3:]
+		// Bound the authority by whitespace/quotes only: a password may contain
+		// '/', '?' or '#' unencoded, and cutting at those would place the '@'
+		// after the cut and leak the credential. Over-redacting a benign
+		// `host/path@x` is preferred to a leak.
 		end := len(rest)
 		for j := 0; j < len(rest); j++ {
 			switch rest[j] {
-			case '/', '?', '#', ' ', '\t', '\n', '\r', '"', '\'':
+			case ' ', '\t', '\n', '\r', '"', '\'':
 				end = j
 			}
 			if end == j {
@@ -75,10 +79,21 @@ func redactMarkerValues(text, marker string) string {
 		idx += searchFrom
 		valueStart := idx + len(marker)
 		// The separator marker consumes one delimiter; skip any remaining
-		// whitespace so "key:  value" (double space) is redacted too.
-		for valueStart < len(text) && (text[valueStart] == ' ' || text[valueStart] == '\t') {
-			valueStart++
+		// whitespace and a stray '='/':' so "key = value" / "key : value"
+		// (spaces around the separator) is redacted too.
+		skipSeparator := func(p int) int {
+			for p < len(text) && (text[p] == ' ' || text[p] == '\t') {
+				p++
+			}
+			if p < len(text) && (text[p] == '=' || text[p] == ':') {
+				p++
+				for p < len(text) && (text[p] == ' ' || text[p] == '\t') {
+					p++
+				}
+			}
+			return p
 		}
+		valueStart = skipSeparator(valueStart)
 		quote := byte(0)
 		if valueStart < len(text) && (text[valueStart] == '"' || text[valueStart] == '\'') {
 			quote = text[valueStart]
