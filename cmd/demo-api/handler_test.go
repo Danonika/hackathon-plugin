@@ -291,7 +291,7 @@ func TestPlanEndpoints(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	rec := doRequest(t, h, http.MethodPost, "/plan/decision", `{"decision":"approve","note":"looks good"}`, map[string]string{"X-HackathonKit-Token": "s3cret"})
+	rec := doRequest(t, h, http.MethodPost, "/plan/decision", `{"decision":"approve","note":"looks good","revision":1}`, map[string]string{"X-HackathonKit-Token": "s3cret"})
 	if rec.Code != http.StatusOK {
 		t.Fatalf("approve = %d: %s", rec.Code, rec.Body.String())
 	}
@@ -304,8 +304,8 @@ func TestPlanEndpoints(t *testing.T) {
 	if _, err := os.Stat(approvalPath(root, "demo-plan")); err != nil {
 		t.Fatalf("approval file missing: %v", err)
 	}
-	if loaded := readApproval(root, "demo-plan"); loaded == nil || loaded.Decision != "approve" {
-		t.Fatalf("readApproval = %+v", loaded)
+	if loaded, err := readApproval(root, "demo-plan"); err != nil || loaded == nil || loaded.Decision != "approve" {
+		t.Fatalf("readApproval = %+v err=%v", loaded, err)
 	}
 
 	rec = doRequest(t, h, http.MethodGet, "/plan/api/latest", "", nil)
@@ -317,19 +317,19 @@ func TestPlanEndpoints(t *testing.T) {
 		t.Fatalf("latest = %+v", latest)
 	}
 
-	rec = doRequest(t, h, http.MethodPost, "/plan/decision", `{"decision":"request_changes","note":"tighten S4"}`, map[string]string{"X-HackathonKit-Token": "s3cret"})
+	rec = doRequest(t, h, http.MethodPost, "/plan/decision", `{"decision":"request_changes","note":"tighten S4","revision":1}`, map[string]string{"X-HackathonKit-Token": "s3cret"})
 	if rec.Code != http.StatusOK {
 		t.Fatalf("request_changes = %d: %s", rec.Code, rec.Body.String())
 	}
-	if loaded := readApproval(root, "demo-plan"); loaded == nil || loaded.Decision != "request_changes" {
-		t.Fatalf("readApproval after changes = %+v", loaded)
+	if loaded, err := readApproval(root, "demo-plan"); err != nil || loaded == nil || loaded.Decision != "request_changes" {
+		t.Fatalf("readApproval after changes = %+v err=%v", loaded, err)
 	}
 
 	if rec := doRequest(t, h, http.MethodPost, "/plan/decision", `{"slug":"missing-plan","decision":"approve"}`, map[string]string{"X-HackathonKit-Token": "s3cret"}); rec.Code != http.StatusNotFound {
 		t.Fatalf("unknown slug = %d, want 404", rec.Code)
 	}
 
-	rec = doRequest(t, h, http.MethodPost, "/plan/decision", `{"slug":"demo-plan","decision":"approve"}`, map[string]string{"X-HackathonKit-Token": "s3cret"})
+	rec = doRequest(t, h, http.MethodPost, "/plan/decision", `{"slug":"demo-plan","decision":"approve","revision":1}`, map[string]string{"X-HackathonKit-Token": "s3cret"})
 	if rec.Code != http.StatusOK {
 		t.Fatalf("approve by slug = %d: %s", rec.Code, rec.Body.String())
 	}
@@ -345,7 +345,7 @@ func TestPlanDecisionApprovalWriteFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 	writeTestFile(t, filepath.Join(approvalPath(root, "broken-plan"), "keep"), "x")
-	rec := doRequest(t, h, http.MethodPost, "/plan/decision", `{"decision":"approve"}`, map[string]string{"X-HackathonKit-Token": "s3cret"})
+	rec := doRequest(t, h, http.MethodPost, "/plan/decision", `{"decision":"approve","revision":1}`, map[string]string{"X-HackathonKit-Token": "s3cret"})
 	if rec.Code != http.StatusInternalServerError {
 		t.Fatalf("decision with blocked approval path = %d, want 500: %s", rec.Code, rec.Body.String())
 	}
@@ -606,8 +606,8 @@ func TestApprovalHelpers(t *testing.T) {
 	if got, want := approvalPath(root, "p"), filepath.Join(root, "evals", "plans", "p.approval.json"); got != want {
 		t.Fatalf("approvalPath = %q, want %q", got, want)
 	}
-	if got := readApproval(root, "missing"); got != nil {
-		t.Fatalf("readApproval missing = %+v", got)
+	if got, err := readApproval(root, "missing"); err != nil || got != nil {
+		t.Fatalf("readApproval missing = %+v err=%v", got, err)
 	}
 
 	record, err := writeApproval(root, "p", 2, "approve", "note")
@@ -617,9 +617,9 @@ func TestApprovalHelpers(t *testing.T) {
 	if record.Slug != "p" || record.Revision != 2 || record.DecidedAt.IsZero() {
 		t.Fatalf("record = %+v", record)
 	}
-	loaded := readApproval(root, "p")
-	if loaded == nil || loaded.Decision != "approve" || loaded.Note != "note" {
-		t.Fatalf("loaded = %+v", loaded)
+	loaded, err := readApproval(root, "p")
+	if err != nil || loaded == nil || loaded.Decision != "approve" || loaded.Note != "note" {
+		t.Fatalf("loaded = %+v err=%v", loaded, err)
 	}
 	if runtime.GOOS != "windows" {
 		info, err := os.Stat(approvalPath(root, "p"))
@@ -632,8 +632,8 @@ func TestApprovalHelpers(t *testing.T) {
 	}
 
 	writeTestFile(t, approvalPath(root, "corrupt"), "{not json")
-	if got := readApproval(root, "corrupt"); got != nil {
-		t.Fatalf("corrupt readApproval = %+v", got)
+	if got, err := readApproval(root, "corrupt"); err == nil || got != nil {
+		t.Fatalf("corrupt readApproval = %+v err=%v (want an error)", got, err)
 	}
 
 	blockedRoot := t.TempDir()
@@ -651,6 +651,16 @@ func TestPlanDecisionRevisionGuard(t *testing.T) {
 	rec := doRequest(t, h, http.MethodPost, "/plan/decision", `{"slug":"rev-plan","decision":"approve","revision":2}`, map[string]string{"X-HackathonKit-Token": "s3cret"})
 	if rec.Code != http.StatusConflict {
 		t.Fatalf("stale revision = %d, want 409: %s", rec.Code, rec.Body.String())
+	}
+	// An omitted revision (zero) and a negative revision must not bypass the
+	// guard.
+	rec = doRequest(t, h, http.MethodPost, "/plan/decision", `{"slug":"rev-plan","decision":"approve"}`, map[string]string{"X-HackathonKit-Token": "s3cret"})
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("omitted revision = %d, want 409: %s", rec.Code, rec.Body.String())
+	}
+	rec = doRequest(t, h, http.MethodPost, "/plan/decision", `{"slug":"rev-plan","decision":"approve","revision":-1}`, map[string]string{"X-HackathonKit-Token": "s3cret"})
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("negative revision = %d, want 409: %s", rec.Code, rec.Body.String())
 	}
 	rec = doRequest(t, h, http.MethodPost, "/plan/decision", `{"slug":"rev-plan","decision":"approve","revision":3}`, map[string]string{"X-HackathonKit-Token": "s3cret"})
 	if rec.Code != http.StatusOK {

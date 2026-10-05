@@ -31,7 +31,7 @@ import (
 	"hackathonkit.local/agentkit/internal/tools"
 )
 
-const version = "0.16.76"
+const version = "0.16.77"
 
 // redactBackendError strips credentials from driver/connection errors before
 // they are logged (DSNs can appear in Postgres and MinIO errors).

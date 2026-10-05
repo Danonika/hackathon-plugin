@@ -298,9 +298,15 @@ func newHandler(root string, mgr *config.Manager, meta metadata.Recorder, token 
 			writeJSON(w, http.StatusOK, map[string]any{"plan": nil, "approval": nil})
 			return
 		}
+		approval, err := readApproval(root, plan.Slug)
+		if err != nil {
+			// A corrupt/unreadable approval must not be reported as "none".
+			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+			return
+		}
 		writeJSON(w, http.StatusOK, map[string]any{
 			"plan":     plan,
-			"approval": readApproval(root, plan.Slug),
+			"approval": approval,
 		})
 	})
 	mux.HandleFunc("/plan/decision", func(w http.ResponseWriter, r *http.Request) {
@@ -340,7 +346,11 @@ func newHandler(root string, mgr *config.Manager, meta metadata.Recorder, token 
 			writeJSON(w, http.StatusNotFound, map[string]any{"error": "no plan to review"})
 			return
 		}
-		if body.Revision > 0 && body.Revision != plan.Revision {
+		// Require the client's revision to match the current plan. A client that
+		// omits it (zero) or sends a negative value must not bypass the guard,
+		// otherwise a stale client could overwrite a decision taken against a
+		// newer revision.
+		if body.Revision != plan.Revision {
 			writeJSON(w, http.StatusConflict, map[string]any{"error": "plan revision changed; reload before deciding", "revision": plan.Revision})
 			return
 		}
@@ -443,16 +453,22 @@ func approvalPath(root, slug string) string {
 	return filepath.Join(plans.Dir(root), slug+".approval.json")
 }
 
-func readApproval(root, slug string) *planApproval {
+// readApproval loads a plan approval. A missing file is (nil, nil); any other
+// failure (permission, corrupt JSON) is returned as an error so a corrupt
+// approval is not silently indistinguishable from "not yet decided".
+func readApproval(root, slug string) (*planApproval, error) {
 	data, err := os.ReadFile(approvalPath(root, slug))
 	if err != nil {
-		return nil
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("read approval for %s: %w", slug, err)
 	}
 	var record planApproval
-	if json.Unmarshal(data, &record) != nil {
-		return nil
+	if err := json.Unmarshal(data, &record); err != nil {
+		return nil, fmt.Errorf("approval for %s is corrupt: %w", slug, err)
 	}
-	return &record
+	return &record, nil
 }
 
 func writeApproval(root, slug string, revision int, decision, note string) (planApproval, error) {
