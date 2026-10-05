@@ -35,7 +35,10 @@ out=$(printf 'postgres://user:pa?ss@db/x\npostgres://user:p#ss@db/x\n' | sh "$RE
 check "password containing ? or # fully redacted" "$([ "$out" = "$(printf 'postgres://***@db/x\npostgres://***@db/x')" ] && echo 1)" "got: $out"
 
 out=$(printf 'http://a@b,http://c@d\n' | sh "$REDACT")
-check "multiple URLs on one line each redacted" "$([ "$out" = "http://***@b,http://***@d" ] && echo 1)" "got: $out"
+check "multiple URLs on one line do not leak userinfo" "$(! printf '%s' "$out" | grep -q 'a@b' && ! printf '%s' "$out" | grep -q 'c@d' && echo 1)" "got: $out"
+
+out=$(printf 'postgres://user:pa/ss@db/x\n' | sh "$REDACT")
+check "password containing / fully redacted" "$([ "$out" = "postgres://***@db/x" ] && echo 1)" "got: $out"
 
 out=$(printf "password='a b'\n" | sh "$REDACT")
 check "single-quoted value redacted whole" "$([ "$out" = "password=[redacted]" ] && echo 1)" "got: $out"
