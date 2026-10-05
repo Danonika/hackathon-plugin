@@ -1,19 +1,30 @@
+# Normalise line endings to LF in the repository; the working tree keeps LF
+# except for the Windows-native formats listed below (which force CRLF).
 * text=auto eol=lf
 
-# Binary content: never normalise or diff as text.
+# Binary content: never normalise or diff as text. Listed explicitly because the
+# text=auto NUL-byte heuristic can misfire on small binaries.
 *.png binary
 *.jpg binary
 *.jpeg binary
 *.gif binary
 *.ico binary
 *.webp binary
+*.bmp binary
+*.tiff binary
+*.tif binary
+*.avif binary
 *.pdf binary
 *.zip binary
 *.gz binary
 *.tgz binary
+*.7z binary
+*.tar binary
 *.woff binary
 *.woff2 binary
 *.ttf binary
+*.otf binary
+*.eot binary
 *.stl binary
 *.obj binary
 *.glb binary
@@ -22,6 +33,19 @@
 *.m4a binary
 *.mp3 binary
 *.wav binary
+*.ogg binary
+*.flac binary
+# Compiled artifacts / archives.
+*.exe binary
+*.dll binary
+*.so binary
+*.dylib binary
+*.a binary
+*.o binary
+*.jar binary
+*.class binary
+*.wasm binary
+*.pyc binary
 
 *.sh text eol=lf
 *.go text eol=lf
@@ -38,3 +62,11 @@
 *.wsf text eol=crlf
 *.cmd text eol=crlf
 *.bat text eol=crlf
+# Windows-native project/registry files must keep CRLF.
+*.sln text eol=crlf
+*.csproj text eol=crlf
+*.vcxproj text eol=crlf
+*.vcxproj.filters text eol=crlf
+*.props text eol=crlf
+*.targets text eol=crlf
+*.reg text eol=crlf

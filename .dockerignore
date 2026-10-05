@@ -5,10 +5,29 @@
 # root, so nested secret files would otherwise be copied into the build.
 **/.env*
 !**/.env.example
+# Generated/runtime state and local toolchains: never send these to the daemon.
 bin
 data
 logs
 evals
 .agents/skills
+.claude/skills
+.opencode/commands
+.claude/commands
+node_modules
+**/node_modules
+__pycache__
+**/__pycache__
+**/*.pyc
+.venv
+**/.venv
+coverage
+htmlcov
+/tmp
+**/*.log
+# Generated install state (never committed).
+configs/install-state.json
+configs/resources.json
+plugins/hackathonkit/.mcp.json
 **/*.md
 !README.md

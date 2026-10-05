@@ -27,6 +27,11 @@ web_search = "disabled"
 # NOTE: keep `command`/`args` (and every other root-level key) ABOVE the first
 # [table] header. TOML tables persist until the next header, so a key placed
 # after [mcp_servers.hackathonkit] is parsed as a server option and silently ignored.
+#
+# `sh <launcher>` (not `sh -c "..."`): the launcher resolves its own repo root
+# from its script path, so no shell string interpolation is needed and raw
+# shell errors cannot reach the MCP stdio channel. Running it through `sh` also
+# avoids depending on the checkout's executable bit.
 [mcp_servers.hackathonkit]
 command = "sh"
 args = ["plugins/hackathonkit/scripts/hackathonkit-mcp-launcher.sh"]
