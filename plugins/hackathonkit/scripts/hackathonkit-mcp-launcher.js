@@ -32,7 +32,10 @@ function assertCmdSafeArguments(args) {
   }
 }
 if (isWindows) {
-  assertCmdSafeArguments(process.argv.slice(2));
+  // Validate the launcher path too: cmd.exe re-parses the whole command line,
+  // including the (install-derived) path, so a crafted install path with
+  // metacharacters could break out of quoting.
+  assertCmdSafeArguments([launcher, ...process.argv.slice(2)]);
 }
 
 const result = isWindows

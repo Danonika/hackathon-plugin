@@ -44,7 +44,13 @@ out=$(printf 'http://a@b http://c@d\n' | sh "$REDACT")
 check "two whitespace-separated URLs each redacted" "$([ "$out" = "http://***@b http://***@d" ] && echo 1)" "got: $out"
 
 out=$(printf 'http://a@b,http://c@d\n' | sh "$REDACT")
-check "comma-joined URLs do not leak userinfo" "$(! printf '%s' "$out" | grep -q 'a@b' && ! printf '%s' "$out" | grep -q 'c@d' && echo 1)" "got: $out"
+# Whitespace-bounded match takes the last '@', so the whole token collapses to
+# one redaction. Assert the exact output (not just the absence of secrets) so a
+# dropped or mangled line is caught too.
+check "comma-joined URLs collapse without leaking userinfo" "$([ "$out" = "http://***@d" ] && echo 1)" "got: $out"
+
+out=$(printf 'Authorization: Bearer abc123token\napi_key1=xyz\n' | sh "$REDACT")
+check "Authorization Bearer token and numbered key redacted" "$(! printf '%s' "$out" | grep -q 'abc123token' && ! printf '%s' "$out" | grep -q 'xyz' && echo 1)" "got: $out"
 
 out=$(printf 'postgres://user:pa/ss@db/x\n' | sh "$REDACT")
 check "password containing / fully redacted" "$([ "$out" = "postgres://***@db/x" ] && echo 1)" "got: $out"

@@ -57,7 +57,15 @@ for arg in "$@"; do
   esac
 done
 
+if [ -L "$REPO_ROOT/bin/hackathonkit-mcp" ]; then
+  # A symlinked binary can be re-targeted by another local user between the
+  # check and the exec; refuse it outright.
+  echo "Hackathon Agent Kit launcher: refusing to exec a symlinked binary: $REPO_ROOT/bin/hackathonkit-mcp" >&2
+  exit 1
+fi
+
 if [ -f "$REPO_ROOT/bin/hackathonkit-mcp" ] && [ -x "$REPO_ROOT/bin/hackathonkit-mcp" ]; then
+  # Re-verify immediately before exec to narrow the check/use window.
   exec "$REPO_ROOT/bin/hackathonkit-mcp" --repo-root "$REPO_ROOT" "$@"
 fi
 

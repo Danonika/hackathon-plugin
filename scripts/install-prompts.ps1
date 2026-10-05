@@ -85,6 +85,14 @@ switch ($Action) {
         continue
       }
       if ($same) {
+        # Refuse to remove anything that is not a regular file (a symlink or
+        # junction could redirect the removal), matching install-prompts.sh.
+        $item = Get-Item -LiteralPath $dest -Force -ErrorAction SilentlyContinue
+        if (-not $item -or $item.PSIsContainer -or ($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint)) {
+          Write-Warning "[prompts] refusing to remove a non-regular file: $dest"
+          $kept++
+          continue
+        }
         try { Remove-Item -LiteralPath $dest -Force -ErrorAction Stop; $removed++ }
         catch { Write-Warning "[prompts] could not remove ${dest}: $($_.Exception.Message)"; $kept++ }
       } else {

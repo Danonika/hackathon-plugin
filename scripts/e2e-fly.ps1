@@ -30,9 +30,12 @@ function Invoke-ExeBounded([string[]]$ExeArgs, [string]$InFile, [string]$OutFile
       if (-not $proc.HasExited) { $proc.Kill() }
       $proc.WaitForExit()
     } catch { }
+    $script:ExeExitCode = -1
     return $false
   }
-  return $true
+  # A native invocation that exits non-zero must not be treated as success.
+  $script:ExeExitCode = $proc.ExitCode
+  return ($proc.ExitCode -eq 0)
 }
 function Mcp([string]$payload) {
   $inFile = [System.IO.Path]::GetTempFileName()
@@ -41,7 +44,7 @@ function Mcp([string]$payload) {
   try {
     Set-Content -LiteralPath $inFile -Value $payload
     if (-not (Invoke-ExeBounded -ExeArgs @("--repo-root", "`"$Root`"") -InFile $inFile -OutFile $outFile -ErrFile $errFile -TimeoutMs 60000)) {
-      $script:McpStderr = "MCP call timed out after 60s"
+      $script:McpStderr = if ($script:ExeExitCode -eq -1) { "MCP call timed out after 60s" } else { "MCP call exited with code $($script:ExeExitCode)" }
       return ""
     }
     $script:McpStderr = (Get-Content -LiteralPath $errFile -Raw -ErrorAction SilentlyContinue)

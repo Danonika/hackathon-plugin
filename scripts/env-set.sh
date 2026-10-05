@@ -130,9 +130,13 @@ claim_stale_lock() {
       # Break the swap claim and put the still-live lock back.
       mv "$aside" "$LOCK" 2>/dev/null || true
     else
-      # Another contender already claimed the path; leave its lock alone and do
-      # not delete this one, so both live locks survive.
-      :
+      # Another contender already claimed the path. The moved directory is
+      # either the same stale lock (a peer re-created the path first) or a live
+      # lock we moved by mistake. Drop it only if its recorded owner is gone;
+      # otherwise leave it aside rather than deleting a live lock.
+      if [ -z "$now_holder" ] || ! kill -0 "$now_holder" 2>/dev/null; then
+        rm -rf "$aside"
+      fi
     fi
   fi
 }

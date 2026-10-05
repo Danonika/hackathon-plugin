@@ -39,8 +39,11 @@ if ! docker info >/dev/null 2>&1; then
 fi
 
 if [ ! -f .env ]; then
-  cp .env.example .env
-  echo "[docker-check] created .env from .env.example"
+  # Create .env private: it holds credentials, and a plain cp would inherit the
+  # example's 0644 mode (masked only by umask).
+  (umask 077 && cp .env.example .env)
+  chmod 600 .env 2>/dev/null || true
+  echo "[docker-check] created .env from .env.example (mode 0600)"
 fi
 
 # Containers run as HACKATHONKIT_UID:HACKATHONKIT_GID; align them with the current user

@@ -17,9 +17,13 @@ if ! sed -E 's/a/b/' </dev/null >/dev/null 2>&1; then
   echo "[redact] sed -E unavailable; output withheld to avoid leaking credentials"
   exit 0
 fi
-KEY='([Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd]|[Pp][Aa][Ss][Ss]|[Tt][Oo][Kk][Ee][Nn]|[Ss][Ee][Cc][Rr][Ee][Tt]|[Dd][Ss][Nn]|[Kk][Ee][Yy])'
+KEY='([Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd]|[Pp][Aa][Ss][Ss]|[Tt][Oo][Kk][Ee][Nn]|[Ss][Ee][Cc][Rr][Ee][Tt]|[Dd][Ss][Nn]|[Kk][Ee][Yy]|[Aa][Uu][Tt][Hh][Oo][Rr][Ii][Zz][Aa][Tt][Ii][Oo][Nn]|[Bb][Ee][Aa][Rr][Ee][Rr]|[Cc][Rr][Ee][Dd][Ee][Nn][Tt][Ii][Aa][Ll])'
+# Key boundaries allow digits too (e.g. "api_key1"), so numbered credentials
+# are not skipped.
 VALUE="(\"[^\"]*\"|'[^']*'|[^[:space:]]+)"
 sed -E \
+  -e 's/([Bb][Ee][Aa][Rr][Ee][Rr][[:space:]]+)[^[:space:]]+/\1[redacted]/g' \
+  -e 's/([Bb][Aa][Ss][Ii][Cc][[:space:]]+)[^[:space:]]+/\1[redacted]/g' \
   -e 's#://[^[:space:]]*@#://***@#g' \
-  -e "s/(\"[A-Za-z_]*${KEY}[A-Za-z_]*\"[[:space:]]*:[[:space:]]*)\"[^\"]*\"/\\1\"[redacted]\"/g" \
-  -e "s/([A-Za-z_]*${KEY}[A-Za-z_]*)([[:space:]]*[=:][[:space:]]*)${VALUE}/\\1\\3[redacted]/g"
+  -e "s/(\"[A-Za-z0-9_]*${KEY}[A-Za-z0-9_]*\"[[:space:]]*:[[:space:]]*)\"[^\"]*\"/\\1\"[redacted]\"/g" \
+  -e "s/([A-Za-z0-9_]*${KEY}[A-Za-z0-9_]*)([[:space:]]*[=:][[:space:]]*)${VALUE}/\\1\\3[redacted]/g"

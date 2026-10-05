@@ -138,8 +138,13 @@ else
   check "spaced hand-written table refused" 1
 fi
 
-# --remove strips the managed block and keeps user content.
-CODEX_HOME="$WORK/codexhome" sh "$ROOT/scripts/gen-codex-config.sh" --remove >/dev/null 2>&1
+# --remove strips the managed block and keeps user content. Guard the call so a
+# generator regression is reported as a failed assertion, not a set -e abort.
+if CODEX_HOME="$WORK/codexhome" sh "$ROOT/scripts/gen-codex-config.sh" --remove >/dev/null 2>&1; then
+  check "generator --remove exits 0" 1
+else
+  check "generator --remove exits 0" 0 "non-zero exit"
+fi
 check "remove drops the managed block" "$(grep -q "hackathonkit-mcp (managed by" "$WORK/codexhome/config.toml" && echo 0 || echo 1)" "block still present"
 check "remove keeps user keys" "$(grep -q 'approval_policy = "on-request"' "$WORK/codexhome/config.toml" && echo 1)" "user key lost"
 
