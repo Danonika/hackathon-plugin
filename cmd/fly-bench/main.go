@@ -115,6 +115,13 @@ func run(args []string, stdout, stderr io.Writer) int {
 	full.Recommend(ctx, "warmup", nil, nil)
 
 	results := make([]rowResult, 0, len(rows))
+	// Normalize the effective k the way fly.NewRouter does (default 5 when the
+	// configured value is not positive), so recall@k and the reported top_k
+	// describe the top-k the router actually applied.
+	topK := cfg.Routing.TopK
+	if topK <= 0 {
+		topK = 5
+	}
 	for _, row := range rows {
 		baselineStart := time.Now()
 		baselineRes := baseline.Recommend(ctx, row.Task, row.Metadata, nil)
@@ -126,7 +133,6 @@ func run(args []string, stdout, stderr io.Writer) int {
 
 		again := full.Recommend(ctx, row.Task, row.Metadata, nil)
 
-		topK := cfg.Routing.TopK
 		result := rowResult{
 			Task:            row.Task,
 			Expected:        row.Expected,
@@ -157,7 +163,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		SHA:         quality.GitSHA(root),
 		GeneratedAt: time.Now().UTC(),
 		Suite:       *suite,
-		Summary:     summarize(results, cfg.Routing.TopK),
+		Summary:     summarize(results, topK),
 		Determinism: "warm (caches primed before the loop)",
 		Rows:        results,
 	}
