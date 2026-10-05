@@ -117,7 +117,14 @@ func cloneValue(v any) any {
 		}
 		out := reflect.MakeMapWithSize(rv.Type(), rv.Len())
 		for _, key := range rv.MapKeys() {
-			out.SetMapIndex(key, reflect.ValueOf(cloneValue(rv.MapIndex(key).Interface())))
+			// cloneValue returns an untyped nil for a nil interface element,
+			// and reflect.ValueOf(nil) is the invalid zero Value, which
+			// SetMapIndex panics on. Substitute a typed zero instead.
+			cloned := reflect.ValueOf(cloneValue(rv.MapIndex(key).Interface()))
+			if !cloned.IsValid() {
+				cloned = reflect.Zero(rv.Type().Elem())
+			}
+			out.SetMapIndex(key, cloned)
 		}
 		return out.Interface()
 	case reflect.Slice:
@@ -126,7 +133,11 @@ func cloneValue(v any) any {
 		}
 		out := reflect.MakeSlice(rv.Type(), rv.Len(), rv.Len())
 		for i := 0; i < rv.Len(); i++ {
-			out.Index(i).Set(reflect.ValueOf(cloneValue(rv.Index(i).Interface())))
+			cloned := reflect.ValueOf(cloneValue(rv.Index(i).Interface()))
+			if !cloned.IsValid() {
+				cloned = reflect.Zero(rv.Type().Elem())
+			}
+			out.Index(i).Set(cloned)
 		}
 		return out.Interface()
 	default:

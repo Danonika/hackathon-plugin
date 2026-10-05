@@ -75,7 +75,9 @@ read -r TRACK || TRACK=""
 case "$TRACK" in
   "") ;;
   [0-9]|[0-9][0-9]) ;;
-  [0-9][0-9]-[a-z0-9-]*) ;;
+  # Only the known catalog slugs are accepted, so a typo like 08-foo is rejected
+  # here instead of failing later in `mcp --resources-set` after secrets are set.
+  01-energy|02-finance|03-management|04-telecom|05-logistics|06-creative-media|07-education|08-innovation|09-communications|10-retail) ;;
   *)
     echo "[resources] ignoring invalid track '$TRACK' (expected 01-10 or 08-innovation)" >&2
     TRACK=""

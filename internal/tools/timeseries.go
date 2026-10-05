@@ -309,8 +309,14 @@ func registerTimeSeries(reg *mcp.Registry, d Deps) {
 					}
 				}
 			}
-			// Most recent first, so truncation keeps the newest anomalies.
-			sort.Slice(anomalies, func(i, j int) bool { return anomalies[i].Timestamp > anomalies[j].Timestamp })
+			// `points` is sorted ascending by time and both branches append
+			// while iterating it, so `anomalies` is already oldest-first.
+			// Reverse it to put the most recent first (ordering by the
+			// RFC3339Nano string is not chronological: trailing fractional
+			// zeros are dropped, so "…:00Z" sorts above "…:00.5Z").
+			for i, j := 0, len(anomalies)-1; i < j; i, j = i+1, j-1 {
+				anomalies[i], anomalies[j] = anomalies[j], anomalies[i]
+			}
 			totalAnomalies := len(anomalies)
 			limit := argInt(args, "limit", 100)
 			if limit <= 0 || limit > 10000 {

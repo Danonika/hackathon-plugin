@@ -69,8 +69,15 @@ $locked = $false
 for ($i = 0; $i -lt 100; $i++) {
   try {
     New-Item -ItemType Directory -Path $ClaudeLock -ErrorAction Stop | Out-Null
-    Set-Content -LiteralPath (Join-Path $ClaudeLock "pid") -Value $PID -ErrorAction SilentlyContinue
-    Set-Content -LiteralPath (Join-Path $ClaudeLock "owner") -Value $lockToken -ErrorAction SilentlyContinue
+    try {
+      # Fail hard (and roll back) if the metadata cannot be written: a lock
+      # without a readable pid/owner can never be released by its own owner.
+      Set-Content -LiteralPath (Join-Path $ClaudeLock "pid") -Value $PID -ErrorAction Stop
+      Set-Content -LiteralPath (Join-Path $ClaudeLock "owner") -Value $lockToken -ErrorAction Stop
+    } catch {
+      Remove-Item -LiteralPath $ClaudeLock -Recurse -Force -ErrorAction SilentlyContinue
+      throw
+    }
     $locked = $true
     break
   } catch {
@@ -98,9 +105,28 @@ for ($i = 0; $i -lt 100; $i++) {
       }
       if ($stale) {
         $staleLock = "$ClaudeLock.stale.$PID"
+        # Snapshot the owner token, then re-read it after the move. If it changed
+        # a peer re-created the lock in between, so restore the live lock instead
+        # of deleting it.
+        $ownerBefore = $null
+        $ownerFile = Join-Path $ClaudeLock "owner"
+        if (Test-Path -LiteralPath $ownerFile) {
+          try { $ownerBefore = Get-Content -LiteralPath $ownerFile -Force -ErrorAction Stop | Select-Object -First 1 } catch { $ownerBefore = $null }
+        }
         try {
           Move-Item -LiteralPath $ClaudeLock -Destination $staleLock -Force -ErrorAction Stop
-          Remove-Item -LiteralPath $staleLock -Recurse -Force -ErrorAction SilentlyContinue
+          $ownerAfter = $null
+          $movedOwnerFile = Join-Path $staleLock "owner"
+          if (Test-Path -LiteralPath $movedOwnerFile) {
+            try { $ownerAfter = Get-Content -LiteralPath $movedOwnerFile -Force -ErrorAction Stop | Select-Object -First 1 } catch { $ownerAfter = $null }
+          }
+          if ($ownerAfter -ne $ownerBefore) {
+            if (-not (Test-Path -LiteralPath $ClaudeLock)) {
+              Move-Item -LiteralPath $staleLock -Destination $ClaudeLock -Force -ErrorAction SilentlyContinue
+            }
+          } else {
+            Remove-Item -LiteralPath $staleLock -Recurse -Force -ErrorAction SilentlyContinue
+          }
         } catch {
           Write-Verbose "[sync-harness] could not evict the stale claude lock: $($_.Exception.Message)"
         }

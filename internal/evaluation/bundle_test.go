@@ -77,6 +77,22 @@ func TestFreezeBundleExcludesRuntimeState(t *testing.T) {
 	}
 }
 
+func TestFreezeBundleSkipsStaleBackupSibling(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "README.md"), "# Demo\n")
+	// A `.bak` left behind by an interrupted run must not be copied into the
+	// new bundle (it is a sibling of the output dir, not a prefix match).
+	writeFile(t, filepath.Join(root, "data", "judge-bundles.bak", "stale.txt"), "stale\n")
+
+	bundle, err := FreezeBundle(BundleOptions{Root: root})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(bundle.Dir, "data", "judge-bundles.bak", "stale.txt")); !os.IsNotExist(err) {
+		t.Fatalf("stale backup leaked into the bundle: %v", err)
+	}
+}
+
 func TestFreezeBundleIsDeterministic(t *testing.T) {
 	root := t.TempDir()
 	writeFile(t, filepath.Join(root, "README.md"), "# Demo\n")

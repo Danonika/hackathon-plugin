@@ -215,8 +215,15 @@ func FreezeBundle(opts BundleOptions) (Bundle, error) {
 			return nil
 		}
 		if d.IsDir() {
+			// Never copy the output directory, its temp siblings, or the
+			// `.bak` rotation sibling. A stale `.bak` left by an interrupted
+			// run is not covered by the default excludes (a path-prefix rule
+			// does not match `…judge-bundles.bak`), so copy it only into the
+			// new bundle would duplicate content and corrupt the hash.
+			bakRel := outRel + ".bak"
 			if relSlash == outRel || strings.HasPrefix(relSlash, outRel+"/") ||
-				relSlash == tmpRel || strings.HasPrefix(relSlash, tmpRel+"/") {
+				relSlash == tmpRel || strings.HasPrefix(relSlash, tmpRel+"/") ||
+				relSlash == bakRel || strings.HasPrefix(relSlash, bakRel+"/") {
 				return filepath.SkipDir
 			}
 			return nil

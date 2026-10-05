@@ -114,11 +114,26 @@ lock_is_stale() {
 }
 claim_stale_lock() {
   lock_is_stale || return 0
-  # Rename is the atomic claim: contenders race on a single mv, so exactly one
-  # wins and a peer's live (re-created) lock is never touched. If the rename
-  # fails because the lock vanished, the caller simply retries mkdir.
-  if mv "$LOCK" "$LOCK.stale.$$" 2>/dev/null; then
-    rm -rf "$LOCK.stale.$$"
+  # Snapshot the identity of the lock we judged stale, then re-read it after the
+  # rename-aside. A peer may have removed and re-created the lock in between; in
+  # that case the renamed directory is a live peer's lock and is restored rather
+  # than deleted.
+  holder=$(cat "$LOCK/pid" 2>/dev/null || true)
+  owner=$(cat "$LOCK/owner" 2>/dev/null || true)
+  aside="$LOCK.stale.$$"
+  if mv "$LOCK" "$aside" 2>/dev/null; then
+    now_holder=$(cat "$aside/pid" 2>/dev/null || true)
+    now_owner=$(cat "$aside/owner" 2>/dev/null || true)
+    if [ "$now_holder" = "$holder" ] && [ "$now_owner" = "$owner" ]; then
+      rm -rf "$aside"
+    elif [ ! -e "$LOCK" ]; then
+      # Break the swap claim and put the still-live lock back.
+      mv "$aside" "$LOCK" 2>/dev/null || true
+    else
+      # Another contender already claimed the path; leave its lock alone and do
+      # not delete this one, so both live locks survive.
+      :
+    fi
   fi
 }
 claim_stale_lock

@@ -36,10 +36,35 @@ if ($Sources.Count -eq 0) { Fail "[prompts] no *.md prompts found in $SrcDir" }
 switch ($Action) {
   "install" {
     New-Item -ItemType Directory -Force -Path $DestDir | Out-Null
+    $skipped = 0
     foreach ($f in $Sources) {
-      Copy-Item -LiteralPath $f.FullName -Destination (Join-Path $DestDir $f.Name) -Force
+      $dest = Join-Path $DestDir $f.Name
+      $existing = Get-Item -LiteralPath $dest -Force -ErrorAction SilentlyContinue
+      if ($existing) {
+        # A directory or symlink/junction destination would make Copy-Item write
+        # into it or follow the link; refuse rather than clobber an unexpected
+        # target. Parity with scripts/install-prompts.sh.
+        if ($existing.Attributes -band [System.IO.FileAttributes]::ReparsePoint) {
+          Write-Warning "[prompts] skipping ${dest} (reparse point)"
+          $skipped++
+          continue
+        }
+        if ($existing.PSIsContainer) {
+          Write-Warning "[prompts] skipping ${dest} (not a regular file)"
+          $skipped++
+          continue
+        }
+        try {
+          $same = (Get-FileHash -LiteralPath $f.FullName -Algorithm SHA256).Hash -eq (Get-FileHash -LiteralPath $dest -Algorithm SHA256).Hash
+          if (-not $same) { Write-Warning "[prompts] warning: overwriting locally modified prompt $dest" }
+        } catch {
+          Write-Warning "[prompts] warning: could not compare ${dest}: $($_.Exception.Message)"
+        }
+      }
+      Copy-Item -LiteralPath $f.FullName -Destination $dest -Force
     }
     Write-Host "[prompts] installed $($Sources.Count) prompt(s) to $DestDir"
+    if ($skipped -gt 0) { Write-Warning "[prompts] skipped $skipped non-regular destination(s)" }
   }
   "remove" {
     $removed = 0

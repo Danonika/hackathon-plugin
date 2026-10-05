@@ -493,18 +493,40 @@ func (s *Store) lockFile() (func(), error) {
 		// no pid was recorded and the file is older than the stale window.
 		// mtime alone would evict a slow-but-live holder.
 		owner := lockOwnerPID(lockPath)
+		reclaim := false
 		if owner != 0 {
-			if !processAlive(owner) {
-				_ = os.Remove(lockPath)
-				continue
-			}
+			reclaim = !processAlive(owner)
 		} else if info, statErr := os.Stat(lockPath); statErr == nil && time.Since(info.ModTime()) > lockStaleAfter {
-			_ = os.Remove(lockPath)
+			reclaim = true
+		}
+		if reclaim && reclaimLock(lockPath, owner) {
 			continue
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
 	return nil, fmt.Errorf("learning store is locked by another process")
+}
+
+// reclaimLock removes a stale lock without deleting a peer's freshly created
+// lock. It atomically detaches the inode, verifies the detached file still
+// records the stale owner, and only then deletes it; if a peer re-created the
+// lock between the liveness check and the rename, the detached inode is
+// restored instead. This closes the remove-by-path TOCTOU window.
+func reclaimLock(lockPath string, stalePID int) bool {
+	detached := fmt.Sprintf("%s.stale.%d.%d", lockPath, os.Getpid(), time.Now().UnixNano())
+	if err := os.Rename(lockPath, detached); err != nil {
+		return false
+	}
+	if lockOwnerPID(detached) == stalePID {
+		_ = os.Remove(detached)
+		return true
+	}
+	if _, err := os.Lstat(lockPath); os.IsNotExist(err) {
+		_ = os.Rename(detached, lockPath)
+	} else {
+		_ = os.Remove(detached)
+	}
+	return false
 }
 
 func (s *Store) load() (fileFormat, error) {

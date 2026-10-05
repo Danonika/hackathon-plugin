@@ -142,8 +142,19 @@ mv "$TMP_TRIM" "$TMP"
   printf '%s\n' "$END"
 } >> "$TMP"
 
+# Validate the rendered TOML when a parser is available. `tomllib` is Python
+# 3.11+; older hosts may ship `tomli`. When neither is importable, skip the
+# optional check rather than misreporting a missing module as invalid TOML.
+TOML_MODULE=""
 if command -v python3 >/dev/null 2>&1; then
-  if ! python3 -c 'import tomllib,sys; tomllib.load(open(sys.argv[1],"rb"))' "$TMP" 2>/dev/null; then
+  if python3 -c 'import tomllib' >/dev/null 2>&1; then
+    TOML_MODULE="tomllib"
+  elif python3 -c 'import tomli' >/dev/null 2>&1; then
+    TOML_MODULE="tomli"
+  fi
+fi
+if [ -n "$TOML_MODULE" ]; then
+  if ! python3 -c "import $TOML_MODULE, sys; $TOML_MODULE.load(open(sys.argv[1], 'rb'))" "$TMP" 2>/dev/null; then
     echo "[codex-config] rendered config is not valid TOML; keeping the previous file" >&2
     exit 1
   fi

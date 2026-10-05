@@ -98,12 +98,16 @@ if [ -d "$LOCK" ]; then
 fi
 for _ in 1 2 3 4 5 6 7 8 9 10; do
   if mkdir "$LOCK" 2>/dev/null; then
+    # Track the lock as soon as it exists: a signal before the pid write must
+    # still let finish() remove it, otherwise a pid-less lock is never reclaimed
+    # (the stale check above only acts when a numeric pid is present).
+    LOCKED=1
     if ! printf '%s' "$$" > "$LOCK/pid" 2>/dev/null; then
       echo "[sync-skills] cannot record the lock pid; aborting" >&2
       rm -rf "$LOCK"
+      LOCKED=0
       exit 1
     fi
-    LOCKED=1
     break
   fi
   sleep 1

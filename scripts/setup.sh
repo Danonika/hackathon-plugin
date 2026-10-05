@@ -56,11 +56,17 @@ if [ -f .env ]; then
   if [ -z "$ENV_MODE" ]; then
     # An unreadable mode must never be treated as "already safe"; force it.
     echo "[setup] warning: cannot read the mode of .env; forcing 600" >&2
-    chmod 600 .env 2>/dev/null || echo "[setup] warning: could not chmod .env to 600" >&2
+    chmod 600 .env 2>/dev/null || {
+      echo "[setup] cannot chmod .env to 600; refusing to write credentials into a world-readable file" >&2
+      exit 1
+    }
   else
     case "$ENV_MODE" in
       *00) ;;
-      *) chmod 600 .env 2>/dev/null || echo "[setup] warning: could not chmod .env to 600" >&2 ;;
+      *) chmod 600 .env 2>/dev/null || {
+           echo "[setup] cannot chmod .env to 600; refusing to write credentials into a world-readable file" >&2
+           exit 1
+         } ;;
     esac
   fi
 fi

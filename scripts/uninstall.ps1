@@ -130,7 +130,18 @@ foreach ($rel in $targets) {
         Write-Warning "[uninstall] skipping reparse point: $rel\$($skill.Name)"
         continue
       }
-      if (-not (Test-SameTree $skill.FullName $skillTarget)) {
+      $same = $false
+      try {
+        $same = Test-SameTree $skill.FullName $skillTarget
+      } catch {
+        # Get-TreeEntries walks and hashes both trees; an unreadable or locked
+        # file under $ErrorActionPreference="Stop" must be recorded, not abort
+        # the whole uninstall mid-way.
+        Write-Warning "[uninstall] could not compare ${rel}\$($skill.Name): $($_.Exception.Message)"
+        $Failures++
+        continue
+      }
+      if (-not $same) {
         Write-Warning "[uninstall] keeping $rel\$($skill.Name): it differs from the shipped skill (user-authored?)"
         continue
       }

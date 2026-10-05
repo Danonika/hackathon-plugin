@@ -175,8 +175,12 @@ const exeProject = fs.mkdtempSync(path.join(os.tmpdir(), "hackathonkit-exe-"));
 fs.mkdirSync(path.join(exeProject, "configs"), { recursive: true });
 fs.writeFileSync(path.join(exeProject, "configs", "routing.yaml"), "routing:\n  mode: normal\n  version: 1\n");
 markHackathonKitRepo(exeProject);
-fs.mkdirSync(path.join(exeProject, "bin"), { recursive: true });
-const exePath = path.join(exeProject, "bin", "hackathonkit-mcp.exe");
+const exeBinDir = path.join(exeProject, "bin");
+fs.mkdirSync(exeBinDir, { recursive: true });
+// hooks.js now rejects a group/world-writable bin directory; pin the fixture to
+// a safe mode so the lookup test is deterministic under any umask.
+fs.chmodSync(exeBinDir, 0o755);
+const exePath = path.join(exeBinDir, "hackathonkit-mcp.exe");
 if (process.platform === "win32") {
   // A non-PE fixture cannot execute on Windows; use the real binary when it is
   // built (CI builds bin/hackathonkit-mcp.exe before this test).

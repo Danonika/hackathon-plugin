@@ -16,6 +16,18 @@ need_python() {
 }
 need_python
 
+# Invoke the generator as an assertion rather than a bare command: under `set -e`
+# a non-zero exit would abort the suite and skip every later check and the
+# failure summary.
+run_generator() {
+  name="$1"; home="$2"; root="$3"
+  if CODEX_HOME="$home" sh "$ROOT/scripts/gen-codex-config.sh" "$root" >/dev/null 2>&1; then
+    check "$name" 1
+  else
+    check "$name" 0 "generator exited non-zero"
+  fi
+}
+
 CONFIG="$ROOT/.codex/config.toml"
 # Capture the tracked config BEFORE any generator run so the untouched assertion
 # can actually catch a regression.
@@ -63,7 +75,7 @@ startup_timeout_sec = 245
 tool_timeout_sec = 310
 CFG
 printf '# user config\napproval_policy = "on-request"\n' > "$WORK/codexhome/config.toml"
-CODEX_HOME="$WORK/codexhome" sh "$ROOT/scripts/gen-codex-config.sh" "$WORK" >/dev/null 2>&1
+run_generator "generator succeeds on the scratch project config" "$WORK/codexhome" "$WORK"
 USER_ARGS=$(python3 -c '
 import tomllib, sys
 d = tomllib.load(open(sys.argv[1], "rb"))
@@ -87,7 +99,7 @@ check "managed block derives project budgets" "$([ "$BUDGETS" = "ok" ] && echo 1
 # A brand-new user config (no pre-existing file) must be created private (0600);
 # it may hold credentials. A pre-existing file keeps its own mode.
 mkdir -p "$WORK/fresh"
-CODEX_HOME="$WORK/fresh" sh "$ROOT/scripts/gen-codex-config.sh" "$WORK" >/dev/null 2>&1
+run_generator "generator succeeds for a brand-new user config" "$WORK/fresh" "$WORK"
 NEWMODE=$(stat -c '%a' "$WORK/fresh/config.toml" 2>/dev/null || stat -f '%Lp' "$WORK/fresh/config.toml" 2>/dev/null || echo "")
 check "new user config is private" "$([ "$NEWMODE" = "600" ] && echo 1)" "mode: $NEWMODE"
 
@@ -95,13 +107,13 @@ check "new user config is private" "$([ "$NEWMODE" = "600" ] && echo 1)" "mode: 
 mkdir -p "$WORK/existing"
 printf '# user\n' > "$WORK/existing/config.toml"
 chmod 640 "$WORK/existing/config.toml"
-CODEX_HOME="$WORK/existing" sh "$ROOT/scripts/gen-codex-config.sh" "$WORK" >/dev/null 2>&1
+run_generator "generator succeeds for an existing user config" "$WORK/existing" "$WORK"
 KEPTMODE=$(stat -c '%a' "$WORK/existing/config.toml" 2>/dev/null || stat -f '%Lp' "$WORK/existing/config.toml" 2>/dev/null || echo "")
 check "existing config mode preserved" "$([ "$KEPTMODE" = "640" ] && echo 1)" "mode: $KEPTMODE"
 
 # Re-running must not duplicate the managed block and must be byte-stable.
 HASH_ONE=$(python3 -c 'import hashlib,sys;print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "$WORK/codexhome/config.toml")
-CODEX_HOME="$WORK/codexhome" sh "$ROOT/scripts/gen-codex-config.sh" "$WORK" >/dev/null 2>&1
+run_generator "idempotency re-run succeeds" "$WORK/codexhome" "$WORK"
 HASH_TWO=$(python3 -c 'import hashlib,sys;print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "$WORK/codexhome/config.toml")
 COUNT=$(grep -c "hackathonkit-mcp (managed by" "$WORK/codexhome/config.toml" || true)
 check "generator is idempotent" "$([ "$COUNT" = "2" ] && echo 1)" "marker lines: $COUNT"
@@ -146,7 +158,7 @@ MARKER="$WORK/injection-marker"
   printf 'tool_timeout_sec = 137\n'
 } > "$WORK/inject/.codex/config.toml"
 rm -f "$MARKER"
-CODEX_HOME="$WORK/cxhome" sh "$ROOT/scripts/gen-codex-config.sh" "$WORK/inject" >/dev/null 2>&1
+run_generator "generator succeeds on the injection-safety project" "$WORK/cxhome" "$WORK/inject"
 INJ=$(python3 -c '
 import tomllib, sys
 d = tomllib.load(open(sys.argv[1], "rb"))

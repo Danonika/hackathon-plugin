@@ -118,8 +118,22 @@ func run(args []string, stdout, stderr io.Writer) int {
 	// actually engaged, otherwise a silent hash fallback would be published as
 	// if the full pipeline had been measured.
 	warmup := full.Recommend(ctx, "warmup", nil, nil)
-	if !strings.Contains(warmup.Encoder, "embedding") {
-		fmt.Fprintf(stderr, "fly-bench: warning: embedding path did not engage (encoder=%q); semantic signal may be degraded\n", warmup.Encoder)
+	// The encoder label says "embedding" even when ChainEmbedder silently fell
+	// back to the hash encoder, so probe the primary directly to catch a degraded
+	// run instead of trusting the label.
+	embeddingDegraded := false
+	primaryErr := ""
+	if embedder.Primary != nil {
+		if _, err := embedder.Primary.Embed(ctx, []string{"warmup"}); err != nil {
+			embeddingDegraded = true
+			primaryErr = err.Error()
+		}
+	} else {
+		embeddingDegraded = true
+		primaryErr = "no primary embedder configured"
+	}
+	if embeddingDegraded || !strings.Contains(warmup.Encoder, "embedding") {
+		fmt.Fprintf(stderr, "fly-bench: warning: embedding path did not engage (encoder=%q, primary error=%q); semantic signal may be degraded\n", warmup.Encoder, primaryErr)
 	}
 
 	results := make([]rowResult, 0, len(rows))
@@ -131,6 +145,14 @@ func run(args []string, stdout, stderr io.Writer) int {
 		topK = 5
 	}
 	for _, row := range rows {
+		// A shared deadline that expires mid-loop would make the remaining
+		// full.Recommend calls fail fast and be recorded as zero-recall rows
+		// while the keyword baseline keeps returning results, so abort instead of
+		// publishing skewed partial A/B evidence.
+		if ctx.Err() != nil {
+			fmt.Fprintln(stderr, "error: benchmark deadline exceeded before all rows completed; refusing to publish partial A/B evidence")
+			return 1
+		}
 		baselineStart := time.Now()
 		baselineRes := baseline.Recommend(ctx, row.Task, row.Metadata, nil)
 		baselineLatency := float64(time.Since(baselineStart).Microseconds()) / 1000

@@ -559,11 +559,22 @@ func TestWithCORS(t *testing.T) {
 	root := t.TempDir()
 	h := testHandler(root, config.NewManager(root), metadata.Disabled{}, "")
 
+	// A different loopback port must not receive ACAO: reflecting it would let a
+	// page on any local port read token-bearing responses such as /fly-viz.
 	rec := doRequest(t, h, http.MethodOptions, "/healthz", "", map[string]string{"Origin": "http://localhost:5173"})
 	if rec.Code != http.StatusNoContent {
 		t.Fatalf("preflight = %d, want 204", rec.Code)
 	}
-	if got := rec.Header().Get("Access-Control-Allow-Origin"); got != "http://localhost:5173" {
+	if got := rec.Header().Get("Access-Control-Allow-Origin"); got != "" {
+		t.Fatalf("foreign loopback origin got ACAO %q", got)
+	}
+
+	// The server's own origin is reflected.
+	rec = doRequest(t, h, http.MethodOptions, "/healthz", "", map[string]string{"Origin": "http://example.com"})
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("preflight = %d, want 204", rec.Code)
+	}
+	if got := rec.Header().Get("Access-Control-Allow-Origin"); got != "http://example.com" {
 		t.Fatalf("ACAO = %q", got)
 	}
 	if rec.Header().Get("Access-Control-Allow-Methods") == "" || rec.Header().Get("Access-Control-Allow-Headers") == "" {

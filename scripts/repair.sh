@@ -11,7 +11,9 @@ echo "[repair] repository root: $ROOT"
 LOCK="$ROOT/.repair.lock"
 if [ -d "$LOCK" ]; then
   HOLDER=$(cat "$LOCK/pid" 2>/dev/null || true)
-  if [ -n "$HOLDER" ] && ! kill -0 "$HOLDER" 2>/dev/null; then
+  # A missing/empty pid means the previous run died between mkdir and the pid
+  # write; treat it as stale or the lock blocks every future repair forever.
+  if [ -z "$HOLDER" ] || ! kill -0 "$HOLDER" 2>/dev/null; then
     rm -rf "$LOCK"
   fi
 fi

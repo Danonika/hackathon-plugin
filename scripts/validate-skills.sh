@@ -23,13 +23,14 @@ fi
 if command -v go >/dev/null 2>&1; then
   cd "$ROOT" || { echo "[validate-skills] cannot enter $ROOT" >&2; exit 1; }
   if go run ./cmd/hackathonkit-mcp --repo-root "$ROOT" --validate-skills; then
-    :
+    exit 0
   else
     status=$?
-    echo "[validate-skills] validation failed (go run exit $status)" >&2
-    exit 1
+    # `go run` exits non-zero for toolchain/build/module errors too, not only
+    # catalog violations, so report the captured status instead of masking it.
+    echo "[validate-skills] go run exited $status (validation failure or toolchain/build error)" >&2
+    exit "$status"
   fi
-  exit 0
 fi
 
 echo "[validate-skills] no runtime available; build one with scripts/setup.sh" >&2

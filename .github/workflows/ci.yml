@@ -79,7 +79,9 @@ jobs:
         with:
           node-version: "20"
       - name: build windows binary
-        run: go build -o bin/hackathonkit-mcp.exe ./cmd/hackathonkit-mcp
+        run: |
+          New-Item -ItemType Directory -Force -Path bin | Out-Null
+          go build -o bin/hackathonkit-mcp.exe ./cmd/hackathonkit-mcp
       - name: go tests
         run: go test ./...
       - name: hooks behavior (real .exe lookup)

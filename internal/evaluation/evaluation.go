@@ -205,8 +205,21 @@ func AggregateReports(reports []JudgeReport, snapshotSHA string, minValid int) A
 	if minValid < 1 {
 		minValid = DefaultMinValidJudges
 	}
+	// Bind the aggregate to one snapshot even when the caller did not pass an
+	// expected sha: infer it from the first report that declares one, so
+	// reports from different frozen bundles can never be merged (and two such
+	// aggregates can never be calibrated together).
+	expectedSHA := strings.TrimSpace(snapshotSHA)
+	if expectedSHA == "" {
+		for _, r := range reports {
+			if sha := strings.TrimSpace(r.SnapshotSHA); sha != "" {
+				expectedSHA = sha
+				break
+			}
+		}
+	}
 	agg := Aggregate{
-		SnapshotSHA:           snapshotSHA,
+		SnapshotSHA:           expectedSHA,
 		RubricVersion:         RubricVersion,
 		MinValid:              minValid,
 		CriterionMeans:        map[string]float64{},
@@ -220,7 +233,7 @@ func AggregateReports(reports []JudgeReport, snapshotSHA string, minValid int) A
 	}
 	valid := make([]JudgeReport, 0, len(reports))
 	for i, r := range reports {
-		if problems := ValidateJudgeReport(r, snapshotSHA); len(problems) > 0 {
+		if problems := ValidateJudgeReport(r, expectedSHA); len(problems) > 0 {
 			agg.DroppedInvalid = append(agg.DroppedInvalid, InvalidReport{
 				Index:   i,
 				JudgeID: r.JudgeID,

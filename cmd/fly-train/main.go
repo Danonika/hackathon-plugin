@@ -175,10 +175,13 @@ func rebuildFromFeedback(root string, cfg config.File, embedder fly.Embedder, st
 	// Must match the live router (cmd/hackathonkit-mcp, cmd/fly-bench): same chain
 	// embedder and the same "+hash512" model tag, otherwise the rebuilt vectors
 	// are treated as stale and contribute no knn signal.
+	// Deliberately do not attach the brain: AddFeedback would otherwise run
+	// applyDopamine and rewrite fly-brain.json, replaying every feedback event
+	// on top of the live router's incremental updates. Without a brain path the
+	// dopamine step is a no-op, so this rebuild touches only the feedback memory.
 	router := fly.NewRouter(cfg.Routing).
 		WithEmbeddings(embedder, filepath.Join(root, "data", "index", "fly-embeddings.json"), cfg.OpenAI.EmbeddingModel+"+hash512").
-		WithMemory(filepath.Join(root, "data", "index", "fly-memory.json")).
-		WithBrain(filepath.Join(root, "data", "index", "fly-brain.json"))
+		WithMemory(filepath.Join(root, "data", "index", "fly-memory.json"))
 	scanner := bufio.NewScanner(f)
 	scanner.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
 	count := 0

@@ -47,8 +47,10 @@ fi
 # The launcher owns --repo-root; a caller-supplied value would silently win in
 # the Go flag parser and could point at a different tree than the docker branch.
 for arg in "$@"; do
+  # The Go flag parser treats -repo-root and --repo-root as equivalent, so
+  # reject the single-dash spelling too or a caller could override the root.
   case "$arg" in
-    --repo-root|--repo-root=*)
+    -repo-root|--repo-root|-repo-root=*|--repo-root=*)
       echo "Hackathon Agent Kit launcher: --repo-root is set by the launcher and must not be passed again" >&2
       exit 1
       ;;

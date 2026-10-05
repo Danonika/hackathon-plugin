@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"hash/fnv"
 	"io"
@@ -179,6 +180,15 @@ func (s *Store) ingestJSONL(ctx context.Context, name, path string, handle func(
 			continue
 		}
 		if err := handle(ctx, record); err != nil {
+			// A structurally malformed record (e.g. an unparseable ts) is
+			// skippable like malformed JSON: advance past it so one bad line
+			// cannot wedge the stream forever. Genuine failures (DB errors)
+			// still abort.
+			if errors.Is(err, errMalformedRecord) {
+				skipped++
+				lastGood = consumed
+				continue
+			}
 			if cerr := flush(lastGood); cerr != nil {
 				return count, skipped, rotated, fmt.Errorf("%w (also failed to persist cursor: %v)", err, cerr)
 			}
@@ -372,6 +382,11 @@ func readFileBounded(path string, max int64) ([]byte, error) {
 	return io.ReadAll(io.LimitReader(f, max))
 }
 
+// errMalformedRecord marks a record that parsed as JSON but is structurally
+// unusable (e.g. a present-but-unparseable timestamp). Such records are skipped
+// rather than aborting the whole ingest cycle.
+var errMalformedRecord = errors.New("malformed record")
+
 // recordTime extracts a timestamp from a JSONL record. An absent ts is allowed
 // (callers substitute the ingest time); a present-but-unparseable ts is an
 // error so a corrupt record is surfaced instead of being silently stamped.
@@ -382,7 +397,7 @@ func recordTime(rec map[string]any) (time.Time, error) {
 	}
 	ts, ok := parseTimeOK(raw)
 	if !ok {
-		return time.Time{}, fmt.Errorf("malformed ts %q", raw)
+		return time.Time{}, fmt.Errorf("%w: malformed ts %q", errMalformedRecord, raw)
 	}
 	return ts, nil
 }

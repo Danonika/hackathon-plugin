@@ -145,8 +145,13 @@ try {
   if (Compare-Object -ReferenceObject (Get-TreeManifest $src) -DifferenceObject (Get-TreeManifest $tmp)) {
     Fail "[sync-skills] mirror content mismatch between source and copy"
   }
-  $srcCount = (Get-ChildItem -LiteralPath $src -Directory -Force).Count
-  $dstCount = (Get-ChildItem -LiteralPath $tmp -Directory -Force).Count
+  # Apply the same reparse-point filter Copy-NoReparse uses, otherwise a symlinked
+  # skill folder makes the source count exceed the copied count and fails
+  # spuriously.
+  $srcCount = @(Get-ChildItem -LiteralPath $src -Directory -Force |
+    Where-Object { -not ($_.Attributes -band [System.IO.FileAttributes]::ReparsePoint) }).Count
+  $dstCount = @(Get-ChildItem -LiteralPath $tmp -Directory -Force |
+    Where-Object { -not ($_.Attributes -band [System.IO.FileAttributes]::ReparsePoint) }).Count
   if ($srcCount -ne $dstCount) {
     Fail "[sync-skills] mirror mismatch: source $srcCount, copied $dstCount"
   }

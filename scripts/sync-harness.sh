@@ -24,17 +24,22 @@ fi
 # failed copy cannot leave the mirror missing or partial.
 CLAUDE_DST="$ROOT/.claude/skills"
 CLAUDE_LOCK="$CLAUDE_DST.lock"
+# .claude/ has no committed files, so on a clean checkout the lock's parent does
+# not exist and `mkdir "$CLAUDE_LOCK"` would fail on every attempt.
+mkdir -p "$(dirname -- "$CLAUDE_LOCK")"
 CLAUDE_LOCKED=0
 CLAUDE_LOCK_TOKEN="$$.$(date +%s 2>/dev/null || echo 0)"
 claude_lock_stale() {
   [ -d "$CLAUDE_LOCK" ] || return 1
   holder=$(cat "$CLAUDE_LOCK/pid" 2>/dev/null || true)
-  if [ -n "$holder" ]; then
-    kill -0 "$holder" 2>/dev/null && return 1
-    return 0
-  fi
   now=$(date +%s 2>/dev/null || echo 0)
   mtime=$(stat -c %Y "$CLAUDE_LOCK" 2>/dev/null || stat -f %m "$CLAUDE_LOCK" 2>/dev/null || echo "$now")
+  # A live pid means live. `kill -0` can also fail with EPERM for a live process
+  # owned by another user, and a recycled pid can pin a dead lock, so require the
+  # lock to be old before reclaiming rather than trusting a bare kill -0.
+  if [ -n "$holder" ] && kill -0 "$holder" 2>/dev/null; then
+    return 1
+  fi
   [ $((now - mtime)) -ge 30 ]
 }
 claim_claude_lock() {
@@ -170,8 +175,9 @@ for dest in "$ROOT/.opencode/commands" "$ROOT/.claude/commands"; do
   CMDS_OLD=""
   CMDS_DEST=""
 done
-release_claude_lock
-trap - EXIT INT TERM
+# Keep the lock held through the adapter/mirror verification below so a
+# concurrent run cannot swap or prune the command mirrors mid-check. The EXIT
+# trap releases it (and drops the traps) at the very end of the script.
 
 MISSING=0
 INVALID=0

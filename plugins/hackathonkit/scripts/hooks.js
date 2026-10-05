@@ -48,12 +48,33 @@ function isHackathonKitRepo(dir) {
   }
 }
 
+// The binary's containing directory must also be protected: if bin/ is
+// group/world-writable another local user can rename the validated file away
+// and drop in their own executable. Reject an unsafe owner or mode.
+function dirOwnedAndSafe(dir) {
+  try {
+    const st = fs.statSync(dir);
+    if (!st.isDirectory()) return false;
+    if (process.platform !== "win32") {
+      if (st.mode & 0o022) return false;
+      if (typeof process.getuid === "function" && typeof st.uid === "number") {
+        const uid = process.getuid();
+        if (st.uid !== uid && st.uid !== 0) return false;
+      }
+    }
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
 // Never execute a binary that another user could replace. Reject any
 // group/world-writable mode and, on POSIX, require ownership by the current
 // user or root.
 function safeBinary(root, name) {
   try {
     const bin = path.join(root, "bin", name);
+    if (!dirOwnedAndSafe(path.dirname(bin))) return null;
     const st = fs.statSync(bin);
     if (!st.isFile()) return null;
     // POSIX-only hardening: on Windows ordinary files report mode 0o100666,
@@ -76,6 +97,7 @@ function safeBinary(root, name) {
 // window in which a writable or foreign-owned file could be swapped in.
 function binaryStillSafe(candidate) {
   try {
+    if (!dirOwnedAndSafe(path.dirname(candidate.path))) return false;
     const st = fs.statSync(candidate.path);
     if (!st.isFile() || st.dev !== candidate.dev || st.ino !== candidate.ino) return false;
     if (process.platform !== "win32" && st.mode & 0o022) return false;

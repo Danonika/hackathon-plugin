@@ -4,10 +4,12 @@
 package atomicfile
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -99,15 +101,32 @@ func Write(path string, data []byte, mode os.FileMode) error {
 		return err
 	}
 	// Sync the directory so the rename itself is durable, not just the file
-	// contents. A sync failure means the new name can disappear on a crash, so
-	// it must be surfaced instead of silently reported as success.
+	// contents. Directory fsync is not portable: Windows cannot flush a
+	// read-only directory handle, and some filesystems (NFS/FUSE/network or
+	// bind mounts) return EINVAL/ENOTSUP. The rename is already committed and
+	// the file was synced above, so treat an unsupported sync as best-effort
+	// while still surfacing genuine I/O errors.
+	if runtime.GOOS == "windows" {
+		return nil
+	}
 	dirHandle, err := os.Open(dir)
 	if err != nil {
 		return err
 	}
 	if err := dirHandle.Sync(); err != nil {
-		dirHandle.Close()
+		cerr := dirHandle.Close()
+		if isDirSyncUnsupported(err) {
+			return cerr
+		}
 		return err
 	}
 	return dirHandle.Close()
+}
+
+// isDirSyncUnsupported reports whether err means the filesystem cannot fsync a
+// directory (as opposed to a real I/O failure).
+func isDirSyncUnsupported(err error) bool {
+	return errors.Is(err, syscall.EINVAL) ||
+		errors.Is(err, syscall.ENOTSUP) ||
+		errors.Is(err, syscall.EOPNOTSUPP)
 }

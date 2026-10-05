@@ -93,10 +93,6 @@ if ($useLocal) {
       } catch {
         # The process exited between the timeout check and Kill; ignore.
       }
-      # The one-off `run` container is not the compose service container, so
-      # remove every container belonging to this project instead of `kill`.
-      $ids = @(& docker ps -q --filter "label=com.docker.compose.project=$composeProject" 2>$null)
-      if ($ids.Count -gt 0) { & docker rm -f $ids *> $null }
       if (-not $Quiet) { Write-Host "[smoke] docker compose timed out after 120s" }
       exit 1
     }
@@ -107,6 +103,10 @@ if ($useLocal) {
     $output = Get-Content -LiteralPath $outFile
   } finally {
     Remove-Item -LiteralPath $inFile, $outFile -Force -ErrorAction SilentlyContinue
+    # Tear the project down on every exit path: `run` starts the depends_on
+    # services and creates the project network, so a success or non-zero exit
+    # would otherwise leak postgres/minio and the network.
+    & docker compose -p $composeProject -f $composeFile down --remove-orphans *> $null
   }
 }
 

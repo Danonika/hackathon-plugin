@@ -17,6 +17,24 @@ if (!fs.existsSync(launcher)) {
   process.exit(1);
 }
 
+// On Windows a .cmd shim can only be started through cmd.exe, which re-parses
+// the command line and interprets metacharacters even when libuv passes argv
+// elements separately (the BatBadBut class). Refuse to forward any argument
+// that could break out of cmd.exe quoting rather than relying on libuv.
+function assertCmdSafeArguments(args) {
+  for (const arg of args) {
+    if (/[\r\n&|<>^%()!"]/.test(arg)) {
+      process.stderr.write(
+        `Hackathon Agent Kit launcher: refusing to forward argument with cmd.exe metacharacters: ${JSON.stringify(arg)}\n`
+      );
+      process.exit(1);
+    }
+  }
+}
+if (isWindows) {
+  assertCmdSafeArguments(process.argv.slice(2));
+}
+
 const result = isWindows
   // .cmd/.bat files are not executable on their own under Node; launch through
   // the command interpreter. Pass the cmd file and args as separate argv

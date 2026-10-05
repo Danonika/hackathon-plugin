@@ -606,10 +606,29 @@ func originAllowed(r *http.Request) bool {
 	return false
 }
 
+// corsOrigin returns the Origin to reflect for CORS, or "" when it is not the
+// server's own origin. Reflecting any loopback origin would let a page on any
+// local port read cross-origin responses, including /fly-viz, which embeds the
+// demo token; a same-origin page does not need CORS at all.
+func corsOrigin(r *http.Request) string {
+	origin := r.Header.Get("Origin")
+	if origin == "" {
+		return ""
+	}
+	u, err := url.Parse(origin)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") {
+		return ""
+	}
+	if r.Host == "" || !strings.EqualFold(u.Host, r.Host) {
+		return ""
+	}
+	return origin
+}
+
 func withCORS(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Add("Vary", "Origin")
-		if origin := r.Header.Get("Origin"); origin != "" && originAllowed(r) {
+		if origin := corsOrigin(r); origin != "" {
 			w.Header().Set("Access-Control-Allow-Origin", origin)
 			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
 			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, X-HackathonKit-Token")

@@ -11,15 +11,27 @@ if (-not $root -or -not (Test-Path -LiteralPath (Join-Path $root "docker-compose
 Set-Location -LiteralPath $root -ErrorAction Stop
 Write-Host "[repair] repository root: $root"
 
+# A missing/renamed helper writes a non-terminating error under
+# $ErrorActionPreference="Continue" and leaves $LASTEXITCODE at 0, so guard the
+# path before relying on the exit code.
+$syncHarness = Join-Path $root "scripts\sync-harness.ps1"
+if (-not (Test-Path -LiteralPath $syncHarness)) { Write-Error "[repair] sync-harness.ps1 not found"; exit 1 }
 $global:LASTEXITCODE = 0
-& (Join-Path $root "scripts\sync-harness.ps1")
+& $syncHarness
 if ($LASTEXITCODE -ne 0) { Write-Error "[repair] sync-harness failed"; exit 1 }
+$genManifest = Join-Path $root "scripts\gen-mcp-manifest.ps1"
+if (-not (Test-Path -LiteralPath $genManifest)) { Write-Error "[repair] gen-mcp-manifest.ps1 not found"; exit 1 }
 $global:LASTEXITCODE = 0
-& (Join-Path $root "scripts\gen-mcp-manifest.ps1") -Root $root
+& $genManifest -Root $root
 if ($LASTEXITCODE -ne 0) { Write-Error "[repair] manifest generation failed"; exit 1 }
-$global:LASTEXITCODE = 0
-& (Join-Path $root "scripts\install-prompts.ps1") install
-if ($LASTEXITCODE -ne 0) { Write-Warning "[repair] could not install the Codex command prompts" }
+$installPrompts = Join-Path $root "scripts\install-prompts.ps1"
+if (-not (Test-Path -LiteralPath $installPrompts)) {
+  Write-Warning "[repair] install-prompts.ps1 not found; could not install the Codex command prompts"
+} else {
+  $global:LASTEXITCODE = 0
+  & $installPrompts install
+  if ($LASTEXITCODE -ne 0) { Write-Warning "[repair] could not install the Codex command prompts" }
+}
 $dirFailures = 0
 foreach ($d in @("logs", "evals", "data\artifacts", "data\index", "data\control", "data\judge-bundles")) {
   try {

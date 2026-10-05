@@ -21,6 +21,13 @@ fi
 # Validate MAJOR.MINOR.PATCH with a strict regex (POSIX case globs cannot
 # anchor `.` or repeat groups precisely).
 valid_version() {
+  # grep matches any line, so an embedded newline (e.g. "1.2.3\ne touch /tmp/x")
+  # would pass the pattern and then inject a sed command via the replacement.
+  # Reject newlines before matching so only a single clean version is accepted.
+  case "$1" in
+    *'
+'*) return 1 ;;
+  esac
   printf '%s' "$1" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'
 }
 

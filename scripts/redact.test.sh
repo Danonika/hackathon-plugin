@@ -10,6 +10,12 @@ check() {
   else echo "[fail] $name${detail:+: $detail}"; FAIL=$((FAIL + 1)); fi
 }
 
+# A misbehaving redactor must fail an assertion, not abort the suite under
+# `set -e` (which would skip every later check and the failure summary). Run the
+# invocations with errexit disabled so a non-zero exit just yields an empty `out`
+# and the corresponding check records a [fail].
+set +e
+
 out=$(printf 'postgres://user:s3cr3t@db:5432/app\n' | sh "$REDACT")
 check "url userinfo redacted" "$(printf '%s' "$out" | grep -q '://\*\*\*@db' && ! printf '%s' "$out" | grep -q 's3cr3t' && echo 1)" "got: $out"
 
@@ -51,6 +57,8 @@ check "prose with a bare keyword word is left readable" "$([ "$out" = "the token
 
 out=$(printf 'password=ab%s\n' "'cd" | sh "$REDACT")
 check "unquoted value containing a quote fully redacted" "$([ "$out" = "password=[redacted]" ] && echo 1)" "got: $out"
+
+set -e
 
 if [ "$FAIL" -gt 0 ]; then
   echo "[redact-test] $FAIL assertion(s) failed"
