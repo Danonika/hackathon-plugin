@@ -52,6 +52,15 @@ func registerResources(reg *mcp.Registry, d Deps) {
 			resourcesProfileMu.Lock()
 			defer resourcesProfileMu.Unlock()
 			root := d.Cfg.Root()
+			valid := map[string]bool{"track": true, "note": true}
+			for _, def := range resources.Defs() {
+				valid[def.ID] = true
+			}
+			for key := range args {
+				if !valid[key] {
+					return mcp.Fail(trace(ctx), fmt.Sprintf("unknown resource %q", key)), nil
+				}
+			}
 			profile, _, err := resources.Load(root)
 			if err != nil {
 				return mcp.Fail(trace(ctx), err.Error()), nil
@@ -118,6 +127,7 @@ func registerResources(reg *mcp.Registry, d Deps) {
 			live := argBool(args, "live", false)
 			results := []any{}
 			configured, reachable := 0, 0
+			probeableConfigured, probeableReachable := 0, 0
 			for _, status := range statuses {
 				if selected != "" && status.ID != selected {
 					continue
@@ -129,6 +139,14 @@ func registerResources(reg *mcp.Registry, d Deps) {
 				if result["reachable"] == true {
 					reachable++
 				}
+				// Presence-only providers never set reachable, so only compare
+				// providers that actually support a live probe.
+				if live && status.Ready && liveProbeSupported(status.ID) {
+					probeableConfigured++
+					if result["reachable"] == true {
+						probeableReachable++
+					}
+				}
 				results = append(results, result)
 			}
 			data := map[string]any{
@@ -139,7 +157,7 @@ func registerResources(reg *mcp.Registry, d Deps) {
 				d.Metrics.Inc("resources_probe_total")
 			}
 			incomplete := configured < len(results)
-			if live && reachable < configured {
+			if live && probeableReachable < probeableConfigured {
 				incomplete = true
 			}
 			if incomplete {
@@ -328,6 +346,17 @@ func probeProvider(ctx context.Context, d Deps, status resources.Status, live bo
 		result["note"] = "presence-only provider; no live probe"
 		return result
 	}
+}
+
+// liveProbeSupported reports whether probeProvider performs a live network
+// check for the provider; presence-only providers must not count as
+// unreachable.
+func liveProbeSupported(id string) bool {
+	switch id {
+	case "openai_api", "nvidia_api", "telegram":
+		return true
+	}
+	return false
 }
 
 func knownProvider(id string) bool {

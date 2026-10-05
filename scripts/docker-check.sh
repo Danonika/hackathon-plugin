@@ -2,10 +2,11 @@
 # Staged Docker verification for the Hackathon Agent Kit stack.
 #
 #   scripts/docker-check.sh          # config, build, selftest, infra, smoke
+#   scripts/docker-check.sh --fast   # default; same as no flag (accepted explicitly)
 #   scripts/docker-check.sh --full   # also build and run the Go-enabled quality image
 #   scripts/docker-check.sh --keep-infra  # leave postgres/redis/minio running
 #
-# Exit codes: 0 ok, 1 failed, 2 docker unavailable.
+# Exit codes: 0 ok, 1 failed, 2 docker unavailable, 64 unknown argument.
 set -e
 ROOT="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
 cd "$ROOT"
@@ -18,7 +19,7 @@ for arg in "$@"; do
     --fast) MODE="fast" ;;
     --keep-infra) KEEP_INFRA=1 ;;
     -h|--help)
-      echo "usage: scripts/docker-check.sh [--full] [--keep-infra]"
+      echo "usage: scripts/docker-check.sh [--fast|--full] [--keep-infra]"
       exit 0
       ;;
     *)
@@ -65,7 +66,11 @@ stop_infra() {
 
 diagnostics() {
   status=$?
-  stop_infra
+  # --keep-infra means the user wants to inspect the stack, so do not tear it
+  # down on the failure path either.
+  if [ "$KEEP_INFRA" != "1" ]; then
+    stop_infra
+  fi
   if [ "$status" -ne 0 ]; then
     echo "[docker-check] FAILED (exit $status); diagnostics (credentials redacted):" >&2
     docker compose ps -a 2>&1 | redact_logs >&2 || true
@@ -115,7 +120,13 @@ until docker compose exec -T redis redis-cli ping 2>/dev/null | grep -q PONG; do
   sleep 2
 done
 
-MINIO_PORT="${HACKATHONKIT_MINIO_PORT:-9000}"
+# Derive the host port from the compose published mapping. HACKATHONKIT_MINIO_PORT
+# is not referenced by docker-compose.yml, so an exported value would probe a
+# port unrelated to the one compose actually publishes.
+MINIO_PORT=$(docker compose port minio 9000 2>/dev/null | sed -n 's/.*:\([0-9][0-9]*\)$/\1/p' | head -n 1)
+if [ -z "$MINIO_PORT" ]; then
+  MINIO_PORT=9000
+fi
 if command -v curl >/dev/null 2>&1; then
   tries=0
   until curl -fsS "http://127.0.0.1:${MINIO_PORT}/minio/health/live" >/dev/null 2>&1; do

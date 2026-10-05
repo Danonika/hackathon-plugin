@@ -105,16 +105,16 @@ func securitySource(d Deps, args map[string]any) (string, string, error) {
 	if path := argString(args, "path"); path != "" {
 		full, err := d.Store.InputPath(path)
 		if err != nil {
-			return "", "", err
+			return "", "", fmt.Errorf("input %s is not readable", path)
 		}
 		f, err := os.Open(full)
 		if err != nil {
-			return "", "", err
+			return "", "", fmt.Errorf("input %s is not readable", path)
 		}
 		defer f.Close()
 		data, err := io.ReadAll(io.LimitReader(f, int64(securityScanLimit)+1))
 		if err != nil {
-			return "", "", err
+			return "", "", fmt.Errorf("input %s is not readable", path)
 		}
 		return "input:" + path, string(data), nil
 	}
@@ -132,7 +132,7 @@ func securitySource(d Deps, args map[string]any) (string, string, error) {
 			// fallback + rehydrate), capped to the scan limit.
 			raw, rerr := d.Store.ReadArtifact(artifact)
 			if rerr != nil {
-				return "", "", rerr
+				return "", "", fmt.Errorf("artifact %s is not readable", artifact)
 			}
 			// Keep one extra byte as a truncation sentinel: the caller keys its
 			// len(text) > limit check on it and then cuts rune-safely.

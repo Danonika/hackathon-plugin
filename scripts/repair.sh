@@ -5,6 +5,26 @@ ROOT="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
 
 echo "[repair] repository root: $ROOT"
 
+# Serialize concurrent repairs: two runs can race on the temp binaries and the
+# install-state write. Note that replacing a binary in place while an MCP/demo
+# process is running causes version skew until that process is restarted.
+LOCK="$ROOT/.repair.lock"
+if [ -d "$LOCK" ]; then
+  HOLDER=$(cat "$LOCK/pid" 2>/dev/null || true)
+  if [ -n "$HOLDER" ] && ! kill -0 "$HOLDER" 2>/dev/null; then
+    rm -rf "$LOCK"
+  fi
+fi
+if ! mkdir "$LOCK" 2>/dev/null; then
+  echo "[repair] another repair run holds $LOCK; aborting" >&2
+  exit 1
+fi
+printf '%s' "$$" > "$LOCK/pid" 2>/dev/null || true
+release_repair_lock() { rm -rf "$LOCK"; }
+trap release_repair_lock EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
 sh "$ROOT/scripts/sync-harness.sh"
 sh "$ROOT/scripts/gen-mcp-manifest.sh" "$ROOT"
 sh "$ROOT/scripts/gen-codex-config.sh" "$ROOT"
@@ -21,13 +41,17 @@ if [ -f "$ROOT/configs/install-state.json" ]; then
   esac
 fi
 RUNTIME="binary"
-if command -v docker >/dev/null 2>&1; then
-  if command -v timeout >/dev/null 2>&1; then
-    if timeout 5 docker info >/dev/null 2>&1; then
+# Only probe docker when the probe can be bounded; an unbounded `docker info`
+# can hang the repair on hosts without `timeout` (e.g. macOS).
+if command -v docker >/dev/null 2>&1 && command -v timeout >/dev/null 2>&1; then
+  if timeout 5 docker info >/dev/null 2>&1; then
+    # A live daemon is not sufficient: the built MCP image must exist, otherwise
+    # the Go rebuild is skipped and the MCP runtime stays unavailable.
+    if timeout 10 docker image inspect hackathon-agent-kit-hackathonkit-mcp >/dev/null 2>&1; then
       RUNTIME="docker"
+    else
+      echo "[repair] warning: docker is up but the hackathonkit-mcp image is missing; using local binaries" >&2
     fi
-  elif docker info >/dev/null 2>&1; then
-    RUNTIME="docker"
   fi
 fi
 
@@ -62,8 +86,6 @@ if { [ ! -x "$ROOT/bin/hackathonkit-mcp" ] || [ ! -x "$ROOT/bin/hackathonkit-dem
   fi
 fi
 
-sh "$ROOT/scripts/write-install-state.sh" "$ROOT" "$PROFILE" "$RUNTIME"
-
 if command -v codex >/dev/null 2>&1; then
   if ! codex plugin marketplace add "$ROOT" >/dev/null 2>&1; then
     echo "[repair] warning: codex plugin marketplace add failed" >&2
@@ -75,5 +97,9 @@ if command -v codex >/dev/null 2>&1; then
     exit 1
   fi
 fi
+
+# Persist install state only after every step (including the Codex verification
+# above) has succeeded, so a failed run cannot claim a completed repair.
+sh "$ROOT/scripts/write-install-state.sh" "$ROOT" "$PROFILE" "$RUNTIME"
 
 echo "[repair] done. Run $ROOT/scripts/doctor.sh to verify."

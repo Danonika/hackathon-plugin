@@ -50,10 +50,15 @@ type Client struct {
 }
 
 func Open(ctx context.Context, s Settings) (*Client, error) {
+	// Normalize once: a value with surrounding whitespace (common in a
+	// CRLF .env) would pass the guard and then fail with an opaque error.
+	s.Endpoint = strings.TrimSpace(s.Endpoint)
+	s.AccessKey = strings.TrimSpace(s.AccessKey)
+	s.SecretKey = strings.TrimSpace(s.SecretKey)
 	if s.Endpoint == "" {
 		return nil, fmt.Errorf("objectstore: MINIO_ENDPOINT is not set")
 	}
-	if strings.TrimSpace(s.AccessKey) == "" || strings.TrimSpace(s.SecretKey) == "" {
+	if s.AccessKey == "" || s.SecretKey == "" {
 		return nil, fmt.Errorf("objectstore: MINIO_ACCESS_KEY and MINIO_SECRET_KEY are required")
 	}
 	cli, err := minio.New(s.Endpoint, &minio.Options{

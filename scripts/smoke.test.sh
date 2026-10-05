@@ -34,17 +34,24 @@ printf 'services: {}\n' > "$REPO/docker-compose.yml"
 write_responder() {
   path="$1"
   marker="$2"
-  cat > "$path" <<EOF
+  # Quoted heredoc: every '$' in the body reaches the stub verbatim, so editing
+  # the JSON payload can never silently corrupt it. The label is substituted
+  # afterwards with a portable sed round-trip.
+  cat > "$path" <<'EOF'
 #!/usr/bin/env sh
-count=\$(cat | wc -l | tr -d ' ')
-printf '%s %s stdin=%s\n' "$marker" "\$*" "\$count" >> "\$MARKER"
-printf '%s\n' \\
-'{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-06-18"}}' \\
-'{"jsonrpc":"2.0","id":2,"result":{"tools":[]}}' \\
+count=$(cat | wc -l | tr -d ' ')
+printf '%s %s stdin=%s\n' "@MARKER@" "$*" "$count" >> "$MARKER"
+printf '%s\n' \
+'{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-06-18"}}' \
+'{"jsonrpc":"2.0","id":2,"result":{"tools":[]}}' \
 '{"jsonrpc":"2.0","id":3,"result":{"content":[],"isError":false}}'
 EOF
+  sed "s/@MARKER@/$marker/" "$path" > "$path.new" && mv "$path.new" "$path"
   chmod +x "$path"
 }
+
+# Derive the expected request count from smoke.sh instead of hard-coding it.
+EXPECTED_STDIN=$(grep -c '^{"jsonrpc":"2.0","id":' "$ROOT/scripts/smoke.sh")
 
 write_responder "$REPO/bin/hackathonkit-mcp" binary
 write_responder "$TMP/bin/docker" docker
@@ -60,7 +67,7 @@ if run_smoke --compose >/dev/null 2>&1; then
 else
   check "--compose exits 0" 0 "non-zero exit"
 fi
-check "--compose used docker with the compose args" "$(grep -q '^docker compose .*run --rm -T hackathonkit-mcp stdin=3' "$TMP/marker" 2>/dev/null && echo 1 || echo 0)" "$(cat "$TMP/marker" 2>/dev/null)"
+check "--compose used docker with the compose args" "$(grep -q "run --rm -T hackathonkit-mcp stdin=$EXPECTED_STDIN" "$TMP/marker" 2>/dev/null && echo 1 || echo 0)" "$(cat "$TMP/marker" 2>/dev/null)"
 check "--compose skipped the local binary" "$(grep -q '^binary ' "$TMP/marker" 2>/dev/null && echo 0 || echo 1)"
 
 # --binary uses the local binary and never Docker.
@@ -70,7 +77,7 @@ if run_smoke --binary >/dev/null 2>&1; then
 else
   check "--binary exits 0" 0 "non-zero exit"
 fi
-check "--binary used the local binary with --repo-root" "$(grep -q '^binary --repo-root .*stdin=3' "$TMP/marker" 2>/dev/null && echo 1 || echo 0)"
+check "--binary used the local binary with --repo-root" "$(grep -q "^binary --repo-root .*stdin=$EXPECTED_STDIN" "$TMP/marker" 2>/dev/null && echo 1 || echo 0)"
 check "--binary skipped docker" "$(grep -q '^docker ' "$TMP/marker" 2>/dev/null && echo 0 || echo 1)"
 
 # --auto prefers the local binary and must not touch docker.
@@ -83,6 +90,18 @@ fi
 check "--auto prefers the local binary" "$(grep -q '^binary ' "$TMP/marker" 2>/dev/null && echo 1 || echo 0)"
 check "--auto skips docker" "$(grep -q '^docker ' "$TMP/marker" 2>/dev/null && echo 0 || echo 1)"
 
+# --auto detects a stale local binary (a newer .go source) and uses compose.
+mkdir -p "$REPO/cmd" "$REPO/internal"
+sleep 1
+printf 'package main\n' > "$REPO/cmd/main.go"
+rm -f "$TMP/marker"
+if run_smoke --auto >/dev/null 2>&1; then
+  check "--auto stale binary exits 0" 1
+else
+  check "--auto stale binary exits 0" 0 "non-zero exit"
+fi
+check "--auto uses compose when the local binary is stale" "$(grep -q '^docker compose ' "$TMP/marker" 2>/dev/null && echo 1 || echo 0)" "$(cat "$TMP/marker" 2>/dev/null)"
+
 # --auto without a local binary falls back to Docker.
 rm -f "$TMP/marker" "$REPO/bin/hackathonkit-mcp"
 if run_smoke --auto >/dev/null 2>&1; then
@@ -91,6 +110,14 @@ else
   check "--auto falls back to docker" 0 "non-zero exit"
 fi
 check "--auto used docker when the binary is absent" "$(grep -q '^docker compose ' "$TMP/marker" 2>/dev/null && echo 1 || echo 0)" "$(cat "$TMP/marker" 2>/dev/null)"
+
+# --auto with neither a local binary nor the docker CLI exits 1.
+rm -f "$TMP/marker"
+if HACKATHONKIT_SMOKE_DOCKER="hackathonkit-no-such-docker" MARKER="$TMP/marker" PATH="/usr/bin:/bin" sh "$REPO/scripts/smoke.sh" --auto >/dev/null 2>&1; then
+  check "--auto without any runtime fails with exit 1" 0 "expected non-zero exit"
+else
+  check "--auto without any runtime fails with exit 1" 1
+fi
 
 # --binary without a local binary fails with a clear status.
 rm -f "$TMP/marker"
@@ -108,7 +135,7 @@ write_responder "$REPO/bin/hackathonkit-mcp" binary
 
 # --compose without docker fails loudly.
 rm -f "$TMP/marker"
-if HACKATHONKIT_SMOKE_DOCKER="hackathonkit-no-such-docker" MARKER="$TMP/marker" PATH="$TMP/bin:/usr/bin:/bin" sh "$REPO/scripts/smoke.sh" --compose >/dev/null 2>&1; then
+if HACKATHONKIT_SMOKE_DOCKER="hackathonkit-no-such-docker" MARKER="$TMP/marker" PATH="/usr/bin:/bin" sh "$REPO/scripts/smoke.sh" --compose >/dev/null 2>&1; then
   COMPOSE_STATUS=0
 else
   COMPOSE_STATUS=$?

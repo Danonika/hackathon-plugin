@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"unicode/utf8"
 
 	"hackathonkit.local/agentkit/internal/mcp"
 )
@@ -110,12 +111,13 @@ func registerFiles(reg *mcp.Registry, d Deps) {
 					if rerr != nil {
 						warnings = append(warnings, "could not read text content: "+rerr.Error())
 					} else {
+						s := string(b)
 						if len(b) == 0 {
 							data["lines"] = 0
 						} else {
-							data["lines"] = strings.Count(strings.TrimSuffix(string(b), "\n"), "\n") + 1
+							data["lines"] = strings.Count(strings.TrimSuffix(s, "\n"), "\n") + 1
 						}
-						data["chars"] = len([]rune(string(b)))
+						data["chars"] = utf8.RuneCount(b)
 						if int64(len(b)) > maxTextInspectBytes {
 							warnings = append(warnings, "text content truncated for inspection")
 						}

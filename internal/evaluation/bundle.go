@@ -10,6 +10,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -68,6 +69,17 @@ func normalizeProfile(profile string) string {
 	}
 }
 
+// bundleReserved are root-level names this tool owns and writes itself. They
+// must never be copied from the repository, or a repository file of the same
+// name would overwrite the marker/metadata and render the bundle unusable.
+var bundleReserved = map[string]bool{
+	".hackathonkit-bundle":   true,
+	"git-sha.txt":        true,
+	"rubric-version.txt": true,
+	"bundle.json":        true,
+	"bundle-hash.txt":    true,
+}
+
 func demoIncluded(rel string) bool {
 	for _, include := range demoIncludes {
 		if rel == include || strings.HasPrefix(rel, include+"/") {
@@ -106,7 +118,10 @@ func FreezeBundle(opts BundleOptions) (Bundle, error) {
 		return Bundle{}, err
 	}
 	info, err := os.Stat(root)
-	if err != nil || !info.IsDir() {
+	if err != nil {
+		return Bundle{}, fmt.Errorf("cannot stat bundle root %s: %w", root, err)
+	}
+	if !info.IsDir() {
 		return Bundle{}, fmt.Errorf("bundle root is not a directory: %s", root)
 	}
 	outDir := opts.OutDir
@@ -212,6 +227,9 @@ func FreezeBundle(opts BundleOptions) (Bundle, error) {
 		if profile == "demo" && !demoIncluded(relSlash) {
 			return nil
 		}
+		if !strings.Contains(relSlash, "/") && bundleReserved[relSlash] {
+			return nil
+		}
 		dst := filepath.Join(tmpAbs, filepath.FromSlash(relSlash))
 		if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
 			return err
@@ -264,13 +282,38 @@ func FreezeBundle(opts BundleOptions) (Bundle, error) {
 	if err := os.WriteFile(filepath.Join(tmpAbs, "bundle-hash.txt"), []byte(bundleHash+"\n"), manifestMode); err != nil {
 		return Bundle{}, err
 	}
-	// Swap the completed bundle into place. The previous bundle is removed only
-	// now, after the new one has been built and hashed successfully.
-	if err := removeOwnedBundle(outAbs, outDir); err != nil {
+	// Swap the completed bundle into place without ever leaving the committed
+	// bundle missing: verify ownership, move the live bundle aside, install the
+	// new one, and only then delete the backup. If the install fails, roll the
+	// backup back.
+	if err := verifyOwnedBundle(outAbs, outDir); err != nil {
+		return Bundle{}, err
+	}
+	backupAbs := outAbs + ".bak"
+	if err := os.RemoveAll(backupAbs); err != nil {
+		return Bundle{}, err
+	}
+	hadPrevious := false
+	if _, err := os.Lstat(outAbs); err == nil {
+		if err := os.Rename(outAbs, backupAbs); err != nil {
+			return Bundle{}, err
+		}
+		hadPrevious = true
+	} else if !os.IsNotExist(err) {
 		return Bundle{}, err
 	}
 	if err := os.Rename(tmpAbs, outAbs); err != nil {
+		if hadPrevious {
+			if rberr := os.Rename(backupAbs, outAbs); rberr != nil {
+				return Bundle{}, fmt.Errorf("bundle install failed (%v) and rollback failed: %w", err, rberr)
+			}
+		}
 		return Bundle{}, err
+	}
+	if hadPrevious {
+		if err := os.RemoveAll(backupAbs); err != nil {
+			return Bundle{}, err
+		}
 	}
 	return Bundle{
 		Dir:           outAbs,
@@ -285,10 +328,9 @@ func FreezeBundle(opts BundleOptions) (Bundle, error) {
 	}, nil
 }
 
-// removeOwnedBundle deletes a previous bundle directory, but only after
-// re-verifying that this tool created it (ownership marker) and that it is not
-// a symlink. A missing directory is not an error.
-func removeOwnedBundle(outAbs, outDir string) error {
+// verifyOwnedBundle checks that a path this tool wants to replace is a bundle
+// it created (ownership marker) and is not a symlink. A missing path is fine.
+func verifyOwnedBundle(outAbs, outDir string) error {
 	info, err := os.Lstat(outAbs)
 	if os.IsNotExist(err) {
 		return nil
@@ -297,7 +339,7 @@ func removeOwnedBundle(outAbs, outDir string) error {
 		return err
 	}
 	if info.Mode()&os.ModeSymlink != 0 {
-		return fmt.Errorf("refusing to delete %s: it is a symlink", outDir)
+		return fmt.Errorf("refusing to replace %s: it is a symlink", outDir)
 	}
 	if info.IsDir() {
 		entries, rerr := os.ReadDir(outAbs)
@@ -307,17 +349,18 @@ func removeOwnedBundle(outAbs, outDir string) error {
 		if len(entries) > 0 {
 			marker, merr := os.ReadFile(filepath.Join(outAbs, ".hackathonkit-bundle"))
 			if merr != nil || strings.TrimSpace(string(marker)) != outAbs {
-				return fmt.Errorf("refusing to delete %s: not a bundle created by this tool (missing ownership marker)", outDir)
+				return fmt.Errorf("refusing to replace %s: not a bundle created by this tool (missing ownership marker)", outDir)
 			}
 		}
 	}
-	return os.RemoveAll(outAbs)
+	return nil
 }
 
 type excludeRule struct {
 	pattern  string
 	hasSlash bool
 	glob     bool
+	re       *regexp.Regexp
 }
 
 // compileExcludes turns the exclude list into rules. A pattern with a slash
@@ -336,13 +379,68 @@ func compileExcludes(patterns []string) []excludeRule {
 			continue
 		}
 		seen[pattern] = struct{}{}
-		rules = append(rules, excludeRule{
+		rule := excludeRule{
 			pattern:  pattern,
 			hasSlash: strings.Contains(pattern, "/"),
 			glob:     strings.ContainsAny(pattern, "*?["),
-		})
+		}
+		if rule.glob {
+			rule.re, _ = globToRegexp(pattern)
+		}
+		rules = append(rules, rule)
 	}
 	return rules
+}
+
+// globToRegexp translates a path glob into an anchored regexp. Unlike
+// path.Match, `*` does not cross `/` but `**` does, so patterns such as
+// `**/secrets` or `data/*/cache` actually match nested paths instead of
+// silently excluding nothing.
+func globToRegexp(pattern string) (*regexp.Regexp, error) {
+	var b strings.Builder
+	b.WriteString("^")
+	for i := 0; i < len(pattern); i++ {
+		switch c := pattern[i]; c {
+		case '*':
+			if i+1 < len(pattern) && pattern[i+1] == '*' {
+				i++
+				if i+1 < len(pattern) && pattern[i+1] == '/' {
+					i++
+					b.WriteString("(?:.*/)?")
+				} else {
+					b.WriteString(".*")
+				}
+			} else {
+				b.WriteString("[^/]*")
+			}
+		case '?':
+			b.WriteString("[^/]")
+		case '[':
+			j := i + 1
+			if j < len(pattern) && (pattern[j] == '!' || pattern[j] == '^') {
+				j++
+			}
+			if j < len(pattern) && pattern[j] == ']' {
+				j++
+			}
+			for j < len(pattern) && pattern[j] != ']' {
+				j++
+			}
+			if j >= len(pattern) {
+				return nil, fmt.Errorf("unterminated character class in %q", pattern)
+			}
+			class := pattern[i : j+1]
+			if strings.HasPrefix(class, "[!") {
+				class = "[^" + class[2:]
+			}
+			b.WriteString(class)
+			i = j
+		default:
+			b.WriteString(regexp.QuoteMeta(string(c)))
+		}
+	}
+	b.WriteString("$")
+	return regexp.Compile(b.String())
 }
 
 // validateExcludes rejects malformed glob patterns up front instead of
@@ -352,7 +450,7 @@ func validateExcludes(patterns []string) error {
 		if !strings.ContainsAny(pattern, "*?[") {
 			continue
 		}
-		if _, err := path.Match(pattern, ""); err != nil {
+		if _, err := globToRegexp(pattern); err != nil {
 			return fmt.Errorf("invalid exclude pattern %q: %w", pattern, err)
 		}
 	}
@@ -363,10 +461,7 @@ func isExcluded(rel string, rules []excludeRule) bool {
 	base := path.Base(rel)
 	for _, rule := range rules {
 		if rule.glob {
-			if ok, _ := path.Match(rule.pattern, rel); ok {
-				return true
-			}
-			if ok, _ := path.Match(rule.pattern, base); ok {
+			if rule.re != nil && (rule.re.MatchString(rel) || rule.re.MatchString(base)) {
 				return true
 			}
 			continue

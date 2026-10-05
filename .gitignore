@@ -6,17 +6,17 @@
 *.exe
 .env
 .env.*
-!/.env.example
+!.env.example
 /logs/
 node_modules/
 __pycache__/
 *.pyc
 .coverage
-coverage/
-htmlcov/
+/coverage/
+/htmlcov/
 .venv/
 /tmp/
-*.log
+/*.log
 plugins/hackathonkit/.mcp.json
 # All runtime/generated state under data/ is ignored, except the committed
 # sample corpus and dataset. New generated subdirectories are covered

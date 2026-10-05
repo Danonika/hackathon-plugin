@@ -3,17 +3,19 @@ $ErrorActionPreference = "Continue"
 # A bounded TCP connect is far faster than Test-NetConnection's ICMP+TCP probe.
 function Test-TcpPort([string]$HostName, [int]$Port) {
   $client = $null
-  $async = $null
   try {
     $client = New-Object System.Net.Sockets.TcpClient
     $async = $client.BeginConnect($HostName, $Port, $null, $null)
-    if (-not $async.AsyncWaitHandle.WaitOne(1000)) { return $false }
+    if (-not $async.AsyncWaitHandle.WaitOne(1000)) {
+      # Abort the in-flight connect and leave the wait handle to the runtime.
+      $client.Close()
+      return $false
+    }
     $client.EndConnect($async)
     return $true
   } catch {
     return $false
   } finally {
-    if ($async) { $async.AsyncWaitHandle.Close() }
     if ($client) { $client.Close() }
   }
 }
@@ -42,7 +44,9 @@ $routingFile = Join-Path $root "configs\routing.yaml"
 Check "routing config" (Test-Path -LiteralPath $routingFile) $routingFile
 
 $go = Get-Command go -ErrorAction SilentlyContinue
-Check "go toolchain (dev)" $true $(if ($go) { (go version) } else { "not found (not required for docker path)" })
+# Go is optional (the docker path does not need it), so report it as info
+# rather than a check that can never fail.
+Write-Host ("[info] {0,-22} {1}" -f "go toolchain (dev)", $(if ($go) { (go version) } else { "not found (not required for docker path)" }))
 
 $codex = Get-Command codex -ErrorAction SilentlyContinue
 Check "codex CLI" ($null -ne $codex) $(if ($codex) { (codex --version) } else { "not found" })
@@ -68,14 +72,20 @@ $srcFiles = @()
 if (Test-Path -LiteralPath $srcSkillsPath) {
   $srcFiles = @(Get-ChildItem -LiteralPath $srcSkillsPath -Recurse -File -Force |
     Where-Object { -not ($_.Attributes -band [System.IO.FileAttributes]::ReparsePoint) } |
-    ForEach-Object { $_.FullName.Substring($srcSkillsPath.Length).TrimStart('\') } | Sort-Object)
+    ForEach-Object {
+      $rel = $_.FullName.Substring($srcSkillsPath.Length).TrimStart('\', '/')
+      "$rel|$((Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash)"
+    } | Sort-Object)
 }
 $dstPath = Join-Path $root ".agents\skills"
 $dstFiles = @()
 if (Test-Path -LiteralPath $dstPath) {
   $dstFiles = @(Get-ChildItem -LiteralPath $dstPath -Recurse -File -Force |
     Where-Object { -not ($_.Attributes -band [System.IO.FileAttributes]::ReparsePoint) } |
-    ForEach-Object { $_.FullName.Substring($dstPath.Length).TrimStart('\') } | Sort-Object)
+    ForEach-Object {
+      $rel = $_.FullName.Substring($dstPath.Length).TrimStart('\', '/')
+      "$rel|$((Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash)"
+    } | Sort-Object)
 }
 $mirrorDiff = @(Compare-Object -ReferenceObject $srcFiles -DifferenceObject $dstFiles)
 $mirrorOk = ($srcFiles.Count -gt 0) -and ($mirrorDiff.Count -eq 0)
@@ -114,7 +124,7 @@ if (Test-Path -LiteralPath $statePath) {
     $stateVersion = "unreadable"
   }
 }
-Check "install state" ($stateVersion -ne "" -and $stateVersion -ne "unknown" -and $stateVersion -ne "unreadable") $(if ($stateVersion) { "version $stateVersion" } else { "missing configs/install-state.json; run scripts/setup.ps1" })
+Check "install state" ($stateVersion -ne "" -and $stateVersion -ne "unreadable") $(if ($stateVersion) { "version $stateVersion" } else { "missing configs/install-state.json; run scripts/setup.ps1" })
 
 $telegramSet = $false
 if ($env:TELEGRAM_BOT_TOKEN) { $telegramSet = $true }

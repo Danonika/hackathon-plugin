@@ -36,7 +36,7 @@ func registerLearning(reg *mcp.Registry, d Deps) {
 			if d.Metrics != nil {
 				d.Metrics.Inc("learning_records_total")
 			}
-			return mcp.OK(trace(ctx), map[string]any{
+			env := mcp.OK(trace(ctx), map[string]any{
 				"id":           result.Learning.ID,
 				"confidence":   result.Learning.Confidence,
 				"observations": result.Learning.Observations,
@@ -45,7 +45,13 @@ func registerLearning(reg *mcp.Registry, d Deps) {
 			}).WithMetrics(map[string]any{
 				"confidence": result.Learning.Confidence,
 				"created":    result.Created,
-			}), nil
+			})
+			if result.EmbeddingError != "" {
+				// The record was still persisted; recall degrades to lexical
+				// matching without the vector.
+				env = env.WithWarnings("semantic embedding failed; recall will fall back to lexical matching: " + result.EmbeddingError)
+			}
+			return env, nil
 		},
 	))
 

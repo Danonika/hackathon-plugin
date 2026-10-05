@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -47,12 +48,23 @@ func New(cfg config.OpenAISettings) *Client {
 		APIKey:          os.Getenv("OPENAI_API_KEY"),
 		BaseURL:         strings.TrimRight(base, "/"),
 		SessionID:       newSessionID(),
-		HTTP:            &http.Client{Timeout: 180 * time.Second},
+		HTTP:            &http.Client{Timeout: timeoutFromEnv()},
 		ChatModel:       cfg.ChatModel,
 		VisionModel:     cfg.VisionModel,
 		TranscribeModel: cfg.TranscribeModel,
 		EmbeddingModel:  cfg.EmbeddingModel,
 	}
+}
+
+// timeoutFromEnv returns the HTTP round-trip timeout, overridable through
+// OPENAI_TIMEOUT_SEC for slow-but-legitimate uploads and long completions.
+func timeoutFromEnv() time.Duration {
+	if value := strings.TrimSpace(os.Getenv("OPENAI_TIMEOUT_SEC")); value != "" {
+		if seconds, err := strconv.Atoi(value); err == nil && seconds > 0 {
+			return time.Duration(seconds) * time.Second
+		}
+	}
+	return 180 * time.Second
 }
 
 func (c *Client) Available() bool {
@@ -171,7 +183,7 @@ func (c *Client) Embed(ctx context.Context, texts []string) ([][]float64, error)
 		}
 		result := make([][]float64, len(texts))
 		for i, d := range out.Data {
-			if d.Embedding == nil {
+			if len(d.Embedding) == 0 {
 				return nil, fmt.Errorf("embeddings response missing a vector for input %d", i)
 			}
 			result[i] = d.Embedding
@@ -179,6 +191,7 @@ func (c *Client) Embed(ctx context.Context, texts []string) ([][]float64, error)
 		return result, nil
 	}
 	result := make([][]float64, len(texts))
+	seen := make([]bool, len(texts))
 	for _, d := range out.Data {
 		if d.Index == nil {
 			return nil, fmt.Errorf("embeddings response mixes indexed and unindexed entries")
@@ -187,10 +200,17 @@ func (c *Client) Embed(ctx context.Context, texts []string) ([][]float64, error)
 		if index < 0 || index >= len(texts) {
 			return nil, fmt.Errorf("embeddings response index %d out of range for %d inputs", index, len(texts))
 		}
+		if seen[index] {
+			return nil, fmt.Errorf("embeddings response repeats index %d", index)
+		}
+		seen[index] = true
+		if len(d.Embedding) == 0 {
+			return nil, fmt.Errorf("embeddings response missing a vector for input %d", index)
+		}
 		result[index] = d.Embedding
 	}
 	for i, vector := range result {
-		if vector == nil {
+		if len(vector) == 0 {
 			return nil, fmt.Errorf("embeddings response missing a vector for input %d", i)
 		}
 	}
@@ -249,9 +269,12 @@ func (c *Client) Transcribe(ctx context.Context, path string, language string) (
 		return "", err
 	}
 	defer resp.Body.Close()
-	data, rerr := io.ReadAll(io.LimitReader(resp.Body, 32<<20))
+	data, rerr := io.ReadAll(io.LimitReader(resp.Body, 32<<20+1))
 	if rerr != nil {
 		return "", fmt.Errorf("openai transcribe: reading response: %w", rerr)
+	}
+	if len(data) > 32<<20 {
+		return "", fmt.Errorf("openai transcribe: response exceeds 32MB")
 	}
 	if resp.StatusCode >= 300 {
 		return "", fmt.Errorf("openai transcribe: status %d: %s", resp.StatusCode, truncate(string(data), 400))

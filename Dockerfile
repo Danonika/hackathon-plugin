@@ -1,10 +1,15 @@
+# syntax=docker/dockerfile:1
 FROM golang:1.27.0-alpine3.24 AS build
 WORKDIR /src
 COPY go.mod go.sum ./
-RUN go mod download
+RUN --mount=type=cache,target=/go/pkg/mod go mod download
 COPY . .
-RUN CGO_ENABLED=0 go build -buildvcs=false -trimpath -o /out/hackathonkit-mcp ./cmd/hackathonkit-mcp
-RUN CGO_ENABLED=0 go build -buildvcs=false -trimpath -o /out/hackathonkit-demo-api ./cmd/demo-api
+# Build both binaries in one layer and reuse the module/build caches so a
+# source change does not re-download modules or recompile shared packages twice.
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    CGO_ENABLED=0 go build -buildvcs=false -trimpath -o /out/hackathonkit-mcp ./cmd/hackathonkit-mcp && \
+    CGO_ENABLED=0 go build -buildvcs=false -trimpath -o /out/hackathonkit-demo-api ./cmd/demo-api
 
 FROM alpine:3.24.2 AS runtime-base
 # 1000:1000 matches the first regular host user on most Linux installs. Override
@@ -12,6 +17,9 @@ FROM alpine:3.24.2 AS runtime-base
 # via scripts/docker-check.sh) when your host user differs.
 ARG HACKATHONKIT_UID=1000
 ARG HACKATHONKIT_GID=1000
+# Never publish an image whose USER is root: reject id 0 or a non-numeric id.
+RUN test "${HACKATHONKIT_UID}" -gt 0 2>/dev/null && test "${HACKATHONKIT_GID}" -gt 0 2>/dev/null \
+    || { echo "HACKATHONKIT_UID/HACKATHONKIT_GID must be non-zero numeric ids" >&2; exit 1; }
 RUN apk add --no-cache ca-certificates && addgroup -g "${HACKATHONKIT_GID}" hackathonkit && adduser -D -u "${HACKATHONKIT_UID}" -G hackathonkit hackathonkit
 WORKDIR /workspace
 RUN mkdir -p /workspace/configs /workspace/logs /workspace/evals /workspace/data/input /workspace/data/artifacts /workspace/data/index /workspace/data/judge-bundles && chown -R "${HACKATHONKIT_UID}:${HACKATHONKIT_GID}" /workspace
@@ -24,7 +32,8 @@ ENTRYPOINT ["hackathonkit-mcp"]
 
 FROM runtime-base AS demo-api
 COPY --from=build /out/hackathonkit-demo-api /usr/local/bin/hackathonkit-demo-api
-# Bind on all interfaces so `docker run -p 8787:8787` works without extra env.
+# Bind inside the container so the compose mapping works; publish only on the
+# loopback interface, e.g. `docker run -p 127.0.0.1:8787:8787`.
 ENV HACKATHONKIT_DEMO_HOST=0.0.0.0
 EXPOSE 8787
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s CMD wget -qO- "http://127.0.0.1:${HACKATHONKIT_DEMO_PORT:-8787}/healthz" || exit 1

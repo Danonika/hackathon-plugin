@@ -167,9 +167,9 @@ func listArtifacts(checkout string) ([]string, error) {
 	out := []string{}
 	err := filepath.WalkDir(base, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
-			if path == base {
-				return nil
-			}
+			// A missing or unreadable artifacts directory must be reported: the
+			// caller records it as a note instead of presenting a clean empty
+			// run. Errors on non-root paths are propagated the same way.
 			return err
 		}
 		if d.IsDir() {
@@ -199,6 +199,9 @@ func finish(rep report, source, out string, stdout, stderr io.Writer, jsonOnly, 
 	if reportErr != nil {
 		fmt.Fprintln(stderr, "[rehearse] cannot write report:", reportErr)
 		ok = false
+		// The report is about to be emitted; keep its "ok" consistent with the
+		// exit status so a machine consumer cannot read a failed run as success.
+		rep.OK = false
 	}
 
 	if jsonOnly {

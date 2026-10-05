@@ -3,6 +3,7 @@ package metadata
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -142,12 +143,22 @@ ALTER TABLE eval_runs ADD COLUMN IF NOT EXISTS noise_floor DOUBLE PRECISION;
 ALTER TABLE eval_runs ADD COLUMN IF NOT EXISTS decision TEXT;
 ALTER TABLE eval_runs ADD COLUMN IF NOT EXISTS payload JSONB;
 ALTER TABLE eval_runs ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT now();
+UPDATE routing_runs SET mode='' WHERE mode IS NULL;
+UPDATE routing_runs SET version=0 WHERE version IS NULL;
+ALTER TABLE routing_runs ALTER COLUMN mode SET NOT NULL;
+ALTER TABLE routing_runs ALTER COLUMN version SET NOT NULL;
+UPDATE eval_runs SET kind='' WHERE kind IS NULL;
+ALTER TABLE eval_runs ALTER COLUMN kind SET NOT NULL;
 `
 
 // isDuplicateDDL tolerates a concurrent creator winning the DDL race.
 func isDuplicateDDL(err error) bool {
-	msg := err.Error()
-	return strings.Contains(msg, "already exists") || strings.Contains(msg, "42P07") || strings.Contains(msg, "42710")
+	var pgErr *pgconn.PgError
+	if !errors.As(err, &pgErr) {
+		return false
+	}
+	// 42P07 = duplicate_table, 42710 = duplicate_object.
+	return pgErr.Code == "42P07" || pgErr.Code == "42710"
 }
 
 type Postgres struct {
@@ -192,46 +203,50 @@ func openPostgres(ctx context.Context, dsn string, newPool func(context.Context,
 	return &Postgres{pool: pool}, nil
 }
 
-// poolRef returns the current pool under the lock so callers use a stable
-// reference: Close may nil the field concurrently.
-func (p *Postgres) poolRef() pgExecutor {
+// Enabled reports whether the recorder has a live pool.
+func (p *Postgres) Enabled() bool {
 	if p == nil {
-		return nil
+		return false
 	}
 	p.mu.RLock()
 	defer p.mu.RUnlock()
-	return p.pool
-}
-
-func (p *Postgres) Enabled() bool {
-	return p.poolRef() != nil
+	return p.pool != nil
 }
 
 func (p *Postgres) RecordArtifact(ctx context.Context, rec ArtifactRecord) error {
-	pool := p.poolRef()
-	if pool == nil {
+	if p == nil {
 		return nil
 	}
-	_, err := pool.Exec(ctx,
+	// Hold the read lock across Exec so Close cannot tear the pool down while
+	// the write is in flight (which would silently drop the record).
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	if p.pool == nil {
+		return nil
+	}
+	_, err := p.pool.Exec(ctx,
 		`INSERT INTO artifacts (artifact_id, kind, source, bytes, sha256) VALUES ($1,$2,$3,$4,$5)`,
 		rec.ArtifactID, rec.Kind, rec.Source, rec.Bytes, rec.SHA256)
 	return err
 }
 
 func (p *Postgres) RecordRoutingRun(ctx context.Context, run RoutingRun) error {
-	pool := p.poolRef()
-	if pool == nil {
+	if p == nil {
 		return nil
 	}
-	_, err := pool.Exec(ctx,
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	if p.pool == nil {
+		return nil
+	}
+	_, err := p.pool.Exec(ctx,
 		`INSERT INTO routing_runs (mode, version) VALUES ($1,$2)`,
 		run.Mode, run.Version)
 	return err
 }
 
 func (p *Postgres) RecordFlyPrediction(ctx context.Context, pred FlyPrediction) error {
-	pool := p.poolRef()
-	if pool == nil {
+	if p == nil {
 		return nil
 	}
 	scores, err := json.Marshal(pred.CategoryScores)
@@ -242,7 +257,12 @@ func (p *Postgres) RecordFlyPrediction(ctx context.Context, pred FlyPrediction) 
 	if err != nil {
 		return fmt.Errorf("metadata: marshal recommendations: %w", err)
 	}
-	_, err = pool.Exec(ctx,
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	if p.pool == nil {
+		return nil
+	}
+	_, err = p.pool.Exec(ctx,
 		`INSERT INTO fly_predictions (trace_id, route, encoder, max_score, threshold, category_scores, recommendations)
 		 VALUES ($1,$2,$3,$4,$5,$6,$7)`,
 		pred.TraceID, pred.Route, pred.Encoder, pred.MaxScore, pred.Threshold, scores, recs)
@@ -250,15 +270,19 @@ func (p *Postgres) RecordFlyPrediction(ctx context.Context, pred FlyPrediction) 
 }
 
 func (p *Postgres) RecordEvalRun(ctx context.Context, run EvalRun) error {
-	pool := p.poolRef()
-	if pool == nil {
+	if p == nil {
 		return nil
 	}
 	payload, err := json.Marshal(run.Payload)
 	if err != nil {
 		return fmt.Errorf("metadata: marshal eval payload: %w", err)
 	}
-	_, err = pool.Exec(ctx,
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	if p.pool == nil {
+		return nil
+	}
+	_, err = p.pool.Exec(ctx,
 		`INSERT INTO eval_runs (kind, snapshot_sha, score, target, noise_floor, decision, payload)
 		 VALUES ($1,$2,$3,$4,$5,$6,$7)`,
 		run.Kind, run.SnapshotSHA, run.Score, run.Target, run.NoiseFloor, run.Decision, payload)

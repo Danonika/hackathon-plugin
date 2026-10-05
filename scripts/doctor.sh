@@ -15,6 +15,14 @@ check() {
   fi
 }
 
+# Bound child checks when `timeout` is available so a hanging MCP server cannot
+# block doctor.sh indefinitely.
+if command -v timeout >/dev/null 2>&1; then
+  run_bounded() { timeout 180 "$@"; }
+else
+  run_bounded() { "$@"; }
+fi
+
 if [ -f "$ROOT/docker-compose.yml" ]; then check "repository root" 1 "$ROOT"; else check "repository root" 0 "$ROOT"; fi
 if [ -f "$ROOT/configs/routing.yaml" ]; then check "routing config" 1 "$ROOT/configs/routing.yaml"; else check "routing config" 0 "missing"; fi
 
@@ -59,12 +67,11 @@ print(state)
       END {
         n = split(text, parts, "{")
         for (i = 1; i <= n; i++) {
-          if (parts[i] ~ /"name"[ \t]*:[ \t]*"hackathonkit"/) {
+          if (parts[i] ~ /"name"[ \t]*:[ \t]*"hackathonkit"[ \t]*[,}]/) {
             if (parts[i] ~ /"enabled"[ \t]*:[ \t]*false/) { print "disabled"; exit }
             print "enabled"; exit
           }
         }
-        if (found) print "enabled"
       }'); then
       if [ -z "$PLUGIN_STATE" ]; then
         PLUGIN_STATE=missing
@@ -81,11 +88,12 @@ print(state)
 
   if [ "$PLUGIN_OK" = "1" ]; then
     PLUGIN_RUNTIME=0
-    PLUGIN_CHECK_OUT=$(sh "$ROOT/scripts/plugin-check.sh" 2>&1) || PLUGIN_RUNTIME=$?
+    PLUGIN_CHECK_OUT=$(run_bounded sh "$ROOT/scripts/plugin-check.sh" 2>&1) || PLUGIN_RUNTIME=$?
     case "$PLUGIN_RUNTIME" in
       0) check "plugin runtime" 1 "installed plugin starts MCP from a foreign cwd" ;;
+      124) check "plugin runtime" 0 "timed out; run scripts/plugin-check.sh for details" ;;
       2) echo "[info] plugin runtime check skipped (codex/python3 unavailable)" ;;
-      *) check "plugin runtime" 0 "$(printf '%s' "$PLUGIN_CHECK_OUT" | tail -n 1)" ;;
+      *) check "plugin runtime" 0 "$(printf '%s' "$PLUGIN_CHECK_OUT" | tail -n 5)" ;;
     esac
   else
     echo "[info] plugin runtime check skipped (plugin not installed or disabled)"
@@ -112,16 +120,17 @@ else
   check "mcp runtime" 0 "run scripts/setup.sh"
 fi
 
-SRC_COUNT=$(find "$ROOT/plugins/hackathonkit/skills" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | wc -l | tr -d ' ')
-DST_COUNT=0
+# Use one consistent listing for both trees (find, not ls) so hidden and
+# symlinked directories are classified identically on both sides.
+SRC_NAMES=$(cd "$ROOT/plugins/hackathonkit/skills" 2>/dev/null && find . -mindepth 1 -maxdepth 1 -type d -print 2>/dev/null | LC_ALL=C sort) || true
+DST_NAMES=$(cd "$ROOT/.agents/skills" 2>/dev/null && find . -mindepth 1 -maxdepth 1 -type d -print 2>/dev/null | LC_ALL=C sort) || true
+SRC_COUNT=$(printf '%s\n' "$SRC_NAMES" | sed '/^$/d' | wc -l | tr -d ' ')
+DST_COUNT=$(printf '%s\n' "$DST_NAMES" | sed '/^$/d' | wc -l | tr -d ' ')
 SRC_SKILLS=$(find "$ROOT/plugins/hackathonkit/skills" -name SKILL.md 2>/dev/null | wc -l | tr -d ' ')
 DST_SKILLS=0
 if [ -d "$ROOT/.agents/skills" ]; then
-  DST_COUNT=$(find "$ROOT/.agents/skills" -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')
-  DST_SKILLS=$(find "$ROOT/.agents/skills" -name SKILL.md | wc -l | tr -d ' ')
+  DST_SKILLS=$(find "$ROOT/.agents/skills" -name SKILL.md 2>/dev/null | wc -l | tr -d ' ')
 fi
-SRC_NAMES=$(cd "$ROOT/plugins/hackathonkit/skills" 2>/dev/null && ls -1d */ 2>/dev/null | sed 's#/##' | sort) || true
-DST_NAMES=$(cd "$ROOT/.agents/skills" 2>/dev/null && ls -1d */ 2>/dev/null | sed 's#/##' | sort) || true
 if [ "$SRC_COUNT" -gt 0 ] && [ "$SRC_NAMES" = "$DST_NAMES" ] && [ "$SRC_SKILLS" = "$DST_SKILLS" ]; then
   check "skills mirror" 1 "plugin=$SRC_COUNT/$SRC_SKILLS fallback=$DST_COUNT/$DST_SKILLS"
 else
@@ -167,7 +176,12 @@ else
 fi
 
 if [ -f "$ROOT/configs/install-state.json" ]; then
-  check "install state" 1 "version $(sed -n 's/^[[:space:]]*"version": *"\([^"]*\)".*/\1/p' "$ROOT/configs/install-state.json" | head -n 1)"
+  STATE_VERSION=$(sed -n 's/^[[:space:]]*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$ROOT/configs/install-state.json" | head -n 1)
+  if [ -n "$STATE_VERSION" ]; then
+    check "install state" 1 "version $STATE_VERSION"
+  else
+    check "install state" 0 "could not parse a version from configs/install-state.json"
+  fi
 else
   check "install state" 0 "missing configs/install-state.json; run scripts/setup.sh"
 fi
@@ -233,11 +247,13 @@ else
   check "node (hooks)" 0 "not found; session hooks require Node 18+"
 fi
 
-SMOKE_OUT=$(sh "$ROOT/scripts/smoke.sh" 2>&1) && SMOKE_STATUS=0 || SMOKE_STATUS=$?
+SMOKE_OUT=$(run_bounded sh "$ROOT/scripts/smoke.sh" 2>&1) && SMOKE_STATUS=0 || SMOKE_STATUS=$?
 if [ "$SMOKE_STATUS" = "0" ]; then
   check "mcp handshake" 1 "initialize / tools/list / system.context"
+elif [ "$SMOKE_STATUS" = "124" ]; then
+  check "mcp handshake" 0 "timed out; run scripts/smoke.sh for details"
 else
-  check "mcp handshake" 0 "$(printf '%s' "$SMOKE_OUT" | tail -n 1)"
+  check "mcp handshake" 0 "$(printf '%s' "$SMOKE_OUT" | tail -n 5)"
 fi
 
 if [ "$FAIL" = "0" ]; then

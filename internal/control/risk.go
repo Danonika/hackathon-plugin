@@ -68,7 +68,13 @@ func EvaluateRisk(sess Session, events []Event, now time.Time) (float64, []strin
 	return math.Round(score*100) / 100, reasons
 }
 
-var panicWord = regexp.MustCompile(`(?i)(^|[^a-z])panic`)
+var (
+	panicWord = regexp.MustCompile(`(?i)(^|[^a-z])panic`)
+	// panicNegation matches prose that explicitly reports the absence of a
+	// panic, so "no panic observed", "without panic", "panic-free" and
+	// "0 panics" are not counted as panic events.
+	panicNegation = regexp.MustCompile(`(no|without|zero|0)\s+(errors?\s+or\s+)?panics?|panics?[\s_-]*free|panics?[_ ]?(count)?[\s:=]*(zero|0)`)
+)
 
 func payloadHasPanic(payload map[string]any) bool {
 	if len(payload) == 0 {
@@ -81,7 +87,7 @@ func payloadHasPanic(payload map[string]any) bool {
 	text := strings.ToLower(string(data))
 	// "no panic observed" and similar prose must not count as a panic event.
 	// Strip common negated prose before matching.
-	text = regexp.MustCompile(`(?i)no\s+(errors?\s+or\s+)?panic`).ReplaceAllString(text, "")
+	text = panicNegation.ReplaceAllString(text, "")
 	return panicWord.MatchString(text)
 }
 
@@ -107,6 +113,9 @@ func (s *Store) RecomputeRisk(ctx context.Context) (int, error) {
 		if err != nil {
 			return updated, err
 		}
+		if len(events) == riskScanLimit {
+			log.Printf("control: risk scan for session %s truncated at %d events; older events were not scored", sess.ID, riskScanLimit)
+		}
 		// A session's window ends at its own end (or now); global events after
 		// that must not be attributed to it.
 		end := now
@@ -116,6 +125,9 @@ func (s *Store) RecomputeRisk(ctx context.Context) (int, error) {
 		globals, err := s.EventsBetween(ctx, sess.CreatedAt, end, riskScanLimit)
 		if err != nil {
 			return updated, err
+		}
+		if len(globals) == riskScanLimit {
+			log.Printf("control: risk global scan for session %s truncated at %d events; older events were not scored", sess.ID, riskScanLimit)
 		}
 		combined := append(append([]Event{}, events...), globals...)
 		score, reasons := EvaluateRisk(sess, combined, now)

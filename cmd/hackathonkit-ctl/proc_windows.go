@@ -4,6 +4,7 @@ package main
 
 import (
 	"errors"
+	"math"
 	"os"
 	"syscall"
 
@@ -17,12 +18,23 @@ const processQueryLimitedInformation = 0x1000
 // stillActive is STILL_ACTIVE, returned by GetExitCodeProcess for a live process.
 const stillActive = 259
 
+// validPID rejects values that cannot be represented as a Win32 process id, so
+// a corrupt pid file cannot be folded onto an unrelated live pid.
+func validPID(pid int) bool {
+	return pid > 0 && uint64(pid) <= math.MaxUint32
+}
+
 // processAlive reports whether pid is an existing process. os.Process.Signal
 // only supports os.Kill on Windows, so liveness is probed via the Win32 API.
 func processAlive(pid int) bool {
+	if !validPID(pid) {
+		return false
+	}
 	handle, err := syscall.OpenProcess(processQueryLimitedInformation, false, uint32(pid))
 	if err != nil {
-		return false
+		// ERROR_ACCESS_DENIED means the process exists but cannot be queried;
+		// only a nonexistent pid (ERROR_INVALID_PARAMETER) is not alive.
+		return errors.Is(err, windows.ERROR_ACCESS_DENIED)
 	}
 	defer syscall.CloseHandle(handle)
 	var code uint32
@@ -41,6 +53,9 @@ func terminateProcess(process *os.Process) error {
 // processMatchesPath reports whether the running process at pid is the recorded
 // executable, using the Win32 image name.
 func processMatchesPath(pid int, recorded string) bool {
+	if !validPID(pid) {
+		return false
+	}
 	if pid == os.Getpid() {
 		if self, err := os.Executable(); err == nil {
 			return samePath(self, recorded)

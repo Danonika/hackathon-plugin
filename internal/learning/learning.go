@@ -85,23 +85,43 @@ type Store struct {
 	embedder Embedder
 	now      func() time.Time
 
-	mu sync.Mutex
+	mu      sync.Mutex // guards embedder and now
+	writeMu sync.Mutex // serializes the load-modify-save sequence
 }
 
 func NewStore(path, project string) *Store {
 	return &Store{path: path, project: project, now: time.Now}
 }
 
+// WithEmbedder configures the embedder. It is safe to call concurrently with
+// store operations; the field is guarded by the store mutex.
 func (s *Store) WithEmbedder(e Embedder) *Store {
+	s.mu.Lock()
 	s.embedder = e
+	s.mu.Unlock()
 	return s
 }
 
+// WithClock overrides the store clock. It is safe to call concurrently.
 func (s *Store) WithClock(now func() time.Time) *Store {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if now != nil {
 		s.now = now
 	}
 	return s
+}
+
+func (s *Store) currentEmbedder() Embedder {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.embedder
+}
+
+func (s *Store) clock() time.Time {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.now().UTC()
 }
 
 func (s *Store) Path() string { return s.path }
@@ -139,11 +159,11 @@ func (s *Store) Record(ctx context.Context, in RecordInput) (RecordResult, error
 		return RecordResult{}, fmt.Errorf("invalid scope %q: expected project or global", in.Scope)
 	}
 
-	// Embed before taking the lock: the embedder can be a network client and
-	// must not block other store operations while it runs.
+	// Embed before taking the write lock: the embedder can be a network client
+	// and must not block other store operations while it runs.
 	var vector []float64
 	var embedErr error
-	if s.embedder != nil {
+	if s.currentEmbedder() != nil {
 		if v, err := s.embed(ctx, trigger+" "+insight); err == nil {
 			vector = v
 		} else {
@@ -153,10 +173,10 @@ func (s *Store) Record(ctx context.Context, in RecordInput) (RecordResult, error
 		}
 	}
 
-	// Serialize in-process callers first so they do not contend on the
+	// Serialize in-process writers first so they do not contend on the
 	// cross-process lock file itself.
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
 	unlock, err := s.lockFile()
 	if err != nil {
 		return RecordResult{}, err
@@ -167,7 +187,7 @@ func (s *Store) Record(ctx context.Context, in RecordInput) (RecordResult, error
 	if err != nil {
 		return RecordResult{}, err
 	}
-	now := s.now().UTC()
+	now := s.clock()
 	key := normalizeKey(trigger, insight)
 	result := RecordResult{Created: true}
 	for i := range doc.Learnings {
@@ -204,13 +224,17 @@ func (s *Store) Record(ctx context.Context, in RecordInput) (RecordResult, error
 			Trigger:      trigger,
 			Insight:      insight,
 			Scope:        scope,
-			Project:      s.project,
 			Observations: 1,
 			Successes:    boolToInt(outcome == "success"),
 			Failures:     boolToInt(outcome == "failure"),
 			Evidence:     mergeEvidence(nil, in.Evidence),
 			CreatedAt:    now,
 			UpdatedAt:    now,
+		}
+		// Keep a single on-disk representation of global learnings: a global
+		// entry must not carry a stale project tag.
+		if scope == "project" {
+			l.Project = s.project
 		}
 		l.Confidence = confidence(l.Successes, l.Failures)
 		doc.Learnings = append(doc.Learnings, l)
@@ -254,15 +278,13 @@ func (s *Store) Recall(ctx context.Context, query string, limit int, minConfiden
 		scope = "project"
 	}
 
-	s.mu.Lock()
 	doc, err := s.load()
-	s.mu.Unlock()
 	if err != nil {
 		return nil, err
 	}
 
 	var queryVector []float64
-	if s.embedder != nil {
+	if s.currentEmbedder() != nil {
 		if vector, err := s.embed(ctx, query); err == nil {
 			queryVector = vector
 		} else {
@@ -309,9 +331,7 @@ func (s *Store) Top(limit int, minConfidence float64) ([]Learning, error) {
 	if limit <= 0 {
 		limit = 6
 	}
-	s.mu.Lock()
 	doc, err := s.load()
-	s.mu.Unlock()
 	if err != nil {
 		return nil, err
 	}
@@ -345,10 +365,11 @@ func (s *Store) Promote(id string, minObservations int, minConfidence float64) (
 		minObservations = 1
 	}
 
-	// Acquire s.mu before the cross-process lock file, matching Record, so the
-	// two entry points cannot deadlock through lock-order inversion.
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	// Acquire the in-process write lock before the cross-process lock file,
+	// matching Record, so the two entry points cannot deadlock through
+	// lock-order inversion.
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
 
 	unlock, err := s.lockFile()
 	if err != nil {
@@ -373,7 +394,7 @@ func (s *Store) Promote(id string, minObservations int, minConfidence float64) (
 		}
 		l.Scope = "global"
 		l.Project = ""
-		l.UpdatedAt = s.now().UTC()
+		l.UpdatedAt = s.clock()
 		if err := s.save(doc); err != nil {
 			return Learning{}, false, err
 		}
@@ -384,10 +405,9 @@ func (s *Store) Promote(id string, minObservations int, minConfidence float64) (
 
 // Count returns the number of stored learnings.
 func (s *Store) Count() int {
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	doc, err := s.load()
 	if err != nil {
+		log.Printf("learning: count failed: %v", err)
 		return 0
 	}
 	return len(doc.Learnings)
@@ -405,7 +425,11 @@ func (s *Store) inScope(l Learning, scope string) bool {
 }
 
 func (s *Store) embed(ctx context.Context, text string) ([]float64, error) {
-	vectors, err := s.embedder.Embed(ctx, []string{text})
+	embedder := s.currentEmbedder()
+	if embedder == nil {
+		return nil, fmt.Errorf("no embedder configured")
+	}
+	vectors, err := embedder.Embed(ctx, []string{text})
 	if err != nil {
 		return nil, err
 	}

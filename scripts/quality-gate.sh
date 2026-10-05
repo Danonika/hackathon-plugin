@@ -32,14 +32,12 @@ if [ -x "$BIN" ]; then
     NEWEST=""
     # Scan the whole module (not just cmd/ and internal/) so go.mod-only or
     # root-level changes are not missed; prune non-source trees for speed.
-    if ! NEWEST=$(find "$ROOT" \
+    # `find -print | head -n 1` is used instead of the non-POSIX `-quit`.
+    NEWEST=$(find "$ROOT" \
         \( -path "$ROOT/.git" -o -path "$ROOT/node_modules" -o -path "$ROOT/data" -o -path "$ROOT/evals" -o -path "$ROOT/plugins" -o -path "$ROOT/bin" \) -prune -o \
-        -name '*.go' -newer "$BIN" -print -quit 2>/dev/null); then
-      echo "[quality-gate] warning: source freshness check failed; rebuilding binary" >&2
-      USE_BIN=0
-    fi
+        -name '*.go' -newer "$BIN" -print 2>/dev/null | head -n 1)
     for extra in "$ROOT/go.mod" "$ROOT/go.sum"; do
-      if [ -f "$extra" ] && [ "$extra" -nt "$BIN" ]; then
+      if [ -f "$extra" ] && [ -n "$(find "$extra" -newer "$BIN" -print 2>/dev/null | head -n 1)" ]; then
         NEWEST="$extra"
         break
       fi
@@ -49,8 +47,9 @@ if [ -x "$BIN" ]; then
       USE_BIN=0
     fi
   else
-    echo "[quality-gate] go toolchain unavailable; cannot verify that bin/hackathonkit-mcp is current" >&2
-    USE_BIN=0
+    # A runnable binary is still usable without a toolchain (release tarballs,
+    # go-less CI images), so run it and be explicit that freshness is unverified.
+    echo "[quality-gate] warning: go toolchain unavailable; running the existing bin/hackathonkit-mcp without a freshness check" >&2
   fi
 fi
 if [ "$USE_BIN" = "1" ]; then

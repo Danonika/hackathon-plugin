@@ -148,45 +148,67 @@ func TailJSONL(path string, limit int) ([]json.RawMessage, error) {
 	}
 	const chunkSize = 64 * 1024
 	const maxTailBytes = 4 << 20
-	var buf []byte
+	// Accumulate chunks and concatenate once: prepending to a growing buffer on
+	// every iteration is O(n^2) in the tail size.
+	chunks := [][]byte{}
+	total := 0
+	newlines := 0
+	stopAt := limit + 1
 	offset := st.Size()
-	for offset > 0 && len(buf) < maxTailBytes {
-		readSize := int64(chunkSize)
-		if offset < readSize {
-			readSize = offset
-		}
-		offset -= readSize
-		tmp := make([]byte, readSize)
-		n, err := f.ReadAt(tmp, offset)
-		if err != nil && err != io.EOF {
-			return nil, err
-		}
-		if n == 0 {
-			break
-		}
-		buf = append(tmp[:n], buf...)
-		// Enough newlines buffered means the requested tail is complete; the
-		// maxTailBytes cap below only bounds memory for pathological files.
-		if bytes.Count(buf, []byte{'\n'}) > limit+1 {
-			break
-		}
-	}
-	// When the read stopped before offset 0 the buffer starts mid-record; drop
-	// that partial first line.
-	if offset > 0 {
-		if idx := bytes.IndexByte(buf, '\n'); idx >= 0 {
-			buf = buf[idx+1:]
-		} else {
-			buf = nil
-		}
-	}
 	lines := []json.RawMessage{}
-	for _, line := range splitLines(buf) {
-		trimmed := trimSpace(line)
-		if len(trimmed) == 0 || !json.Valid(trimmed) {
-			continue
+	for {
+		for offset > 0 && total < maxTailBytes {
+			readSize := int64(chunkSize)
+			if offset < readSize {
+				readSize = offset
+			}
+			offset -= readSize
+			tmp := make([]byte, readSize)
+			n, err := f.ReadAt(tmp, offset)
+			if err != nil && err != io.EOF {
+				return nil, err
+			}
+			if n == 0 {
+				break
+			}
+			chunk := tmp[:n]
+			chunks = append(chunks, chunk)
+			total += n
+			newlines += bytes.Count(chunk, []byte{'\n'})
+			// Enough newlines buffered means the requested tail is complete; the
+			// maxTailBytes cap below only bounds memory for pathological files.
+			if newlines > stopAt {
+				break
+			}
 		}
-		lines = append(lines, json.RawMessage(append([]byte(nil), trimmed...)))
+		buf := make([]byte, 0, total)
+		for i := len(chunks) - 1; i >= 0; i-- {
+			buf = append(buf, chunks[i]...)
+		}
+		// When the read stopped before offset 0 the buffer starts mid-record;
+		// drop that partial first line.
+		if offset > 0 {
+			if idx := bytes.IndexByte(buf, '\n'); idx >= 0 {
+				buf = buf[idx+1:]
+			} else {
+				buf = nil
+			}
+		}
+		lines = lines[:0]
+		for _, line := range splitLines(buf) {
+			trimmed := trimSpace(line)
+			if len(trimmed) == 0 || !json.Valid(trimmed) {
+				continue
+			}
+			lines = append(lines, json.RawMessage(append([]byte(nil), trimmed...)))
+		}
+		// Invalid lines (blank, "undefined", truncated) are discarded by the
+		// validation above, so a newline count is not enough: keep reading
+		// until `limit` valid records are collected or the file is exhausted.
+		if len(lines) >= limit || offset == 0 || total >= maxTailBytes {
+			break
+		}
+		stopAt = newlines + limit + 1
 	}
 	if len(lines) > limit {
 		lines = lines[len(lines)-limit:]

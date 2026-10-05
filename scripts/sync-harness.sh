@@ -46,7 +46,13 @@ claim_claude_lock() {
 claim_claude_lock
 for _ in 1 2 3 4 5 6 7 8 9 10; do
   if mkdir "$CLAUDE_LOCK" 2>/dev/null; then
-    printf '%s' "$$" > "$CLAUDE_LOCK/pid" 2>/dev/null || true
+    # A missing pid would make stale detection fall back to the short mtime
+    # heuristic and let a slower live run lose its lock, so fail hard.
+    if ! printf '%s' "$$" > "$CLAUDE_LOCK/pid" 2>/dev/null; then
+      echo "[sync-harness] cannot record the lock pid; aborting" >&2
+      rm -rf "$CLAUDE_LOCK"
+      exit 1
+    fi
     printf '%s' "$CLAUDE_LOCK_TOKEN" > "$CLAUDE_LOCK/owner" 2>/dev/null || true
     CLAUDE_LOCKED=1
     break
@@ -60,6 +66,9 @@ if [ "$CLAUDE_LOCKED" != "1" ]; then
 fi
 CLAUDE_TMP="$CLAUDE_DST.tmp.$$"
 CLAUDE_OLD=""
+CMDS_STAGE=""
+CMDS_OLD=""
+CMDS_DEST=""
 release_claude_lock() {
   [ "$CLAUDE_LOCKED" = "1" ] || return 0
   owner=$(cat "$CLAUDE_LOCK/owner" 2>/dev/null || true)
@@ -74,6 +83,18 @@ release_claude_lock() {
 
 finish_harness() {
   rm -rf "$CLAUDE_TMP"
+  # Restore an interrupted command-mirror swap before discarding the staging dir.
+  if [ -n "$CMDS_OLD" ] && [ -n "$CMDS_DEST" ] && [ -d "$CMDS_OLD" ] && [ ! -d "$CMDS_DEST" ]; then
+    if mv "$CMDS_OLD" "$CMDS_DEST" 2>/dev/null; then
+      CMDS_OLD=""
+    else
+      echo "[sync-harness] WARNING: could not restore $CMDS_DEST from $CMDS_OLD; leaving the backup in place" >&2
+    fi
+  fi
+  if [ -n "$CMDS_OLD" ] && [ -n "$CMDS_DEST" ] && [ -d "$CMDS_DEST" ]; then
+    rm -rf "$CMDS_OLD"
+  fi
+  if [ -n "$CMDS_STAGE" ]; then rm -rf "$CMDS_STAGE"; fi
   if [ -n "$CLAUDE_OLD" ] && [ -d "$CLAUDE_OLD" ] && [ ! -d "$CLAUDE_DST" ]; then
     if mv "$CLAUDE_OLD" "$CLAUDE_DST" 2>/dev/null; then
       CLAUDE_OLD=""
@@ -89,8 +110,10 @@ finish_harness() {
   release_claude_lock
 }
 trap finish_harness EXIT
-trap 'finish_harness; exit 130' INT
-trap 'finish_harness; exit 143' TERM
+# Signal handlers only exit; the EXIT trap owns cleanup (calling finish_harness
+# here would run it twice).
+trap 'exit 130' INT
+trap 'exit 143' TERM
 if [ ! -d "$ROOT/plugins/hackathonkit/skills" ]; then
   echo "[sync-harness] skills source not found: $ROOT/plugins/hackathonkit/skills" >&2
   exit 1
@@ -108,24 +131,47 @@ if ! mv "$CLAUDE_TMP" "$CLAUDE_DST"; then
   exit 1
 fi
 rm -rf "$CLAUDE_OLD"
-release_claude_lock
-trap - EXIT INT TERM
 
 # Mirror the plugin commands into the harness project command directories:
 # OpenCode reads .opencode/commands/<name>.md and Claude Code reads
 # .claude/commands/. The plugin directory is the single source of truth.
+# Stage each mirror and swap it in while still holding the lock, so concurrent
+# runs cannot expose partially written files and removed commands are pruned.
 CMDS_SRC="$ROOT/plugins/hackathonkit/commands"
 if [ ! -d "$CMDS_SRC" ]; then
   echo "[sync-harness] commands source not found: $CMDS_SRC" >&2
   exit 1
 fi
 for dest in "$ROOT/.opencode/commands" "$ROOT/.claude/commands"; do
-  mkdir -p "$dest"
+  mkdir -p "$(dirname -- "$dest")"
+  CMDS_STAGE="$dest.tmp.$$"
+  CMDS_DEST="$dest"
+  CMDS_OLD=""
+  rm -rf "$CMDS_STAGE"
+  mkdir -p "$CMDS_STAGE"
   for f in "$CMDS_SRC"/*.md; do
     [ -f "$f" ] || continue
-    cp "$f" "$dest/$(basename -- "$f")"
+    cp "$f" "$CMDS_STAGE/$(basename -- "$f")"
   done
+  CMDS_OLD="$dest.old.$$"
+  if [ -d "$dest" ]; then
+    if ! mv "$dest" "$CMDS_OLD"; then
+      echo "[sync-harness] cannot move aside $dest" >&2
+      exit 1
+    fi
+  fi
+  if ! mv "$CMDS_STAGE" "$dest"; then
+    echo "[sync-harness] command mirror swap failed for $dest" >&2
+    if [ -d "$CMDS_OLD" ]; then mv "$CMDS_OLD" "$dest"; fi
+    exit 1
+  fi
+  rm -rf "$CMDS_OLD"
+  CMDS_STAGE=""
+  CMDS_OLD=""
+  CMDS_DEST=""
 done
+release_claude_lock
+trap - EXIT INT TERM
 
 MISSING=0
 INVALID=0
@@ -155,6 +201,18 @@ for f in $ADAPTERS; do
     MISSING=$((MISSING + 1))
   fi
 done
+# Verify the command mirrors just written match their canonical source, so a
+# silent failure of the mirroring loop cannot be reported as "adapters ready".
+for dest in "$ROOT/.opencode/commands" "$ROOT/.claude/commands"; do
+  for f in "$CMDS_SRC"/*.md; do
+    [ -f "$f" ] || continue
+    name=$(basename -- "$f")
+    if [ ! -f "$dest/$name" ] || ! cmp -s "$f" "$dest/$name"; then
+      echo "[sync-harness] command mirror missing or stale: $dest/$name" >&2
+      MISSING=$((MISSING + 1))
+    fi
+  done
+done
 json_valid() {
   if command -v python3 >/dev/null 2>&1; then
     python3 -c 'import json, sys; json.load(open(sys.argv[1]))' "$1" >/dev/null 2>&1
@@ -171,13 +229,16 @@ json_valid() {
 }
 
 for f in $JSON_MANIFESTS; do
+  # A missing manifest is already counted by the ADAPTERS loop above; skip it
+  # here so it is reported once (invalid) rather than twice.
+  [ -f "$ROOT/$f" ] || continue
   if ! json_valid "$ROOT/$f"; then
     echo "[sync-harness] invalid JSON manifest: $f" >&2
     INVALID=$((INVALID + 1))
   fi
 done
 if [ "$MISSING" -ne 0 ] || [ "$INVALID" -ne 0 ]; then
-  echo "[sync-harness] $MISSING adapter file(s) missing, $INVALID manifest(s) invalid" >&2
+  echo "[sync-harness] $MISSING adapter/mirror file(s) missing or stale, $INVALID manifest(s) invalid" >&2
   exit 1
 fi
 

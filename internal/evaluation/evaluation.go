@@ -147,14 +147,17 @@ func ValidateJudgeReport(r JudgeReport, snapshotSHA string) []string {
 		problems = append(problems, fmt.Sprintf("snapshot_sha %q does not match bundle %q", r.SnapshotSHA, snapshotSHA))
 	}
 	sum := 0.0
+	complete := true
 	for _, c := range judgeCriteria {
 		v, ok := r.Scores[c.Key]
 		if !ok {
 			problems = append(problems, "missing score for "+c.Key)
+			complete = false
 			continue
 		}
 		if math.IsNaN(v) || math.IsInf(v, 0) || v < 0 || v > c.Max {
 			problems = append(problems, fmt.Sprintf("score for %s out of range: %v (max %v)", c.Key, v, c.Max))
+			complete = false
 			continue
 		}
 		sum += v
@@ -169,7 +172,11 @@ func ValidateJudgeReport(r JudgeReport, snapshotSHA string) []string {
 	for _, key := range unknown {
 		problems = append(problems, "unknown criterion "+key)
 	}
-	if (r.TotalSet || r.Total != 0) && math.Abs(r.Total-sum) > 0.01 {
+	if math.IsNaN(r.Total) || math.IsInf(r.Total, 0) {
+		problems = append(problems, fmt.Sprintf("total is not a finite number: %v", r.Total))
+	} else if complete && (r.TotalSet || r.Total != 0) && math.Abs(r.Total-sum) > 0.01 {
+		// Only reconcile against a complete sum: an incomplete sum would emit a
+		// misleading second problem for a report already rejected above.
 		problems = append(problems, fmt.Sprintf("total %v does not match criterion sum %v", r.Total, sum))
 	}
 	if len(r.Evidence) == 0 {
@@ -424,8 +431,17 @@ func Calibrate(run1, run2 Aggregate, minDelta float64, minValid int) (Calibratio
 		return Calibration{}, fmt.Errorf("calibration needs at least %d valid reports per run (run1=%d, run2=%d); assign substitute judges",
 			minValid, run1.ValidJudges, run2.ValidJudges)
 	}
-	if minDelta < 0 || math.IsNaN(minDelta) {
-		return Calibration{}, fmt.Errorf("min_delta must be >= 0, got %v", minDelta)
+	if minDelta < 0 || math.IsNaN(minDelta) || math.IsInf(minDelta, 0) {
+		return Calibration{}, fmt.Errorf("min_delta must be a finite value >= 0, got %v", minDelta)
+	}
+	if run1.RubricVersion != run2.RubricVersion {
+		return Calibration{}, fmt.Errorf("calibration runs must use the same rubric version (%q vs %q)", run1.RubricVersion, run2.RubricVersion)
+	}
+	if run1.RubricVersion == "" {
+		return Calibration{}, fmt.Errorf("calibration runs have no rubric version; re-aggregate with this build")
+	}
+	if run1.RubricVersion != RubricVersion {
+		return Calibration{}, fmt.Errorf("calibration runs use rubric version %s, expected %s", run1.RubricVersion, RubricVersion)
 	}
 	if run1.SnapshotSHA != run2.SnapshotSHA {
 		return Calibration{}, fmt.Errorf("calibration runs must score the same snapshot (%q vs %q)", run1.SnapshotSHA, run2.SnapshotSHA)
@@ -488,6 +504,10 @@ type Comparison struct {
 
 const epsilon = 1e-9
 
+func finite(v float64) bool {
+	return !math.IsNaN(v) && !math.IsInf(v, 0)
+}
+
 // Compare applies the loop rules from self-improvement-controller:
 //   - mandatory scenario failure always rolls back and stops;
 //   - technical loop: any score decrease rolls back;
@@ -498,6 +518,17 @@ func Compare(in CompareInput) Comparison {
 	mode := in.Mode
 	if mode != ModeJudge {
 		mode = ModeTechnical
+	}
+	// Fail closed on corrupt/overflowing scores: a NaN/Inf candidate would make
+	// every comparison below evaluate false and be silently accepted.
+	if !finite(in.Candidate) || !finite(in.Best) || !finite(in.Target) {
+		out := Comparison{
+			Mode:       mode,
+			InputError: fmt.Sprintf("non-finite score input (candidate=%v, best=%v, target=%v)", in.Candidate, in.Best, in.Target),
+		}
+		out.Decision = DecisionRollback
+		out.Reason = out.InputError
+		return out
 	}
 	// Decisions use unrounded values (regulation 9.5: the unrounded mean
 	// determines the place); rounding is display-only.

@@ -3,6 +3,7 @@
 package main
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -17,7 +18,7 @@ func processAlive(pid int) bool {
 		return false
 	}
 	err = process.Signal(syscall.Signal(0))
-	return err == nil || err == syscall.EPERM
+	return err == nil || errors.Is(err, syscall.EPERM)
 }
 
 // terminateProcess asks the process to stop gracefully (SIGTERM on POSIX).

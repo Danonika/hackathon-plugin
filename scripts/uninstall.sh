@@ -51,7 +51,15 @@ for rel in .agents/skills .claude/skills; do
         fi
       fi
     else
-      echo "would remove: $rel/$name"
+      # Mirror the apply-path conditions so the preview does not advertise a
+      # removal that would actually be skipped (modified user copies are kept).
+      if [ -d "$mirror/$name" ]; then
+        if diff -r "$skill" "$mirror/$name" >/dev/null 2>&1; then
+          echo "would remove: $rel/$name"
+        else
+          echo "[uninstall] would keep modified $rel/$name (differs from the shipped skill)" >&2
+        fi
+      fi
     fi
   done
 done
@@ -59,31 +67,45 @@ done
 CODEX_FAIL=0
 if ! command -v codex >/dev/null 2>&1; then
   echo "[uninstall] codex CLI not found; skipping plugin/marketplace removal"
-fi
-if command -v codex >/dev/null 2>&1; then
-  if [ "$APPLY" = "1" ]; then
+elif [ "$APPLY" = "1" ]; then
+  # A removal failure is only a real problem when the plugin/marketplace was
+  # actually registered; a benign "not installed" no-op must not fail the run.
+  if codex plugin list 2>/dev/null | grep -q hackathonkit; then
     if ! codex plugin remove hackathonkit >/dev/null 2>&1; then
       echo "[uninstall] warning: codex plugin remove failed" >&2
       CODEX_FAIL=1
     fi
-    if ! codex plugin marketplace remove hackathonkit-local >/dev/null 2>&1; then
-      echo "[uninstall] warning: codex marketplace remove failed" >&2
-      CODEX_FAIL=1
-    fi
-    if [ "$CODEX_FAIL" -eq 0 ]; then
-      echo "[uninstall] removed hackathonkit plugin and marketplace"
-    else
-      echo "[uninstall] plugin/marketplace removal reported warnings" >&2
-    fi
   else
-    echo "would run: codex plugin remove hackathonkit"
-    echo "would run: codex plugin marketplace remove hackathonkit-local"
+    echo "[uninstall] hackathonkit plugin is not registered; skipping plugin remove"
   fi
+  if MARKETPLACES=$(codex plugin marketplace list 2>/dev/null); then
+    if printf '%s' "$MARKETPLACES" | grep -q hackathonkit-local; then
+      if ! codex plugin marketplace remove hackathonkit-local >/dev/null 2>&1; then
+        echo "[uninstall] warning: codex marketplace remove failed" >&2
+        CODEX_FAIL=1
+      fi
+    else
+      echo "[uninstall] hackathonkit-local marketplace is not registered; skipping marketplace remove"
+    fi
+  elif ! codex plugin marketplace remove hackathonkit-local >/dev/null 2>&1; then
+    echo "[uninstall] note: could not remove hackathonkit-local marketplace (it may not be registered)" >&2
+  fi
+  if [ "$CODEX_FAIL" -eq 0 ]; then
+    echo "[uninstall] removed hackathonkit plugin and marketplace"
+  else
+    echo "[uninstall] plugin/marketplace removal reported warnings" >&2
+  fi
+else
+  echo "would run: codex plugin remove hackathonkit"
+  echo "would run: codex plugin marketplace remove hackathonkit-local"
 fi
 
 # Remove the /verify custom prompt this installer placed for Codex.
 if [ "$APPLY" = "1" ]; then
-  sh "$ROOT/scripts/install-prompts.sh" remove >/dev/null 2>&1 || true
+  if ! sh "$ROOT/scripts/install-prompts.sh" remove; then
+    echo "[uninstall] warning: command prompt removal failed" >&2
+    FAILURES=$((FAILURES + 1))
+  fi
 else
   echo "would remove: $HOME/.codex/prompts/*.md (unmodified prompts only)"
 fi

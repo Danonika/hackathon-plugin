@@ -17,16 +17,30 @@ try {
   Write-Host "[plugin-check] cannot parse codex plugin list output: $($_.Exception.Message)"
   exit 1
 }
-if (-not $parsed.installed) {
+if (-not ($parsed.PSObject.Properties.Name -contains 'installed')) {
   Write-Host "[plugin-check] unexpected codex plugin list shape (no installed array)"
   exit 1
 }
-$entry = @($parsed.installed) | Where-Object { $_.name -eq "hackathonkit" } | Select-Object -First 1
+if ($null -eq $parsed.installed) {
+  Write-Host "[plugin-check] unexpected codex plugin list shape (installed is null)"
+  exit 1
+}
+$installed = if ($parsed.installed -is [System.Array]) { $parsed.installed } else { @($parsed.installed) }
+if ($installed.Count -eq 0) {
+  Write-Host "[plugin-check] hackathonkit plugin is not installed"
+  exit 1
+}
+$entry = @($installed) | Where-Object { $_.name -eq "hackathonkit" } | Select-Object -First 1
 if (-not $entry) {
   Write-Host "[plugin-check] hackathonkit plugin is not installed"
   exit 1
 }
-$sourcePath = $entry.source.path
+$sourceProperty = $entry.PSObject.Properties['source']
+if (-not $sourceProperty -or -not $sourceProperty.Value -or -not ($sourceProperty.Value.PSObject.Properties.Name -contains 'path')) {
+  Write-Host "[plugin-check] installed plugin entry has an unexpected shape (missing source.path); re-run scripts/setup.ps1"
+  exit 1
+}
+$sourcePath = $sourceProperty.Value.path
 if (-not $sourcePath) {
   Write-Host "[plugin-check] installed plugin has no source.path; re-run scripts/setup.ps1"
   exit 1
@@ -49,23 +63,38 @@ if (-not $server -or -not $server.command) {
 }
 $cmd = [string]$server.command
 $argList = @($server.args | ForEach-Object { [string]$_ })
-if (-not [System.IO.Path]::IsPathRooted($cmd)) {
-  $cmd = Join-Path $sourcePath $cmd
-}
-$cmdFull = [System.IO.Path]::GetFullPath($cmd)
-$sourceFull = [System.IO.Path]::GetFullPath($sourcePath).TrimEnd([System.IO.Path]::DirectorySeparatorChar) + [System.IO.Path]::DirectorySeparatorChar
-if (-not $cmdFull.StartsWith($sourceFull, [System.StringComparison]::OrdinalIgnoreCase)) {
-  Write-Host "[plugin-check] refusing to execute a command outside the installed plugin: $cmdFull"
+try {
+  if (-not [System.IO.Path]::IsPathRooted($cmd)) {
+    $cmd = Join-Path $sourcePath $cmd
+  }
+  $cmdFull = [System.IO.Path]::GetFullPath($cmd)
+  $sourceFullRoot = [System.IO.Path]::GetFullPath($sourcePath)
+} catch {
+  Write-Host "[plugin-check] cannot resolve the installed plugin command path: $($_.Exception.Message)"
   exit 1
 }
 if (-not (Test-Path -LiteralPath $cmdFull)) {
   Write-Host "[plugin-check] MCP command does not exist: $cmdFull"
   exit 1
 }
-$cmd = $cmdFull
+# Resolve symlinks/junctions so a link inside the plugin cannot point outside it.
+$cmdResolved = (Resolve-Path -LiteralPath $cmdFull).Path
+$sourceResolved = (Resolve-Path -LiteralPath $sourceFullRoot).Path
+$comparison = if ($env:OS -eq "Windows_NT") { [System.StringComparison]::OrdinalIgnoreCase } else { [System.StringComparison]::Ordinal }
+$sourcePrefix = $sourceResolved.TrimEnd([System.IO.Path]::DirectorySeparatorChar, '/', '\') + [System.IO.Path]::DirectorySeparatorChar
+if (-not $cmdResolved.StartsWith($sourcePrefix, $comparison)) {
+  Write-Host "[plugin-check] refusing to execute a command outside the installed plugin: $cmdResolved"
+  exit 1
+}
+$cmd = $cmdResolved
 
 $temp = Join-Path $env:TEMP ("hackathonkit-plugin-check-" + [guid]::NewGuid().ToString("N"))
-New-Item -ItemType Directory -Path $temp | Out-Null
+try {
+  New-Item -ItemType Directory -Path $temp -ErrorAction Stop | Out-Null
+} catch {
+  Write-Host "[plugin-check] cannot create the temp directory ${temp}: $($_.Exception.Message)"
+  exit 1
+}
 $requests = @(
   '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","clientInfo":{"name":"plugin-check","version":"0"}}}',
   '{"jsonrpc":"2.0","method":"notifications/initialized"}',
@@ -89,6 +118,11 @@ try {
     $code = if ($null -eq $LASTEXITCODE) { "" } else { "$LASTEXITCODE" }
     Set-Content -LiteralPath $codePath -Value $code -ErrorAction Stop
   } -ArgumentList $cmd, $argList, $requests, $temp, $stderrPath, $codePath
+  if (-not $job) {
+    Remove-Item -LiteralPath $temp -Recurse -Force -ErrorAction SilentlyContinue
+    Write-Host "[plugin-check] FAIL: could not start the MCP check job (job subsystem unavailable)"
+    exit 1
+  }
   if (-not (Wait-Job $job -Timeout 120)) {
     Stop-Job $job -ErrorAction SilentlyContinue
     Remove-Job $job -Force -ErrorAction SilentlyContinue
@@ -133,17 +167,12 @@ if ($exitCode -ne 0) {
 }
 
 $responses = @{}
-$buffer = ""
 foreach ($line in @($out | Where-Object { $_ -and $_.Trim() -ne "" })) {
-  if ($buffer) { $buffer = $buffer + "`n" + $line } else { $buffer = $line }
+  # Frame strictly by line: drop progress/log noise and partial JSON instead of
+  # letting it poison every later response.
   $obj = $null
-  try { $obj = $buffer | ConvertFrom-Json } catch { $obj = $null }
-  if ($null -eq $obj) {
-    # Not yet a complete JSON value; keep buffering, but do not grow forever.
-    if ($buffer.Length -gt 1048576) { $buffer = "" }
-    continue
-  }
-  $buffer = ""
+  try { $obj = $line | ConvertFrom-Json } catch { $obj = $null }
+  if ($null -eq $obj) { continue }
   if ($obj.id -in @(1, 2, 3)) {
     $responses[[string]$obj.id] = $obj
     if ($obj.error) {

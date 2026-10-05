@@ -5,6 +5,7 @@ import (
 	"crypto/sha1"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -41,7 +42,6 @@ type FeedbackEvent struct {
 var (
 	capabilityIndexOnce sync.Once
 	capabilityIndexMap  map[string][]string
-	memoryMu            sync.Mutex
 )
 
 func capabilityIndex() map[string][]string {
@@ -125,16 +125,26 @@ func (r *Router) loadMemory() (memoryFile, error) {
 		return memoryFile{}, fmt.Errorf("read fly memory %s: %w", r.memoryPath, err)
 	}
 	var mem memoryFile
-	if json.Unmarshal(data, &mem) != nil {
-		// Quarantine the corrupt file so the next save does not silently
-		// overwrite recoverable data with an empty memory.
-		if rerr := os.Rename(r.memoryPath, r.memoryPath+".corrupt"); rerr != nil {
-			log.Printf("fly: cannot quarantine corrupt %s: %v", r.memoryPath, rerr)
-		}
-		return memoryFile{}, nil
+	if err := json.Unmarshal(data, &mem); err != nil {
+		// Surface corruption instead of returning "no data": a read-only
+		// accessor must not rename files as a side effect, and a write path
+		// needs to distinguish corruption from an empty store.
+		return memoryFile{}, &memoryCorruptError{path: r.memoryPath, err: err}
 	}
 	return mem, nil
 }
+
+// memoryCorruptError marks a memory file that exists but cannot be decoded.
+type memoryCorruptError struct {
+	path string
+	err  error
+}
+
+func (e *memoryCorruptError) Error() string {
+	return fmt.Sprintf("decode fly memory %s: %v", e.path, e.err)
+}
+
+func (e *memoryCorruptError) Unwrap() error { return e.err }
 
 // missingPathIsUsable reports whether a path that reads as missing can still be
 // created later. Windows maps ERROR_PATH_NOT_FOUND to IsNotExist when a path
@@ -196,8 +206,8 @@ func (r *Router) saveMemory(mem memoryFile) error {
 }
 
 func (r *Router) MemorySize() int {
-	memoryMu.Lock()
-	defer memoryMu.Unlock()
+	r.memoryMu.Lock()
+	defer r.memoryMu.Unlock()
 	mem, err := r.loadMemory()
 	if err != nil {
 		return 0
@@ -216,21 +226,36 @@ func (r *Router) AddFeedback(ctx context.Context, ev FeedbackEvent) (int, bool, 
 	}
 	// Embed before taking the lock: this can be a network call.
 	if r.embedder != nil {
-		if vectors, err := r.embedder.Embed(ctx, []string{ev.Task}); err == nil && len(vectors) == 1 {
+		vectors, err := r.embedder.Embed(ctx, []string{ev.Task})
+		switch {
+		case err != nil:
+			log.Printf("fly: feedback embedding failed for %q: %v", example.Hash, err)
+		case len(vectors) != 1:
+			log.Printf("fly: feedback embedding returned %d vectors for 1 input", len(vectors))
+		default:
 			example.Vector = normalizeVector(vectors[0])
 		}
 	}
 
 	var kept []FeedbackExample
 	saveErr := func() error {
-		memoryMu.Lock()
-		defer memoryMu.Unlock()
+		r.memoryMu.Lock()
+		defer r.memoryMu.Unlock()
 
 		mem, err := r.loadMemory()
 		if err != nil {
-			return err
+			var corrupt *memoryCorruptError
+			if !errors.As(err, &corrupt) {
+				return err
+			}
+			// Only the write path quarantines a corrupt file so the next save
+			// does not overwrite recoverable data.
+			if rerr := os.Rename(r.memoryPath, r.memoryPath+".corrupt"); rerr != nil {
+				return fmt.Errorf("quarantine corrupt fly memory %s: %w", r.memoryPath, rerr)
+			}
+			mem = memoryFile{}
 		}
-		if mem.Model != "" && mem.Model != r.modelTag {
+		if mem.Model != "" && r.modelTag != "" && mem.Model != r.modelTag {
 			// Examples embedded under a different model are not comparable with
 			// the current task vectors; drop the stale vectors (keyword-only
 			// examples remain usable).
@@ -258,16 +283,17 @@ func (r *Router) AddFeedback(ctx context.Context, ev FeedbackEvent) (int, bool, 
 		return r.saveMemory(mem)
 	}()
 	if saveErr != nil {
-		return len(kept), false, saveErr
+		// Nothing reached disk: report a zero count, not a success-shaped one.
+		return 0, false, saveErr
 	}
 	learned := r.applyDopamine(ctx, ev)
 	return len(kept), learned, nil
 }
 
 func (r *Router) memoryCategoryScores(taskVector []float64, k int) (map[string]float64, bool) {
-	memoryMu.Lock()
+	r.memoryMu.Lock()
 	mem, err := r.loadMemory()
-	memoryMu.Unlock()
+	r.memoryMu.Unlock()
 	if err != nil || len(mem.Examples) == 0 {
 		return nil, false
 	}

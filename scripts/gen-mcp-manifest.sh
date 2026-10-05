@@ -1,24 +1,36 @@
 #!/usr/bin/env sh
 # Hydrate plugins/hackathonkit/.mcp.json from the template with an absolute root.
 set -e
-ROOT="${1:-$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)}"
+# Resolve the script path so a slashless `$0` (invoked via PATH) still finds the
+# repository instead of `.` = the current working directory.
+SELF="$0"
+case "$SELF" in
+  */*) ;;
+  *) SELF=$(command -v -- "$SELF" 2>/dev/null || echo "$SELF") ;;
+esac
+ROOT="${1:-$(CDPATH= cd -- "$(dirname -- "$SELF")/.." && pwd)}"
 TEMPLATE="$ROOT/plugins/hackathonkit/.mcp.json.template"
 
-if [ -z "$ROOT" ] || [ ! -d "$ROOT" ]; then
+if [ ! -d "$ROOT" ]; then
   echo "[mcp-manifest] repository root not found: '$ROOT'" >&2
   exit 1
 fi
-ROOT="$(CDPATH= cd -- "$ROOT" && pwd)"
+# Canonicalise to an absolute physical path so a relative/`..`/symlinked caller
+# value cannot be written into the manifest as a relative path.
+ROOT="$(CDPATH= cd -- "$ROOT" 2>/dev/null && pwd -P)" || {
+  echo "[mcp-manifest] cannot resolve repository root: '${1:-}'" >&2
+  exit 1
+}
 if [ ! -f "$TEMPLATE" ]; then
   echo "[mcp-manifest] template not found: $TEMPLATE" >&2
   exit 1
 fi
 
 json_escape() {
-  # Escape backslashes and quotes. CR/LF/FF/VT are mapped to spaces and TAB to
-  # \t; repository paths never contain these, so this is sufficient for the
-  # two substituted values.
-  printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' | tr '\r\n\t\f\v' '    ' | sed -e 's/	/\\t/g'
+  # JSON escaper for path-like values: backslash and quote are escaped and every
+  # control character is dropped (such bytes cannot appear in a path and would
+  # otherwise produce invalid JSON).
+  printf '%s' "$1" | LC_ALL=C tr -d '[:cntrl:]' | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g'
 }
 
 MANIFEST="$ROOT/plugins/hackathonkit/.mcp.json"
@@ -56,6 +68,10 @@ if command -v python3 >/dev/null 2>&1; then
     echo "[mcp-manifest] rendered manifest is not valid JSON; keeping the previous manifest" >&2
     exit 1
   fi
+else
+  # Without a validator a malformed manifest could be published and break every
+  # MCP client; make the reduced guarantee visible.
+  echo "[mcp-manifest] warning: python3 unavailable; cannot validate the rendered manifest" >&2
 fi
 
 chmod 0644 "$TMP"

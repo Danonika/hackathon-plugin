@@ -31,7 +31,8 @@ restore_echo() {
 read_secret() {
   printf '%s: ' "$1" >&2
   if [ -t 0 ] && command -v stty >/dev/null 2>&1; then stty -echo; fi
-  read -r value || value=""
+  # IFS= preserves a value that legitimately starts/ends with blanks.
+  IFS= read -r value || value=""
   if [ -t 0 ] && command -v stty >/dev/null 2>&1; then
     stty echo
     printf '\n' >&2
@@ -52,7 +53,9 @@ on_interrupt() {
   exit 130
 }
 trap restore_echo EXIT
-trap on_interrupt INT TERM
+# HUP/QUIT too: if the shell dies while `read_secret` has echo disabled the
+# terminal would otherwise be left without echo.
+trap on_interrupt INT TERM HUP QUIT
 
 if [ ! -t 0 ]; then
   echo "[resources] non-interactive stdin: prompts read from the pipe and unanswered/EOF prompts default to no; secrets are only stored when supplied" >&2

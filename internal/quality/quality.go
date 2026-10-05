@@ -101,6 +101,16 @@ func runCheck(ctx context.Context, root string, spec checkSpec) Check {
 		check.Status = "timeout"
 	case errors.Is(runCtx.Err(), context.Canceled):
 		check.Status = "canceled"
+	case errors.Is(err, exec.ErrWaitDelay):
+		// The command exited successfully; WaitDelay only expired while
+		// draining output pipes a lingering grandchild kept open. Report the
+		// check as passing but record the anomaly instead of hiding it behind
+		// an indistinguishable "failed".
+		check.Status = "ok"
+		if check.Output != "" {
+			check.Output += "\n"
+		}
+		check.Output += "note: output pipes remained open past WaitDelay"
 	case err != nil:
 		check.Status = "failed"
 	case spec.name == "gofmt" && strings.TrimSpace(captured.String()) != "":
@@ -120,23 +130,55 @@ func buildEnv() []string {
 	existing := ""
 	for _, kv := range os.Environ() {
 		if strings.HasPrefix(kv, "GOFLAGS=") {
-			existing = strings.TrimPrefix(kv, "GOFLAGS=")
+			existing = strings.TrimSpace(strings.TrimPrefix(kv, "GOFLAGS="))
 			continue
 		}
 		base = append(base, kv)
 	}
-	// Drop any inherited -buildvcs=... (including an explicit =true) so the
-	// container/root workaround cannot be defeated by the environment.
-	fields := strings.Fields(existing)
-	kept := fields[:0]
-	for _, field := range fields {
-		if strings.HasPrefix(field, "-buildvcs=") {
+	// Split quote-aware so a quoted value such as -gcflags='-m -m' stays one
+	// token, and drop only a token whose flag name is exactly -buildvcs (never
+	// the first half of a quoted value that merely starts with that text).
+	tokens := splitQuoted(existing)
+	kept := tokens[:0]
+	for _, token := range tokens {
+		if token == "-buildvcs" || strings.HasPrefix(token, "-buildvcs=") {
 			continue
 		}
-		kept = append(kept, field)
+		kept = append(kept, token)
 	}
 	merged := strings.Join(append(kept, "-buildvcs=false"), " ")
 	return append(base, "GOFLAGS="+merged)
+}
+
+// splitQuoted splits a shell-like quoted string on unquoted spaces, preserving
+// each token's original text (including its quotes).
+func splitQuoted(s string) []string {
+	var out []string
+	var b strings.Builder
+	quote := rune(0)
+	for _, r := range s {
+		switch {
+		case quote != 0:
+			b.WriteRune(r)
+			if r == quote {
+				quote = 0
+			}
+		case r == '"' || r == '\'':
+			quote = r
+			b.WriteRune(r)
+		case r == ' ' || r == '\t' || r == '\n':
+			if b.Len() > 0 {
+				out = append(out, b.String())
+				b.Reset()
+			}
+		default:
+			b.WriteRune(r)
+		}
+	}
+	if b.Len() > 0 {
+		out = append(out, b.String())
+	}
+	return out
 }
 
 // cappedBuffer keeps at most maxCheckOutput bytes so a chatty test run cannot
@@ -294,7 +336,7 @@ func GitSHA(root string) string {
 	}
 	value := strings.TrimSpace(string(head))
 	if !strings.HasPrefix(value, "ref: ") {
-		if len(value) >= 40 {
+		if validGitSHA(value) {
 			return value
 		}
 		return "unknown"
@@ -303,8 +345,12 @@ func GitSHA(root string) string {
 	if !strings.HasPrefix(ref, "refs/") || strings.Contains(ref, "..") {
 		return "unknown"
 	}
-	if data, err := os.ReadFile(filepath.Join(gitDir, filepath.FromSlash(ref))); err == nil {
-		if sha := strings.TrimSpace(string(data)); sha != "" {
+	refPath := filepath.Join(gitDir, filepath.FromSlash(ref))
+	if !strings.HasPrefix(refPath, gitDir+string(filepath.Separator)) {
+		return "unknown"
+	}
+	if data, err := os.ReadFile(refPath); err == nil {
+		if sha := strings.TrimSpace(string(data)); validGitSHA(sha) {
 			return sha
 		}
 	}
@@ -315,12 +361,26 @@ func GitSHA(root string) string {
 				continue
 			}
 			parts := strings.Fields(line)
-			if len(parts) == 2 && parts[1] == ref {
+			if len(parts) == 2 && parts[1] == ref && validGitSHA(parts[0]) {
 				return parts[0]
 			}
 		}
 	}
 	return "unknown"
+}
+
+// validGitSHA accepts only a full hex object id (SHA-1 or SHA-256), so a junk
+// or multi-line .git/HEAD cannot become an evidence path segment.
+func validGitSHA(value string) bool {
+	if len(value) != 40 && len(value) != 64 {
+		return false
+	}
+	for _, r := range value {
+		if !(r >= '0' && r <= '9' || r >= 'a' && r <= 'f' || r >= 'A' && r <= 'F') {
+			return false
+		}
+	}
+	return true
 }
 
 // FailedChecks lists failed check names in deterministic order.

@@ -1,4 +1,7 @@
-param([switch]$Quiet)
+param(
+  [switch]$Quiet,
+  [ValidateSet("auto", "local", "docker")][string]$Runtime = "auto"
+)
 $ErrorActionPreference = "Continue"
 if (-not $PSCommandPath) {
   Write-Error "[smoke] PSCommandPath is empty; run this script as a file, not dot-sourced"
@@ -6,14 +9,21 @@ if (-not $PSCommandPath) {
 }
 $root = Split-Path -Parent (Split-Path -Parent $PSCommandPath)
 
-$requests = @(
+$requests = (@(
   '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","clientInfo":{"name":"smoke","version":"0"}}}',
   '{"jsonrpc":"2.0","id":2,"method":"tools/list"}',
   '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"system.context","arguments":{}}}'
-) -join "`n"
+) -join "`n") + "`n"
 
 $binary = Join-Path $root "bin\hackathonkit-mcp.exe"
-if (Test-Path -LiteralPath $binary) {
+# auto keeps the historical local-first behaviour; local/docker force a runtime
+# so a stale binary cannot silently bypass the container path.
+$useLocal = switch ($Runtime) {
+  "local"  { $true }
+  "docker" { $false }
+  default  { Test-Path -LiteralPath $binary }
+}
+if ($useLocal) {
   # Run with a bounded wait and inspect the exit code: a server that prints
   # three replies and then crashes (or hangs) must not pass.
   $inFile = [System.IO.Path]::GetTempFileName()
@@ -22,7 +32,7 @@ if (Test-Path -LiteralPath $binary) {
     Set-Content -LiteralPath $inFile -Value $requests -NoNewline
     $proc = $null
     try {
-      $proc = Start-Process -FilePath $binary -ArgumentList @("--repo-root", $root) `
+      $proc = Start-Process -FilePath $binary -ArgumentList @("--repo-root", "`"$root`"") `
         -RedirectStandardInput $inFile -RedirectStandardOutput $outFile -PassThru -NoNewWindow
     } catch {
       if (-not $Quiet) { Write-Host "[smoke] failed to start the MCP binary: $($_.Exception.Message)" }
@@ -58,11 +68,15 @@ if (Test-Path -LiteralPath $binary) {
   }
   $inFile = [System.IO.Path]::GetTempFileName()
   $outFile = [System.IO.Path]::GetTempFileName()
+  $composeFile = Join-Path $root "docker-compose.yml"
+  # An explicit project name keeps the one-off run container addressable and
+  # isolated from concurrent runs.
+  $composeProject = "hackathonkit-smoke-$PID"
   try {
     Set-Content -LiteralPath $inFile -Value $requests -NoNewline
     $proc = $null
     try {
-      $proc = Start-Process -FilePath "docker" -ArgumentList @("compose", "-f", (Join-Path $root "docker-compose.yml"), "run", "--rm", "-T", "hackathonkit-mcp") `
+      $proc = Start-Process -FilePath "docker" -ArgumentList @("compose", "-p", $composeProject, "-f", "`"$composeFile`"", "run", "--rm", "-T", "hackathonkit-mcp") `
         -WorkingDirectory $root -RedirectStandardInput $inFile -RedirectStandardOutput $outFile -PassThru -NoNewWindow
     } catch {
       if (-not $Quiet) { Write-Host "[smoke] failed to start docker compose: $($_.Exception.Message)" }
@@ -79,8 +93,10 @@ if (Test-Path -LiteralPath $binary) {
       } catch {
         # The process exited between the timeout check and Kill; ignore.
       }
-      # --rm only removes the container after it exits; kill the hung server too.
-      & docker compose -f (Join-Path $root "docker-compose.yml") kill hackathonkit-mcp *> $null
+      # The one-off `run` container is not the compose service container, so
+      # remove every container belonging to this project instead of `kill`.
+      $ids = @(& docker ps -q --filter "label=com.docker.compose.project=$composeProject" 2>$null)
+      if ($ids.Count -gt 0) { & docker rm -f $ids *> $null }
       if (-not $Quiet) { Write-Host "[smoke] docker compose timed out after 120s" }
       exit 1
     }
@@ -124,7 +140,10 @@ foreach ($line in $lines) {
   }
 }
 if ($lines.Count -ne 3) { $ok = $false }
-if ($ok -and (($ids -join ",") -ne "1,2,3")) { $ok = $false }
+# JSON-RPC does not guarantee response ordering: validate the id set (and reject
+# duplicates), not the arrival sequence.
+$idSet = @($ids | Sort-Object -Unique)
+if ($ok -and (($idSet.Count -ne 3) -or (Compare-Object -ReferenceObject @("1", "2", "3") -DifferenceObject $idSet))) { $ok = $false }
 if ($ok) {
   $init = $byId["1"].result
   if (-not $init -or -not $init.protocolVersion) {

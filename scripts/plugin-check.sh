@@ -13,11 +13,16 @@ if ! command -v python3 >/dev/null 2>&1; then
   exit 2
 fi
 
-JSON_FILE=$(mktemp "${TMPDIR:-/tmp}/hackathonkit-plugin-list.XXXXXX")
-cleanup_plugin_check() { rm -f "$JSON_FILE" "$ERR_FILE"; }
+JSON_FILE=""
+ERR_FILE=""
+cleanup_plugin_check() {
+  if [ -n "$JSON_FILE" ]; then rm -f "$JSON_FILE"; fi
+  if [ -n "$ERR_FILE" ]; then rm -f "$ERR_FILE"; fi
+}
 trap cleanup_plugin_check EXIT
-trap 'cleanup_plugin_check; exit 130' INT
-trap 'cleanup_plugin_check; exit 143' TERM
+trap 'exit 130' INT
+trap 'exit 143' TERM
+JSON_FILE=$(mktemp "${TMPDIR:-/tmp}/hackathonkit-plugin-list.XXXXXX")
 ERR_FILE=$(mktemp "${TMPDIR:-/tmp}/hackathonkit-plugin-list-err.XXXXXX")
 if codex plugin list --json >"$JSON_FILE" 2>"$ERR_FILE"; then
   :
@@ -141,6 +146,12 @@ with tempfile.TemporaryDirectory(prefix="hackathonkit-plugin-check-") as tmp:
 
 stderr_tail = "\n".join(line for line in (proc.stderr or "").splitlines()[-5:] if line.strip())
 
+def fail(message):
+    if stderr_tail:
+        message += "\n[plugin-check] server stderr:\n" + stderr_tail
+    print(message, file=sys.stderr)
+    sys.exit(1)
+
 # Correlate responses by id; servers may interleave notifications or logs.
 responses = {}
 for line in (proc.stdout or "").splitlines():
@@ -156,28 +167,28 @@ for line in (proc.stdout or "").splitlines():
         responses[rid] = obj
     if isinstance(rid, int) and not isinstance(rid, bool) and rid in (1, 2, 3) and obj.get("error"):
         message = (obj.get("error") or {}).get("message", "unknown error")
-        print("[plugin-check] FAIL: error response for id=%s: %s" % (obj["id"], message), file=sys.stderr)
-        sys.exit(1)
+        fail("[plugin-check] FAIL: error response for id=%s: %s" % (obj["id"], message))
+
+# A server that answered then died (or was signalled) is still a failure; report
+# its status and stderr rather than a misleading "success".
+if proc.returncode != 0:
+    if proc.returncode < 0:
+        fail("[plugin-check] FAIL: MCP command killed by signal %d" % -proc.returncode)
+    fail("[plugin-check] FAIL: MCP command exited with status %d" % proc.returncode)
 
 missing = [i for i in (1, 2, 3) if i not in responses]
 if missing:
-    message = "[plugin-check] FAIL: missing JSON-RPC responses for id(s) %s from a foreign working directory" % missing
-    if stderr_tail:
-        message += "\n[plugin-check] server stderr:\n" + stderr_tail
-    print(message, file=sys.stderr)
-    sys.exit(1)
+    fail("[plugin-check] FAIL: missing JSON-RPC responses for id(s) %s from a foreign working directory" % missing)
 
 for want in (1, 2, 3):
     obj = responses[want]
     # 'result' may legitimately be falsy (an empty object or false), so the
     # key must exist rather than be truthy.
     if "result" not in obj:
-        print("[plugin-check] FAIL: response for id=%s has no result" % want, file=sys.stderr)
-        sys.exit(1)
+        fail("[plugin-check] FAIL: response for id=%s has no result" % want)
     result = obj["result"]
     if isinstance(result, dict) and result.get("isError"):
-        print("[plugin-check] FAIL: tool call id=%s reported isError" % want, file=sys.stderr)
-        sys.exit(1)
+        fail("[plugin-check] FAIL: tool call id=%s reported isError" % want)
 
 print("[plugin-check] ok: installed plugin starts the MCP from a foreign working directory")
 PY

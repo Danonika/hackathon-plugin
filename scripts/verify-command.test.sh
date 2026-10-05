@@ -67,7 +67,11 @@ print(1 if ok else 0)
 PY
 )"
 else
-  check "claude plugin declares all commands" "$(grep -q 'commands/plan.md' "$ROOT/.claude-plugin/plugin.json" 2>/dev/null && echo 1 || echo 0)"
+  declared=1
+  for cmd in $COMMANDS; do
+    grep -q "commands/$cmd.md" "$ROOT/.claude-plugin/plugin.json" 2>/dev/null || declared=0
+  done
+  check "claude plugin declares all commands" "$declared"
 fi
 
 # sync-harness mirrors every command into the harness project command dirs.
@@ -98,7 +102,7 @@ else
 fi
 printf '\ncustom edit\n' >> "$TMPHOME/prompts/verify.md"
 CODEX_HOME="$TMPHOME" sh "$ROOT/scripts/install-prompts.sh" remove >/dev/null 2>&1
-check "prompt installer preserves a user-modified prompt" "$([ -f "$TMPHOME/prompts/verify.md" ] && echo 1 || echo 0)"
+check "prompt installer preserves a user-modified prompt" "$([ -f "$TMPHOME/prompts/verify.md" ] && grep -q 'custom edit' "$TMPHOME/prompts/verify.md" && echo 1 || echo 0)"
 check "prompt installer removes unmodified prompts" "$([ -f "$TMPHOME/prompts/plan.md" ] && echo 0 || echo 1)"
 
 if [ "$FAIL" -ne 0 ]; then

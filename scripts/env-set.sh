@@ -44,19 +44,30 @@ if [ "$FROM_STDIN" = "1" ]; then
 "}
 fi
 
-if [ -L "$FILE" ]; then
-  # readlink (without -f) is portable; resolve a relative target against the
-  # link's directory so the write lands on the real file.
-  TARGET=$(readlink "$FILE" 2>/dev/null || true)
-  case "$TARGET" in
-    /*) : ;;
-    "") : ;;
-    *) TARGET="$(dirname -- "$FILE")/$TARGET" ;;
-  esac
-  if [ -n "$TARGET" ]; then
-    FILE="$TARGET"
+# Resolve symlink chains iteratively (`readlink -f`/`realpath` are not portable,
+# and a single hop would replace an intermediate link with a regular file).
+# Refuse to proceed when a link cannot be resolved, so the write never lands on
+# the wrong file.
+hops=0
+while [ -L "$FILE" ]; do
+  hops=$((hops + 1))
+  if [ "$hops" -gt 40 ]; then
+    echo "env-set: too many symlink levels resolving $FILE" >&2
+    exit 1
   fi
-fi
+  TARGET=$(readlink "$FILE" 2>/dev/null) || {
+    echo "env-set: cannot resolve symlink $FILE" >&2
+    exit 1
+  }
+  if [ -z "$TARGET" ]; then
+    echo "env-set: cannot resolve symlink $FILE" >&2
+    exit 1
+  fi
+  case "$TARGET" in
+    /*) FILE="$TARGET" ;;
+    *) FILE="$(dirname -- "$FILE")/$TARGET" ;;
+  esac
+done
 
 MODE="600"
 OWNER=""
@@ -178,12 +189,18 @@ trap on_signal_env_set INT TERM
   END { if (!done) print k "=" enc(v) }
 ' "$INPUT" > "$TMP")
 
-mv "$TMP" "$FILE"
-if ! chmod "$MODE" "$FILE" 2>/dev/null; then
-  echo "env-set: warning: could not restore mode $MODE on $FILE" >&2
+# Apply the preserved mode/owner to the temp file before the rename, so the
+# install is atomic and the live file never keeps the temp file's 0600 mode.
+# Silently downgrading permissions on a credentials file is worse than failing,
+# so a mode restore failure is fatal.
+if ! chmod "$MODE" "$TMP" 2>/dev/null; then
+  echo "env-set: cannot restore mode $MODE on $FILE" >&2
+  exit 1
 fi
 if [ -n "$OWNER" ]; then
-  if ! chown "$OWNER" "$FILE" 2>/dev/null; then
-    echo "env-set: warning: could not restore owner $OWNER on $FILE" >&2
+  if ! chown "$OWNER" "$TMP" 2>/dev/null; then
+    echo "env-set: cannot restore owner $OWNER on $FILE" >&2
+    exit 1
   fi
 fi
+mv "$TMP" "$FILE"

@@ -28,8 +28,16 @@ func (h *HashEncoder) Embed(ctx context.Context, texts []string) ([][]float64, e
 	out := make([][]float64, 0, len(texts))
 	hasher := fnv.New64a()
 	for _, text := range texts {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		vector := make([]float64, h.Dims)
-		for _, token := range tokenizeFly(text) {
+		for i, token := range tokenizeFly(text) {
+			if i%1024 == 0 {
+				if err := ctx.Err(); err != nil {
+					return nil, err
+				}
+			}
 			hasher.Reset()
 			_, _ = hasher.Write([]byte(token))
 			value := hasher.Sum64()
@@ -59,8 +67,9 @@ func tokenizeFly(text string) []string {
 	var out []string
 	var current strings.Builder
 	flush := func() {
-		if utf8.RuneCountInString(current.String()) >= 2 {
-			out = append(out, strings.ToLower(current.String()))
+		s := current.String()
+		if utf8.RuneCountInString(s) >= 2 {
+			out = append(out, strings.ToLower(s))
 		}
 		current.Reset()
 	}

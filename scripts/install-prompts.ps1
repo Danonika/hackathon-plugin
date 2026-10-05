@@ -11,17 +11,27 @@ param(
 $ErrorActionPreference = "Stop"
 
 function Fail([string]$Message) {
-  Write-Host $Message -ForegroundColor Red
+  [Console]::Error.WriteLine($Message)
   exit 1
 }
 
 $Root = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
-$SrcDir = Join-Path $Root "plugins\hackathonkit\commands"
-$CodexHome = if ($env:CODEX_HOME) { $env:CODEX_HOME } else { Join-Path $HOME ".codex" }
+$SrcDir = Join-Path $Root "plugins/hackathonkit/commands"
+if ($env:CODEX_HOME) {
+  $CodexHome = $env:CODEX_HOME
+} elseif ($HOME) {
+  $CodexHome = Join-Path $HOME ".codex"
+} else {
+  Fail "[prompts] HOME is not set and CODEX_HOME is empty; cannot resolve the prompts directory"
+}
+if (-not [System.IO.Path]::IsPathRooted($CodexHome)) {
+  Fail "[prompts] the prompts home must be an absolute path: $CodexHome"
+}
 $DestDir = Join-Path $CodexHome "prompts"
 
 if (-not (Test-Path -LiteralPath $SrcDir)) { Fail "[prompts] source not found: $SrcDir" }
-$Sources = @(Get-ChildItem -LiteralPath $SrcDir -Filter *.md)
+$Sources = @(Get-ChildItem -LiteralPath $SrcDir -Filter *.md -File)
+if ($Sources.Count -eq 0) { Fail "[prompts] no *.md prompts found in $SrcDir" }
 
 switch ($Action) {
   "install" {
@@ -32,21 +42,50 @@ switch ($Action) {
     Write-Host "[prompts] installed $($Sources.Count) prompt(s) to $DestDir"
   }
   "remove" {
+    $removed = 0
+    $kept = 0
     foreach ($f in $Sources) {
       $dest = Join-Path $DestDir $f.Name
-      if (Test-Path -LiteralPath $dest) {
+      if (-not (Test-Path -LiteralPath $dest)) { continue }
+      try {
         $same = (Get-FileHash -LiteralPath $f.FullName -Algorithm SHA256).Hash -eq (Get-FileHash -LiteralPath $dest -Algorithm SHA256).Hash
-        if ($same) { Remove-Item -LiteralPath $dest -Force }
+      } catch {
+        Write-Warning "[prompts] could not compare ${dest}: $($_.Exception.Message)"
+        $kept++
+        continue
+      }
+      if ($same) {
+        try { Remove-Item -LiteralPath $dest -Force -ErrorAction Stop; $removed++ }
+        catch { Write-Warning "[prompts] could not remove ${dest}: $($_.Exception.Message)"; $kept++ }
+      } else {
+        Write-Warning "[prompts] keeping modified prompt: $dest"
+        $kept++
       }
     }
-    Write-Host "[prompts] removed unmodified prompts from $DestDir"
+    $detail = if ($kept -gt 0) { " ($kept kept)" } else { "" }
+    Write-Host "[prompts] removed $removed prompt(s) from $DestDir$detail"
   }
   "status" {
-    $missing = @($Sources | Where-Object { -not (Test-Path -LiteralPath (Join-Path $DestDir $_.Name)) })
-    if ($missing.Count -eq 0) {
+    $missing = @()
+    $outdated = @()
+    foreach ($f in $Sources) {
+      $dest = Join-Path $DestDir $f.Name
+      if (-not (Test-Path -LiteralPath $dest)) { $missing += $f.Name; continue }
+      try {
+        if ((Get-FileHash -LiteralPath $f.FullName -Algorithm SHA256).Hash -ne (Get-FileHash -LiteralPath $dest -Algorithm SHA256).Hash) {
+          $outdated += $f.Name
+        }
+      } catch {
+        $outdated += $f.Name
+      }
+    }
+    if ($missing.Count -eq 0 -and $outdated.Count -eq 0) {
       Write-Host "installed: $DestDir"
     } else {
-      Write-Host "not installed ($($missing.Count) missing): $DestDir (run scripts/install-prompts.ps1 install)"
+      $parts = @()
+      if ($missing.Count -gt 0) { $parts += "$($missing.Count) missing" }
+      if ($outdated.Count -gt 0) { $parts += "$($outdated.Count) out of date" }
+      [Console]::Error.WriteLine("not installed ($($parts -join ', ')): $DestDir (run scripts/install-prompts.ps1 install)")
       exit 1
     }
   }

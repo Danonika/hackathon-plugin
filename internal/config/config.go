@@ -125,6 +125,11 @@ type Manager struct {
 	routingCache RoutingState
 	routingInit  bool
 
+	// writeMu serializes routing.yaml writers in this process; a file lock
+	// serializes them across the processes sharing the bind-mounted configs
+	// directory (demo-api, hackathonkit-mcp).
+	writeMu sync.Mutex
+
 	evaluationCache EvaluationSettings
 	evaluationInit  bool
 }
@@ -372,23 +377,21 @@ func (m *Manager) SetRoutingMode(mode string) (RoutingState, error) {
 		return RoutingState{}, fmt.Errorf("invalid routing mode %q: expected normal or fly", mode)
 	}
 	mode = normalized
-	// Read the current state before taking the lock so a slow/bind-mounted
-	// filesystem cannot serialize every config access behind this write.
-	current := RoutingState{Mode: "normal", Version: 1}
-	if data, err := os.ReadFile(m.RoutingPath()); err == nil {
-		var doc routingDoc
-		if yaml.Unmarshal(data, &doc) == nil && doc.Routing.Mode != "" {
-			current = doc.Routing
-			if normalized := normalizeMode(current.Mode); normalized != "" {
-				current.Mode = normalized
-			}
-		}
+	// Serialize the whole read-modify-write: this process's writers via
+	// writeMu and other processes sharing the bind-mounted configs directory
+	// via a file lock. Reading outside m.mu keeps a slow filesystem from
+	// blocking config readers.
+	m.writeMu.Lock()
+	defer m.writeMu.Unlock()
+	release, lockErr := acquireLock(m.RoutingPath() + ".lock")
+	if lockErr != nil {
+		return RoutingState{}, lockErr
 	}
+	defer release()
 
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if m.routingInit && m.routingCache.Version > current.Version {
-		current.Version = m.routingCache.Version
+	current, err := m.readRoutingState()
+	if err != nil {
+		return RoutingState{}, err
 	}
 	next := RoutingState{Mode: mode, Version: current.Version + 1}
 	data, err := yaml.Marshal(routingDoc{Routing: next})
@@ -398,9 +401,39 @@ func (m *Manager) SetRoutingMode(mode string) (RoutingState, error) {
 	if err := atomicfile.Write(m.RoutingPath(), data, atomicfile.ModeContent); err != nil {
 		return RoutingState{}, err
 	}
+	m.mu.Lock()
 	m.routingCache = next
 	m.routingInit = true
+	m.mu.Unlock()
 	return next, nil
+}
+
+// readRoutingState reads and parses the on-disk routing state. A missing file
+// yields the defaults; a real read/parse error is surfaced rather than being
+// silently treated as the default version.
+func (m *Manager) readRoutingState() (RoutingState, error) {
+	current := RoutingState{Mode: "normal", Version: 1}
+	data, err := os.ReadFile(m.RoutingPath())
+	if err != nil {
+		if os.IsNotExist(err) {
+			return current, nil
+		}
+		return RoutingState{}, fmt.Errorf("config: cannot read %s: %w", m.RoutingPath(), err)
+	}
+	var doc routingDoc
+	if err := yaml.Unmarshal(data, &doc); err != nil {
+		return RoutingState{}, fmt.Errorf("config: cannot parse %s: %w", m.RoutingPath(), err)
+	}
+	if doc.Routing.Version > 0 {
+		current.Version = doc.Routing.Version
+	}
+	if doc.Routing.Mode != "" {
+		current.Mode = doc.Routing.Mode
+		if normalized := normalizeMode(current.Mode); normalized != "" {
+			current.Mode = normalized
+		}
+	}
+	return current, nil
 }
 
 func (m *Manager) EvaluationPath() string {

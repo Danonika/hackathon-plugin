@@ -21,13 +21,35 @@ count_dirs() {
 COUNT_SRC=$(count_dirs "$SRC")
 
 # Build the mirror in a temporary directory and swap it in with a rollback on
-# failure. The swap is two renames, so a reader can briefly observe no mirror;
-# it can never observe a half-populated one.
+# failure. A single cleanup routine owns the temp dir, the backup and the lock,
+# and its traps are installed before acquisition, so a signal in any window
+# cannot leave the lock (or a partial mirror) behind.
 TMP="$DST.tmp.$$"
-cleanup_tmp() { rm -rf "$TMP"; }
-on_signal() { cleanup_tmp; exit 130; }
-trap cleanup_tmp EXIT
-trap on_signal INT TERM
+LOCK="$DST.lock"
+LOCKED=0
+OLD=""
+finish() {
+  if [ -d "$OLD" ] && [ ! -d "$DST" ]; then
+    if mv "$OLD" "$DST" 2>/dev/null; then
+      OLD=""
+    else
+      echo "[sync-skills] WARNING: could not restore $DST from $OLD; leaving the backup in place" >&2
+    fi
+  fi
+  # Only delete the backup once the live mirror is known to exist, so a failed
+  # restore never destroys the only good copy.
+  if [ -n "$OLD" ] && [ -d "$DST" ]; then
+    rm -rf "$OLD"
+  fi
+  rm -rf "$TMP"
+  if [ "$LOCKED" = "1" ]; then
+    rm -rf "$LOCK"
+  fi
+}
+trap finish EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
 rm -rf "$TMP"
 mkdir -p "$TMP"
 cp -R "$SRC/." "$TMP/"
@@ -41,17 +63,33 @@ if [ "$COUNT_SRC" != "$COUNT_DST" ] || [ "$FILES_SRC" != "$FILES_DST" ] || [ "$S
   echo "[sync-skills] mirror mismatch: dirs $COUNT_SRC/$COUNT_DST files $FILES_SRC/$FILES_DST SKILL.md $SKILLS_SRC/$SKILLS_DST" >&2
   exit 1
 fi
+# Content verification is required: counts alone would accept a truncated file
+# (or a same-count set of different files) as a valid mirror.
 if command -v diff >/dev/null 2>&1; then
   if ! diff -r "$SRC" "$TMP" >/dev/null 2>&1; then
     echo "[sync-skills] mirror content differs from the source" >&2
     exit 1
   fi
+elif command -v cmp >/dev/null 2>&1; then
+  A_LIST=$(cd "$SRC" && find . -type f | LC_ALL=C sort)
+  B_LIST=$(cd "$TMP" && find . -type f | LC_ALL=C sort)
+  if [ "$A_LIST" != "$B_LIST" ]; then
+    echo "[sync-skills] mirror file list differs from the source" >&2
+    exit 1
+  fi
+  cd "$SRC" || exit 1
+  for rel in $A_LIST; do
+    if ! cmp -s "$SRC/$rel" "$TMP/$rel"; then
+      echo "[sync-skills] mirror content differs: $rel" >&2
+      exit 1
+    fi
+  done
+else
+  echo "[sync-skills] neither diff nor cmp is available; refusing to publish an unverified mirror" >&2
+  exit 1
 fi
 
 # Serialize concurrent mirror runs so two writers cannot interleave the swap.
-LOCK="$DST.lock"
-LOCKED=0
-# Reclaim a lock left by a crashed run (its holder is gone).
 if [ -d "$LOCK" ]; then
   HOLDER=$(cat "$LOCK/pid" 2>/dev/null || true)
   if [ -n "$HOLDER" ] && ! kill -0 "$HOLDER" 2>/dev/null; then
@@ -60,7 +98,11 @@ if [ -d "$LOCK" ]; then
 fi
 for _ in 1 2 3 4 5 6 7 8 9 10; do
   if mkdir "$LOCK" 2>/dev/null; then
-    printf '%s' "$$" > "$LOCK/pid" 2>/dev/null || true
+    if ! printf '%s' "$$" > "$LOCK/pid" 2>/dev/null; then
+      echo "[sync-skills] cannot record the lock pid; aborting" >&2
+      rm -rf "$LOCK"
+      exit 1
+    fi
     LOCKED=1
     break
   fi
@@ -72,27 +114,16 @@ if [ "$LOCKED" != "1" ]; then
 fi
 
 OLD="$DST.old.$$"
-finish() {
-  if [ -d "$OLD" ] && [ ! -d "$DST" ]; then
-    mv "$OLD" "$DST" 2>/dev/null || true
-  fi
-  rm -rf "$OLD" "$TMP"
-  if [ "$LOCKED" = "1" ]; then
-    rm -rf "$LOCK"
-  fi
-}
-on_signal() { finish; exit 130; }
-trap finish EXIT
-trap on_signal INT TERM
-
 if [ -d "$DST" ]; then
   mv "$DST" "$OLD"
 fi
 if ! mv "$TMP" "$DST"; then
-  [ -d "$OLD" ] && mv "$OLD" "$DST"
+  # finish() (EXIT trap) restores $OLD and leaves it in place if it cannot.
+  echo "[sync-skills] mirror swap failed; restoring the previous mirror" >&2
   exit 1
 fi
 rm -rf "$OLD"
+OLD=""
 LOCKED=0
 rm -rf "$LOCK"
 trap - EXIT INT TERM

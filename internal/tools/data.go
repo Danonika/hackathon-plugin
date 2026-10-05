@@ -61,9 +61,17 @@ func readCSVTable(path string, delimiter string) (*table, []string, error) {
 	rows := records[1:]
 	warnings := []string{}
 	ragged := 0
-	for _, row := range rows {
-		if len(row) != len(headers) {
-			ragged++
+	for i, row := range rows {
+		if len(row) == len(headers) {
+			continue
+		}
+		ragged++
+		if len(row) < len(headers) {
+			// Actually pad short rows, matching the warning below, so
+			// downstream consumers can index by header position.
+			padded := make([]string, len(headers))
+			copy(padded, row)
+			rows[i] = padded
 		}
 	}
 	if ragged > 0 {
@@ -114,6 +122,14 @@ type columnProfile struct {
 }
 
 func profileColumns(t *table, selected []string) []columnProfile {
+	profiles, _ := profileColumnsIndexed(t, selected)
+	return profiles
+}
+
+// profileColumnsIndexed profiles the selected columns and also returns the
+// resolved header index for each profile, so callers do not have to re-resolve
+// (and possibly re-resolve to a different column).
+func profileColumnsIndexed(t *table, selected []string) ([]columnProfile, []int) {
 	indices := []int{}
 	if len(selected) == 0 {
 		for i := range t.Headers {
@@ -172,12 +188,13 @@ func profileColumns(t *table, selected []string) []columnProfile {
 		}
 		out = append(out, p)
 	}
-	return out
+	return out, indices
 }
 
 const (
-	maxTableBytes = 64 << 20
-	maxTableRows  = 2_000_000
+	maxTableBytes         = 64 << 20
+	maxTableRows          = 2_000_000
+	maxCorrelationColumns = 32
 )
 
 func (d Deps) loadTable(ctx context.Context, args map[string]any) (*table, []string, *mcp.Envelope) {
@@ -191,7 +208,12 @@ func (d Deps) loadTable(ctx context.Context, args map[string]any) (*table, []str
 		env := mcp.Fail(trace(ctx), err.Error())
 		return nil, nil, &env
 	}
-	if info, serr := os.Stat(full); serr == nil && info.Size() > maxTableBytes {
+	info, serr := os.Stat(full)
+	if serr != nil {
+		env := mcp.Fail(trace(ctx), "cannot stat table "+path+": "+serr.Error())
+		return nil, nil, &env
+	}
+	if info.Size() > maxTableBytes {
 		env := mcp.Fail(trace(ctx), fmt.Sprintf("table %s is %d bytes; exceeds the %d-byte limit", path, info.Size(), maxTableBytes))
 		return nil, nil, &env
 	}
@@ -362,17 +384,39 @@ func registerData(reg *mcp.Registry, d Deps) {
 				return *fail, nil
 			}
 			requested := argStringSlice(args, "columns")
-			profiles := profileColumns(t, requested)
+			profiles, indices := profileColumnsIndexed(t, requested)
 			for _, name := range requested {
 				if t.columnIndex(name) < 0 {
 					warnings = append(warnings, "unknown column requested: "+name)
 				}
 			}
-			numeric := []string{}
-			for _, p := range profiles {
-				if p.Kind == "numeric" {
-					numeric = append(numeric, p.Name)
+			// Parse each numeric column once (NaN marks an unparseable cell) so
+			// the pairwise correlation loop does not reparse every row.
+			type numericCol struct {
+				name   string
+				values []float64
+			}
+			cols := []numericCol{}
+			for i, p := range profiles {
+				if p.Kind != "numeric" {
+					continue
 				}
+				idx := indices[i]
+				values := make([]float64, len(t.Rows))
+				for ri, row := range t.Rows {
+					if idx < len(row) {
+						if v, ok := parseNumber(row[idx]); ok {
+							values[ri] = v
+							continue
+						}
+					}
+					values[ri] = math.NaN()
+				}
+				cols = append(cols, numericCol{name: p.Name, values: values})
+			}
+			if len(cols) > maxCorrelationColumns {
+				warnings = append(warnings, fmt.Sprintf("%d numeric columns; correlations are computed for the first %d", len(cols), maxCorrelationColumns))
+				cols = cols[:maxCorrelationColumns]
 			}
 			type corr struct {
 				A, B string
@@ -380,20 +424,15 @@ func registerData(reg *mcp.Registry, d Deps) {
 				N    int
 			}
 			corrs := []corr{}
-			for i := 0; i < len(numeric); i++ {
-				for j := i + 1; j < len(numeric); j++ {
-					idxA, idxB := t.columnIndex(numeric[i]), t.columnIndex(numeric[j])
-					if idxA < 0 || idxB < 0 || idxA == idxB {
-						continue
-					}
+			for i := 0; i < len(cols); i++ {
+				if err := ctx.Err(); err != nil {
+					return mcp.Fail(trace(ctx), err.Error()), nil
+				}
+				for j := i + 1; j < len(cols); j++ {
 					var xs, ys []float64
-					for _, row := range t.Rows {
-						if idxA >= len(row) || idxB >= len(row) {
-							continue
-						}
-						a, okA := parseNumber(row[idxA])
-						b, okB := parseNumber(row[idxB])
-						if okA && okB {
+					for k := range cols[i].values {
+						a, b := cols[i].values[k], cols[j].values[k]
+						if !math.IsNaN(a) && !math.IsNaN(b) {
 							xs = append(xs, a)
 							ys = append(ys, b)
 						}
@@ -403,7 +442,7 @@ func registerData(reg *mcp.Registry, d Deps) {
 					}
 					r := pearson(xs, ys)
 					if absFloat(r) >= 0.3 {
-						corrs = append(corrs, corr{numeric[i], numeric[j], round2(r), len(xs)})
+						corrs = append(corrs, corr{cols[i].name, cols[j].name, round2(r), len(xs)})
 					}
 				}
 			}

@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -12,6 +13,7 @@ import (
 	"strings"
 
 	"hackathonkit.local/agentkit/internal/mcp"
+	"gopkg.in/yaml.v3"
 )
 
 const (
@@ -138,7 +140,11 @@ func skillContextItems(ctx context.Context, root string) ([]contextItem, error) 
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		if err != nil || entry.IsDir() {
+		if err != nil {
+			items = append(items, contextItem{Kind: "skill", Name: path, Flag: "walk failed: " + err.Error()})
+			return nil
+		}
+		if entry.IsDir() {
 			return nil
 		}
 		info, statErr := entry.Info()
@@ -170,7 +176,7 @@ func skillContextItems(ctx context.Context, root string) ([]contextItem, error) 
 			Kind:   kind,
 			Name:   name,
 			Bytes:  int(info.Size()),
-			Lines:  strings.Count(string(data), "\n") + 1,
+			Lines:  bytes.Count(data, []byte("\n")) + 1,
 			Tokens: estimateTokens(int(info.Size())),
 		}
 		if kind == "skill" {
@@ -207,28 +213,33 @@ func manifestContextItems(root string) []contextItem {
 		"configs/routing.yaml",
 	}
 	items := []contextItem{}
-	total := 0
 	for _, rel := range candidates {
 		path := filepath.Join(root, filepath.FromSlash(rel))
 		info, err := os.Stat(path)
-		if err != nil || info.IsDir() {
+		if err != nil {
+			if !os.IsNotExist(err) {
+				items = append(items, contextItem{Kind: "manifest", Name: rel, Flag: "stat failed: " + err.Error()})
+			}
+			continue
+		}
+		if info.IsDir() {
 			continue
 		}
 		data, readErr := os.ReadFile(path)
 		if readErr != nil {
+			items = append(items, contextItem{Kind: "manifest", Name: rel, Flag: "read failed: " + readErr.Error()})
 			continue
 		}
 		item := contextItem{
 			Kind:   "manifest",
 			Name:   rel,
 			Bytes:  int(info.Size()),
-			Lines:  strings.Count(string(data), "\n") + 1,
+			Lines:  bytes.Count(data, []byte("\n")) + 1,
 			Tokens: estimateTokens(int(info.Size())),
 		}
 		if item.Tokens > manifestTokenWarn {
 			item.Flag = fmt.Sprintf("manifest > %d tokens", manifestTokenWarn)
 		}
-		total += item.Tokens
 		items = append(items, item)
 	}
 	return items
@@ -273,41 +284,35 @@ func estimateTokens(bytes int) int {
 }
 
 func frontmatterDescription(text string) string {
-	lines := strings.Split(text, "\n")
-	if len(lines) == 0 || strings.TrimSpace(lines[0]) != "---" {
+	block, ok := frontmatterBlock(text)
+	if !ok {
 		return ""
 	}
-	for i := 1; i < len(lines); i++ {
-		line := lines[i]
-		if strings.TrimSpace(line) == "---" {
-			break
-		}
-		trimmed := strings.TrimSpace(line)
-		if !strings.HasPrefix(trimmed, "description:") {
-			continue
-		}
-		value := strings.TrimSpace(strings.TrimPrefix(trimmed, "description:"))
-		if len(value) > 0 && value[0] != '"' && value[0] != '\'' {
-			if idx := strings.Index(value, " #"); idx >= 0 {
-				value = strings.TrimSpace(value[:idx])
-			}
-		}
-		if value == "|" || value == ">" || value == "|-" || value == ">-" {
-			// Block scalar: collect the indented lines that follow.
-			var b strings.Builder
-			for j := i + 1; j < len(lines); j++ {
-				next := lines[j]
-				if strings.TrimSpace(next) == "---" || (strings.TrimSpace(next) != "" && !strings.HasPrefix(next, " ") && !strings.HasPrefix(next, "\t")) {
-					break
-				}
-				if b.Len() > 0 {
-					b.WriteString(" ")
-				}
-				b.WriteString(strings.TrimSpace(next))
-			}
-			return strings.TrimSpace(b.String())
-		}
-		return strings.Trim(value, `"'`)
+	// A real YAML parser handles block scalars, quoted values and inline
+	// comments without hand-rolled edge cases.
+	var meta struct {
+		Description string `yaml:"description"`
 	}
-	return ""
+	if err := yaml.Unmarshal([]byte(block), &meta); err != nil {
+		return ""
+	}
+	return strings.TrimSpace(meta.Description)
+}
+
+// frontmatterBlock returns the text between the leading "---" fence and the
+// next "---" fence, if the document starts with frontmatter.
+func frontmatterBlock(text string) (string, bool) {
+	lines := strings.Split(text, "\n")
+	if len(lines) == 0 || strings.TrimSpace(lines[0]) != "---" {
+		return "", false
+	}
+	var b strings.Builder
+	for i := 1; i < len(lines); i++ {
+		if strings.TrimSpace(lines[i]) == "---" {
+			return b.String(), true
+		}
+		b.WriteString(lines[i])
+		b.WriteString("\n")
+	}
+	return "", false
 }

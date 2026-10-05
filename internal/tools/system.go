@@ -75,6 +75,7 @@ func registerSystem(reg *mcp.Registry, d Deps) {
 			"task":                   strProp("Natural-language task description"),
 			"input_metadata":         objProp("Input metadata such as types, rows, columns, has_timestamp"),
 			"available_capabilities": arrProp("Capability list to rank", map[string]any{"type": "string"}),
+			"emit_activation":        boolProp("Re-embed the task to export the KC activation snapshot (default true; set false to skip the extra embed pass)"),
 		},
 		[]string{"task"},
 		func(ctx context.Context, args map[string]any) (any, error) {
@@ -89,10 +90,25 @@ func registerSystem(reg *mcp.Registry, d Deps) {
 			if d.Metrics != nil {
 				d.Metrics.Inc("fly_route_requests_total")
 			}
+			// emit_activation defaults to true to preserve the demo event stream;
+			// callers that want to avoid the extra embed pass can disable it.
+			emitActivation := argBool(args, "emit_activation", true)
+			telemetryWarnings := []string{}
+			logJSONL := func(path string, record map[string]any) {
+				if err := observability.AppendJSONL(path, record); err != nil {
+					telemetryWarnings = append(telemetryWarnings, "telemetry append failed: "+err.Error())
+				}
+			}
+			attachTelemetryWarnings := func(env mcp.Envelope) mcp.Envelope {
+				if len(telemetryWarnings) > 0 {
+					env = env.WithWarnings(telemetryWarnings...)
+				}
+				return env
+			}
 			res := d.Router.Recommend(ctx, task, argMap(args, "input_metadata"), available)
 			if len(res.Recommendations) == 0 {
 				if d.Store != nil {
-					_ = observability.AppendJSONL(filepath.Join(d.Store.Root(), "logs", "fly-events.jsonl"), map[string]any{
+					logJSONL(filepath.Join(d.Store.Root(), "logs", "fly-events.jsonl"), map[string]any{
 						"ts":       time.Now().UTC().Format(time.RFC3339Nano),
 						"trace_id": trace(ctx),
 						"route":    "unknown",
@@ -100,10 +116,10 @@ func registerSystem(reg *mcp.Registry, d Deps) {
 						"task":     snippet(task, 200),
 					})
 				}
-				return mcp.Partial(trace(ctx), map[string]any{
+				return attachTelemetryWarnings(mcp.Partial(trace(ctx), map[string]any{
 					"route":           "unknown",
 					"recommendations": []any{},
-				}, "fly router produced no recommendations; continue in normal mode"), nil
+				}, "fly router produced no recommendations; continue in normal mode")), nil
 			}
 			env := mcp.OK(trace(ctx), map[string]any{
 				"route":           res.Route,
@@ -119,7 +135,7 @@ func registerSystem(reg *mcp.Registry, d Deps) {
 				env = env.WithWarnings("fly max score below threshold; ignore recommendation and continue in normal mode")
 			}
 			if d.Store != nil {
-				_ = observability.AppendJSONL(filepath.Join(d.Store.Root(), "logs", "fly-events.jsonl"), map[string]any{
+				logJSONL(filepath.Join(d.Store.Root(), "logs", "fly-events.jsonl"), map[string]any{
 					"ts":              time.Now().UTC().Format(time.RFC3339Nano),
 					"trace_id":        trace(ctx),
 					"route":           res.Route,
@@ -130,8 +146,11 @@ func registerSystem(reg *mcp.Registry, d Deps) {
 					"recommendations": res.Recommendations,
 					"task":            snippet(task, 200),
 				})
-				snapshot := d.Router.ActivationSnapshot(ctx, task, 64)
-				_ = observability.AppendJSONL(filepath.Join(d.Store.Root(), "logs", "fly-neuron-events.jsonl"), map[string]any{
+				var snapshot map[string]any
+				if emitActivation {
+					snapshot = d.Router.ActivationSnapshot(ctx, task, 64)
+				}
+				logJSONL(filepath.Join(d.Store.Root(), "logs", "fly-neuron-events.jsonl"), map[string]any{
 					"ts":                   time.Now().UTC().Format(time.RFC3339Nano),
 					"type":                 "recommend",
 					"trace_id":             trace(ctx),
@@ -148,7 +167,7 @@ func registerSystem(reg *mcp.Registry, d Deps) {
 				})
 			}
 			if d.Meta != nil && d.Meta.Enabled() {
-				_ = d.Meta.RecordFlyPrediction(ctx, metadata.FlyPrediction{
+				if err := d.Meta.RecordFlyPrediction(ctx, metadata.FlyPrediction{
 					TraceID:         trace(ctx),
 					Route:           res.Route,
 					Encoder:         res.Encoder,
@@ -156,9 +175,11 @@ func registerSystem(reg *mcp.Registry, d Deps) {
 					Threshold:       res.Threshold,
 					CategoryScores:  res.CategoryScores,
 					Recommendations: res.Recommendations,
-				})
+				}); err != nil {
+					telemetryWarnings = append(telemetryWarnings, "fly prediction not recorded: "+err.Error())
+				}
 			}
-			return env, nil
+			return attachTelemetryWarnings(env), nil
 		},
 	))
 	reg.Register(tool(
@@ -204,8 +225,14 @@ func registerSystem(reg *mcp.Registry, d Deps) {
 			if d.Metrics != nil {
 				d.Metrics.Inc("fly_feedback_total")
 			}
+			telemetryWarnings := []string{}
+			logJSONL := func(path string, record map[string]any) {
+				if err := observability.AppendJSONL(path, record); err != nil {
+					telemetryWarnings = append(telemetryWarnings, "telemetry append failed: "+err.Error())
+				}
+			}
 			if d.Store != nil {
-				_ = observability.AppendJSONL(filepath.Join(d.Store.Root(), "logs", "fly-feedback.jsonl"), map[string]any{
+				logJSONL(filepath.Join(d.Store.Root(), "logs", "fly-feedback.jsonl"), map[string]any{
 					"ts":          time.Now().UTC().Format(time.RFC3339Nano),
 					"trace_id":    trace(ctx),
 					"task":        snippet(task, 200),
@@ -215,7 +242,7 @@ func registerSystem(reg *mcp.Registry, d Deps) {
 					"memory_size": size,
 				})
 				stats := d.Router.Dopamine()
-				_ = observability.AppendJSONL(filepath.Join(d.Store.Root(), "logs", "fly-neuron-events.jsonl"), map[string]any{
+				logJSONL(filepath.Join(d.Store.Root(), "logs", "fly-neuron-events.jsonl"), map[string]any{
 					"ts":       time.Now().UTC().Format(time.RFC3339Nano),
 					"type":     "feedback",
 					"trace_id": trace(ctx),
@@ -226,11 +253,15 @@ func registerSystem(reg *mcp.Registry, d Deps) {
 					"chosen":   chosen,
 				})
 			}
-			return mcp.OK(trace(ctx), map[string]any{
+			env := mcp.OK(trace(ctx), map[string]any{
 				"stored":  size,
 				"source":  source,
 				"learned": learned,
-			}).WithMetrics(map[string]any{"memory_size": size}), nil
+			}).WithMetrics(map[string]any{"memory_size": size})
+			if len(telemetryWarnings) > 0 {
+				env = env.WithWarnings(telemetryWarnings...)
+			}
+			return env, nil
 		},
 	))
 }

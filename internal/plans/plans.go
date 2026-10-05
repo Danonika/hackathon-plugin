@@ -31,6 +31,10 @@ type Plan struct {
 	UpdatedAt         time.Time      `json:"updated_at"`
 }
 
+// DefaultStages is the shared stage template. It is exported for callers that
+// read it, but it must be treated as immutable: mutating an element (e.g. a
+// stage Status) corrupts the template for every other caller. Copy it before
+// making changes (for example `stages := append([]Stage(nil), DefaultStages...)`).
 var DefaultStages = []Stage{
 	{ID: "S0", Goal: "outcome, mandatory scenario, constraints", Status: "todo", TimeboxMinute: 20},
 	{ID: "S1", Goal: "inputs inventory and research brief", Status: "todo", TimeboxMinute: 30},
@@ -145,9 +149,6 @@ func LatestErr(root string) (Plan, bool, error) {
 			}
 			continue
 		}
-		if info.ModTime().Before(bestTime) {
-			continue
-		}
 		data, readErr := os.ReadFile(filepath.Join(dir, entry.Name()))
 		if readErr != nil {
 			if firstErr == nil {
@@ -156,9 +157,9 @@ func LatestErr(root string) (Plan, bool, error) {
 			continue
 		}
 		var plan Plan
-		if json.Unmarshal(data, &plan) != nil {
+		if uerr := json.Unmarshal(data, &plan); uerr != nil {
 			if firstErr == nil {
-				firstErr = fmt.Errorf("plan %s is corrupt", entry.Name())
+				firstErr = fmt.Errorf("plan %s is corrupt: %w", entry.Name(), uerr)
 			}
 			continue
 		}
@@ -179,35 +180,12 @@ func LatestErr(root string) (Plan, bool, error) {
 	return best, true, firstErr
 }
 
+// Latest returns the most recently updated plan, if any. It delegates to
+// LatestErr so both helpers agree on ordering and error handling, discarding
+// the error to preserve the existing signature.
 func Latest(root string) (Plan, bool) {
-	entries, err := os.ReadDir(Dir(root))
-	if err != nil {
-		return Plan{}, false
-	}
-	best := Plan{}
-	bestTime := time.Time{}
-	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
-			continue
-		}
-		info, infoErr := entry.Info()
-		if infoErr != nil || info.ModTime().Before(bestTime) {
-			continue
-		}
-		data, readErr := os.ReadFile(filepath.Join(Dir(root), entry.Name()))
-		if readErr != nil {
-			continue
-		}
-		var plan Plan
-		if json.Unmarshal(data, &plan) != nil {
-			continue
-		}
-		best, bestTime = plan, info.ModTime()
-	}
-	if bestTime.IsZero() {
-		return Plan{}, false
-	}
-	return best, true
+	plan, ok, _ := LatestErr(root)
+	return plan, ok
 }
 
 func Save(root string, plan Plan) error {

@@ -20,6 +20,7 @@ import (
 	"strings"
 	"sync"
 	"syscall"
+	"text/template"
 	"time"
 
 	"hackathonkit.local/agentkit/internal/atomicfile"
@@ -89,14 +90,13 @@ func main() {
 			fmt.Fprintln(os.Stderr, "demo-api shutdown error:", err)
 		}
 	}
-	meta.Close()
 }
 
 func newHandler(root string, mgr *config.Manager, meta metadata.Recorder, token string, logger *log.Logger) http.Handler {
 	// Serializes the read-compare-write of a plan decision.
 	var decisionMu sync.Mutex
 	mux := http.NewServeMux()
-	mux.Handle("/fly-live", newFlyLiveHandler(root))
+	mux.Handle("/fly-live", newFlyLiveHandler(root, logger))
 	mux.HandleFunc("/fly-static/", func(w http.ResponseWriter, r *http.Request) {
 		name := strings.TrimPrefix(r.URL.Path, "/fly-static/")
 		if strings.Contains(name, "/") || !strings.HasSuffix(name, ".js") {
@@ -227,7 +227,9 @@ func newHandler(root string, mgr *config.Manager, meta metadata.Recorder, token 
 			return
 		}
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		_, _ = w.Write([]byte(strings.ReplaceAll(string(page), "__HACKATHONKIT_DEMO_TOKEN__", token)))
+		// The token is substituted into the page; JS-escape it so a value with
+		// quotes or markup cannot break out of the surrounding script.
+		_, _ = w.Write([]byte(strings.ReplaceAll(string(page), "__HACKATHONKIT_DEMO_TOKEN__", template.JSEscapeString(token))))
 	})
 	mux.HandleFunc("/control", func(w http.ResponseWriter, r *http.Request) {
 		page, err := staticFS.ReadFile("static/control.html")
@@ -453,10 +455,25 @@ func approvalPath(root, slug string) string {
 	return filepath.Join(plans.Dir(root), slug+".approval.json")
 }
 
+// validPlanSlug rejects a slug that could escape evals/plans when joined into a
+// path (a plan body may carry an arbitrary "slug" value).
+func validPlanSlug(slug string) bool {
+	if slug == "" || slug == "." || slug == ".." {
+		return false
+	}
+	if strings.ContainsAny(slug, `/\`) {
+		return false
+	}
+	return filepath.Base(slug) == slug
+}
+
 // readApproval loads a plan approval. A missing file is (nil, nil); any other
 // failure (permission, corrupt JSON) is returned as an error so a corrupt
 // approval is not silently indistinguishable from "not yet decided".
 func readApproval(root, slug string) (*planApproval, error) {
+	if !validPlanSlug(slug) {
+		return nil, fmt.Errorf("invalid plan slug %q", slug)
+	}
 	data, err := os.ReadFile(approvalPath(root, slug))
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -478,6 +495,9 @@ func writeApproval(root, slug string, revision int, decision, note string) (plan
 		Decision:  decision,
 		Note:      note,
 		DecidedAt: time.Now().UTC(),
+	}
+	if !validPlanSlug(slug) {
+		return record, fmt.Errorf("invalid plan slug %q", slug)
 	}
 	data, err := json.MarshalIndent(record, "", "  ")
 	if err != nil {

@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net"
 	"net/http"
 	"os"
@@ -286,7 +287,8 @@ func controlHandler(store *control.Store, token string) http.Handler {
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		sessions, events, err := store.Counts(r.Context())
 		if err != nil {
-			writeControlJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+			log.Printf("control: healthz counts: %v", err)
+			writeControlJSON(w, http.StatusInternalServerError, map[string]any{"error": "control store unavailable"})
 			return
 		}
 		writeControlJSON(w, http.StatusOK, map[string]any{"status": "ok", "sessions": sessions, "events": events})
@@ -294,7 +296,8 @@ func controlHandler(store *control.Store, token string) http.Handler {
 	mux.HandleFunc("/api/sessions", func(w http.ResponseWriter, r *http.Request) {
 		sessions, err := store.Sessions(r.Context(), queryInt(r, "limit", 50))
 		if err != nil {
-			writeControlJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+			log.Printf("control: list sessions: %v", err)
+			writeControlJSON(w, http.StatusInternalServerError, map[string]any{"error": "failed to list sessions"})
 			return
 		}
 		writeControlJSON(w, http.StatusOK, map[string]any{"sessions": sessions})
@@ -310,6 +313,7 @@ func controlHandler(store *control.Store, token string) http.Handler {
 			if errors.Is(err, sql.ErrNoRows) {
 				writeControlJSON(w, http.StatusNotFound, map[string]any{"error": "session not found"})
 			} else {
+				log.Printf("control: session %q lookup: %v", id, err)
 				writeControlJSON(w, http.StatusInternalServerError, map[string]any{"error": "session lookup failed"})
 			}
 			return
@@ -318,33 +322,35 @@ func controlHandler(store *control.Store, token string) http.Handler {
 		outputs, outputsErr := store.Outputs(r.Context(), id, 10)
 		payload := map[string]any{"session": sess, "events": events, "outputs": outputs}
 		if eventsErr != nil || outputsErr != nil {
-			parts := []string{}
 			if eventsErr != nil {
-				parts = append(parts, "events: "+eventsErr.Error())
+				log.Printf("control: session %q events: %v", id, eventsErr)
 			}
 			if outputsErr != nil {
-				parts = append(parts, "outputs: "+outputsErr.Error())
+				log.Printf("control: session %q outputs: %v", id, outputsErr)
 			}
-			payload["errors"] = strings.Join(parts, "; ")
+			payload["errors"] = "events and/or outputs unavailable"
 		}
 		writeControlJSON(w, http.StatusOK, payload)
 	})
 	mux.HandleFunc("/api/events", func(w http.ResponseWriter, r *http.Request) {
 		events, err := store.Events(r.Context(), r.URL.Query().Get("session_id"), queryInt(r, "limit", 50))
 		if err != nil {
-			writeControlJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+			log.Printf("control: list events: %v", err)
+			writeControlJSON(w, http.StatusInternalServerError, map[string]any{"error": "failed to list events"})
 			return
 		}
 		writeControlJSON(w, http.StatusOK, map[string]any{"events": events})
 	})
 	mux.HandleFunc("/api/risk", func(w http.ResponseWriter, r *http.Request) {
 		if _, err := store.RecomputeRisk(r.Context()); err != nil {
-			writeControlJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+			log.Printf("control: recompute risk: %v", err)
+			writeControlJSON(w, http.StatusInternalServerError, map[string]any{"error": "risk recompute failed"})
 			return
 		}
 		sessions, err := store.Sessions(r.Context(), 200)
 		if err != nil {
-			writeControlJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+			log.Printf("control: risk sessions: %v", err)
+			writeControlJSON(w, http.StatusInternalServerError, map[string]any{"error": "failed to list sessions"})
 			return
 		}
 		writeControlJSON(w, http.StatusOK, map[string]any{"sessions": sessions})
@@ -356,7 +362,7 @@ func controlHandler(store *control.Store, token string) http.Handler {
 				writeControlJSON(w, http.StatusUnauthorized, map[string]any{"error": "missing or invalid X-HackathonKit-Token"})
 				return
 			}
-		} else if (mutatingMethod(r.Method) || r.URL.Path == "/api/risk") && (r.Header.Get("Origin") != "" || r.Header.Get("Referer") != "") {
+		} else if (mutatingMethod(r.Method) || r.URL.Path == "/api/risk") && crossSiteRequest(r) {
 			// Without a token, refuse browser-initiated mutations: a page in any
 			// origin could otherwise POST to the loopback API.
 			writeControlJSON(w, http.StatusForbidden, map[string]any{"error": "cross-origin request rejected; set HACKATHONKIT_CONTROL_TOKEN or use a non-browser client"})
@@ -364,6 +370,21 @@ func controlHandler(store *control.Store, token string) http.Handler {
 		}
 		mux.ServeHTTP(w, r)
 	})
+}
+
+// crossSiteRequest reports a browser-initiated request that did not originate
+// from this page. Origin/Referer are omitted for sub-resource GETs or with a
+// no-referrer policy, so also consult Sec-Fetch-Site, which page scripts cannot
+// set. A non-browser client (curl, the TUI) sends none of these.
+func crossSiteRequest(r *http.Request) bool {
+	if r.Header.Get("Origin") != "" || r.Header.Get("Referer") != "" {
+		return true
+	}
+	switch r.Header.Get("Sec-Fetch-Site") {
+	case "cross-site", "same-site":
+		return true
+	}
+	return false
 }
 
 func mutatingMethod(method string) bool {

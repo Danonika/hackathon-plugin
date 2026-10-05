@@ -77,6 +77,16 @@ type Status struct {
 	Hint        string   `json:"hint,omitempty"`
 }
 
+// knownProvider reports whether id is a defined provider.
+func knownProvider(id string) bool {
+	for _, d := range defs {
+		if d.ID == id {
+			return true
+		}
+	}
+	return false
+}
+
 // Defs returns the provider definitions.
 func Defs() []Def {
 	out := make([]Def, len(defs))
@@ -102,19 +112,25 @@ func LookupTrack(ref string) (Track, bool) {
 		return Track{}, false
 	}
 	number := ref
+	slugRef := ""
 	if i := strings.IndexAny(number, "- "); i > 0 {
+		slugRef = strings.TrimSpace(number[i+1:])
 		number = number[:i]
 	}
 	if len(number) == 1 && number >= "0" && number <= "9" {
 		number = "0" + number
 	}
 	for _, t := range tracks {
-		slug := strings.TrimPrefix(t.ID, t.ID[:2]+"-")
+		prefix, slug, ok := strings.Cut(t.ID, "-")
+		if !ok {
+			continue
+		}
 		label := strings.ToLower(t.Label)
 		switch {
 		case t.ID == ref,
 			slug == ref,
-			number == t.ID[:2],
+			slugRef != "" && slug == slugRef,
+			slugRef == "" && number == prefix,
 			label == ref,
 			len(ref) >= 4 && strings.Contains(label, ref):
 			return t, true
@@ -141,9 +157,21 @@ func Load(root string) (Profile, bool, error) {
 	if err := json.Unmarshal(data, &profile); err != nil {
 		return Profile{}, false, fmt.Errorf("configs/resources.json is not valid JSON: %w", err)
 	}
+	if profile.Version != 0 && profile.Version != ProfileVersion {
+		return Profile{}, false, fmt.Errorf("configs/resources.json uses unsupported version %d (this build supports %d)", profile.Version, ProfileVersion)
+	}
 	if profile.Claimed == nil {
 		profile.Claimed = map[string]bool{}
 	}
+	// Drop hand-edited/legacy provider ids and keep CodexPro consistent with the
+	// Claimed map so the two representations cannot diverge.
+	for id := range profile.Claimed {
+		if !knownProvider(id) {
+			delete(profile.Claimed, id)
+		}
+	}
+	profile.CodexPro = profile.Claimed["codex_pro"] || profile.CodexPro
+	profile.Claimed["codex_pro"] = profile.CodexPro
 	return profile, true, nil
 }
 
@@ -155,7 +183,15 @@ func Save(root string, profile Profile) error {
 	for k, v := range profile.Claimed {
 		claimed[k] = v
 	}
+	if profile.Version != 0 && profile.Version != ProfileVersion {
+		return fmt.Errorf("refusing to save unsupported profile version %d (this build supports %d)", profile.Version, ProfileVersion)
+	}
 	profile.Claimed = claimed
+	for id := range profile.Claimed {
+		if !knownProvider(id) {
+			delete(profile.Claimed, id)
+		}
+	}
 	if profile.Version == 0 {
 		profile.Version = ProfileVersion
 	}
@@ -163,11 +199,9 @@ func Save(root string, profile Profile) error {
 	if profile.Claimed == nil {
 		profile.Claimed = map[string]bool{}
 	}
-	if value, ok := profile.Claimed["codex_pro"]; ok {
-		profile.CodexPro = value
-	} else {
-		profile.Claimed["codex_pro"] = profile.CodexPro
-	}
+	// CodexPro is authoritative for the legacy field; mirror it into Claimed so
+	// the two representations stay consistent.
+	profile.Claimed["codex_pro"] = profile.CodexPro
 	if _, ok := LookupTrack(profile.Track); ok {
 		track, _ := LookupTrack(profile.Track)
 		profile.Track = track.ID
@@ -185,14 +219,7 @@ func Save(root string, profile Profile) error {
 
 // SetAnswer records one provider answer on the profile.
 func SetAnswer(profile *Profile, providerID string, value bool) error {
-	known := false
-	for _, d := range defs {
-		if d.ID == providerID {
-			known = true
-			break
-		}
-	}
-	if !known {
+	if !knownProvider(providerID) {
 		return fmt.Errorf("unknown provider %q", providerID)
 	}
 	if profile.Claimed == nil {
@@ -261,7 +288,11 @@ func View(profile Profile, present bool) map[string]any {
 	}
 	next := []string{}
 	if !present {
-		next = append(next, "ask the user: OpenAI API key, NVIDIA API key, Telegram bot, Codex Pro subscription, hackathon track; then call system.resources_set")
+		providers := make([]string, 0, len(defs))
+		for _, d := range defs {
+			providers = append(providers, d.ID)
+		}
+		next = append(next, "ask the user about "+strings.Join(providers, ", ")+" and the hackathon track; then call system.resources_set")
 	}
 	for _, status := range statuses {
 		if status.Hint != "" {

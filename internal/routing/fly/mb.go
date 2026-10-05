@@ -87,27 +87,6 @@ func (r *Router) loadBrain() *MBrain {
 	return cached
 }
 
-// loadBrainLocked is the lock-free body of loadBrain for callers that already
-// hold brainMu.
-func (r *Router) loadBrainLocked() *MBrain {
-	if r.brain != nil {
-		return r.brain
-	}
-	if r.brainPath == "" {
-		return nil
-	}
-	data, err := os.ReadFile(r.brainPath)
-	if err != nil {
-		return nil
-	}
-	var brain MBrain
-	if json.Unmarshal(data, &brain) != nil || brain.KC == 0 || len(brain.Readout) == 0 {
-		return nil
-	}
-	r.brain = &brain
-	return r.brain
-}
-
 // clone deep-copies the brain so an update can be saved before it is published.
 func (b *MBrain) clone() *MBrain {
 	if b == nil {
@@ -126,19 +105,17 @@ func (b *MBrain) clone() *MBrain {
 	return &out
 }
 
-func (r *Router) saveBrain(brain *MBrain) error {
-	if r.brainPath == "" {
-		return nil
-	}
-	brain.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
-	if err := os.MkdirAll(filepath.Dir(r.brainPath), 0o755); err != nil {
+// writeBrainFile writes a marshalled brain through a temp file + rename so a
+// crash cannot leave truncated JSON behind a valid name.
+func writeBrainFile(path string, brain *MBrain) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
 	data, err := json.MarshalIndent(brain, "", "  ")
 	if err != nil {
 		return err
 	}
-	tmp, err := os.CreateTemp(filepath.Dir(r.brainPath), "fly-brain-*.tmp")
+	tmp, err := os.CreateTemp(filepath.Dir(path), "fly-brain-*.tmp")
 	if err != nil {
 		return err
 	}
@@ -157,17 +134,23 @@ func (r *Router) saveBrain(brain *MBrain) error {
 		os.Remove(tmpName)
 		return err
 	}
-	if err := os.Rename(tmpName, r.brainPath); err != nil {
+	if err := os.Rename(tmpName, path); err != nil {
 		os.Remove(tmpName)
 		return err
 	}
 	return nil
 }
 
+func (r *Router) saveBrain(brain *MBrain) error {
+	if r.brainPath == "" {
+		return nil
+	}
+	brain.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
+	return writeBrainFile(r.brainPath, brain)
+}
+
 func (r *Router) Dopamine() DopamineStats {
-	brainMu.Lock()
-	defer brainMu.Unlock()
-	brain := r.loadBrainLocked()
+	brain := r.loadBrain()
 	if brain == nil {
 		return DopamineStats{}
 	}
@@ -286,9 +269,9 @@ func (r *Router) mbCategoryScores(ctx context.Context, task string) (map[string]
 	if !ok {
 		return nil, false
 	}
-	brainMu.Lock()
+	// Published brains are immutable (applyDopamine clones and swaps), so the
+	// CPU-bound scoring needs no lock and must not serialize other routers.
 	scores, _, ok := brain.scores(vec)
-	brainMu.Unlock()
 	return scores, ok
 }
 
@@ -301,12 +284,12 @@ func (r *Router) applyDopamine(ctx context.Context, ev FeedbackEvent) bool {
 	if !ok {
 		return false
 	}
-	// Hold brainMu across the whole read-modify-persist-publish sequence so two
-	// concurrent feedback calls cannot lose an update or overwrite the file
-	// with a stale snapshot.
-	brainMu.Lock()
-	defer brainMu.Unlock()
-	base := r.loadBrainLocked()
+	// Serialize writers with a dedicated mutex so load-modify-persist-publish
+	// cannot lose an update, while scoring readers are not blocked behind the
+	// disk write.
+	r.brainSaveMu.Lock()
+	defer r.brainSaveMu.Unlock()
+	base := r.loadBrain()
 	if base == nil {
 		return false
 	}
@@ -327,18 +310,33 @@ func (r *Router) applyDopamine(ctx context.Context, ev FeedbackEvent) bool {
 		}
 	}
 	eta := mbDopamineEta
+	updated := false
 	switch ev.Source {
 	case "accepted", "normal-teacher":
 		for category := range reward {
-			work.adjust(category, code, eta)
+			if work.adjust(category, code, eta) {
+				updated = true
+			}
+		}
+		if !updated {
+			// Nothing was learned (e.g. a brain trained on other categories):
+			// report it instead of bumping PAM and persisting a no-op.
+			return false
 		}
 		work.Dopamine.PAM++
 	case "codex-correction", "fallback":
 		for category := range punish {
-			work.adjust(category, code, -eta)
+			if work.adjust(category, code, -eta) {
+				updated = true
+			}
 		}
 		for category := range reward {
-			work.adjust(category, code, eta/2)
+			if work.adjust(category, code, eta/2) {
+				updated = true
+			}
+		}
+		if !updated {
+			return false
 		}
 		work.Dopamine.PPL1++
 	default:
@@ -348,15 +346,20 @@ func (r *Router) applyDopamine(ctx context.Context, ev FeedbackEvent) bool {
 		// In-memory state is unchanged: the caller sees a real failure.
 		return false
 	}
+	brainMu.Lock()
 	r.brain = work
+	brainMu.Unlock()
 	return true
 }
 
-func (b *MBrain) adjust(category string, code []float64, eta float64) {
+// adjust applies one dopamine update and reports whether a weight actually
+// changed (false when the category is unknown to this brain).
+func (b *MBrain) adjust(category string, code []float64, eta float64) bool {
 	weights, ok := b.Readout[category]
 	if !ok || len(weights) < len(code) {
-		return
+		return false
 	}
+	changed := false
 	for i, v := range code {
 		if v == 0 {
 			continue
@@ -368,9 +371,13 @@ func (b *MBrain) adjust(category string, code []float64, eta float64) {
 		if updated < -mbWeightLimit {
 			updated = -mbWeightLimit
 		}
-		weights[i] = updated
+		if updated != weights[i] {
+			weights[i] = updated
+			changed = true
+		}
 	}
 	b.Readout[category] = weights
+	return changed
 }
 
 func (b *MBrain) Train(input []float64, category string, eta float64) {
@@ -401,7 +408,16 @@ func (b *MBrain) Train(input []float64, category string, eta float64) {
 		return
 	}
 	b.adjust(category, code, eta)
-	b.Bias[category] += eta * 0.1
+	// Clamp the bias to the same limit as the weights so it cannot grow
+	// unbounded and dominate the softmax logits.
+	bias := b.Bias[category] + eta*0.1
+	if bias > mbWeightLimit {
+		bias = mbWeightLimit
+	}
+	if bias < -mbWeightLimit {
+		bias = -mbWeightLimit
+	}
+	b.Bias[category] = bias
 	if ranking := b.Rank(input); len(ranking) > 0 && ranking[0] != category {
 		b.adjust(ranking[0], code, -eta/2)
 	}
@@ -421,15 +437,8 @@ func (b *MBrain) Rank(input []float64) []string {
 }
 
 func (b *MBrain) SaveTo(path string) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return err
-	}
 	b.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
-	data, err := json.MarshalIndent(b, "", "  ")
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(path, data, 0o644)
+	return writeBrainFile(path, b)
 }
 
 func NewMBrain(kc int, sparsity float64, categories []string, seed int64) *MBrain {

@@ -2,6 +2,7 @@ package fly
 
 import (
 	"context"
+	"log"
 	"math"
 	"reflect"
 	"sort"
@@ -17,7 +18,7 @@ func (r *Router) WithLLM(classifier LLMClassifier) *Router {
 }
 
 func (r *Router) llmCategoryScores(ctx context.Context, task string) (map[string]float64, bool) {
-	if r.llm == nil || reflect.ValueOf(r.llm).Kind() == reflect.Ptr && reflect.ValueOf(r.llm).IsNil() {
+	if r.llm == nil || nilInterface(r.llm) {
 		return nil, false
 	}
 	categories := make([]string, 0, len(categoryCapabilities))
@@ -26,7 +27,13 @@ func (r *Router) llmCategoryScores(ctx context.Context, task string) (map[string
 	}
 	sort.Strings(categories)
 	scores, err := r.llm.ClassifyTask(ctx, task, categories)
-	if err != nil || len(scores) == 0 {
+	if err != nil {
+		// A persistently failing classifier must be distinguishable from "no
+		// classifier configured", so surface it in the logs.
+		log.Printf("fly: llm classifier failed: %v", err)
+		return nil, false
+	}
+	if len(scores) == 0 {
 		return nil, false
 	}
 	known := map[string]bool{}
@@ -51,13 +58,13 @@ func (r *Router) llmCategoryScores(ctx context.Context, task string) (map[string
 	}
 	// A classifier that returns all-zero or (with several categories) all-equal
 	// scores carries no information; treat it as unavailable instead of a flat
-	// signal. A single category is a legitimate signal.
-	first, maxScore := 0.0, 0.0
+	// signal. A single category is a legitimate signal. Deriving a
+	// deterministic min/max baseline avoids the random map-iteration order.
+	minScore, maxScore := math.Inf(1), 0.0
 	for _, score := range clean {
-		first = score
-		break
-	}
-	for _, score := range clean {
+		if score < minScore {
+			minScore = score
+		}
 		if score > maxScore {
 			maxScore = score
 		}
@@ -65,17 +72,19 @@ func (r *Router) llmCategoryScores(ctx context.Context, task string) (map[string
 	if maxScore <= 0 {
 		return nil, false
 	}
-	if len(clean) > 1 {
-		varying := false
-		for _, score := range clean {
-			if math.Abs(score-first) > 1e-9 {
-				varying = true
-				break
-			}
-		}
-		if !varying {
-			return nil, false
-		}
+	if len(clean) > 1 && maxScore-minScore <= 1e-9 {
+		return nil, false
 	}
 	return clean, true
+}
+
+// nilInterface reports whether v is a nil value of a nil-capable kind, so a
+// typed-nil map/slice/func/chan classifier is treated like a nil pointer.
+func nilInterface(v any) bool {
+	rv := reflect.ValueOf(v)
+	switch rv.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Ptr, reflect.Slice:
+		return rv.IsNil()
+	}
+	return false
 }

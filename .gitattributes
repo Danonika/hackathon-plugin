@@ -25,6 +25,9 @@
 *.ttf binary
 *.otf binary
 *.eot binary
+# 3D/mesh assets: treated as binary even though .obj/.stl/.gltf have text
+# variants, because the binary variants must never be line-ending-normalised
+# (silent corruption). They are demo assets, so losing text diffs is acceptable.
 *.stl binary
 *.obj binary
 *.glb binary
@@ -47,13 +50,8 @@
 *.wasm binary
 *.pyc binary
 
-*.sh text eol=lf
-*.go text eol=lf
-*.md text eol=lf
-*.yaml text eol=lf
-*.yml text eol=lf
-*.json text eol=lf
-*.toml text eol=lf
+# The global `* text=auto eol=lf` already normalises text to LF, so only the
+# CRLF overrides below need to be listed explicitly.
 *.ps1 text eol=crlf
 *.psm1 text eol=crlf
 *.psd1 text eol=crlf

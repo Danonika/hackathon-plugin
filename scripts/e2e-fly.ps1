@@ -1,5 +1,6 @@
 param(
-  [string]$Root = (Split-Path -Parent (Split-Path -Parent $PSCommandPath))
+  [string]$Root = (Split-Path -Parent (Split-Path -Parent $PSCommandPath)),
+  [string]$BaseUrl = "http://127.0.0.1:8787"
 )
 $ErrorActionPreference = "Continue"
 $fail = 0
@@ -12,14 +13,23 @@ $exe = Join-Path $Root "bin\hackathonkit-mcp.exe"
 if (-not (Test-Path $exe)) { Check "mcp binary" $false "run scripts/setup.ps1"; exit 1 }
 Check "mcp binary" $true $exe
 
+$script:McpStderr = ""
 function Mcp([string]$payload) {
-  ($payload | & $exe --repo-root $Root 2>$null) -join "`n"
+  $errFile = [System.IO.Path]::GetTempFileName()
+  try {
+    $out = ($payload | & $exe --repo-root $Root 2>$errFile) -join "`n"
+    $script:McpStderr = (Get-Content -LiteralPath $errFile -Raw -ErrorAction SilentlyContinue)
+    return $out
+  } finally {
+    Remove-Item -LiteralPath $errFile -Force -ErrorAction SilentlyContinue
+  }
 }
 function Call([string]$id, [string]$tool, [string]$argsJson) {
   $req = '{"jsonrpc":"2.0","id":' + $id + ',"method":"tools/call","params":{"name":"' + $tool + '","arguments":' + $argsJson + '}}'
   $raw = Mcp $req
   if (-not $raw) {
-    Check "mcp call $tool" $false "no response from the MCP binary"
+    $why = if ($script:McpStderr) { "no response from the MCP binary: $($script:McpStderr.Trim())" } else { "no response from the MCP binary" }
+    Check "mcp call $tool" $false $why
     return $null
   }
   $rpc = $null
@@ -37,16 +47,25 @@ function Call([string]$id, [string]$tool, [string]$argsJson) {
 }
 
 # 1. pages
+# Probe once so an absent server fails fast instead of paying the per-request
+# timeout on every page/module assertion.
+try {
+  $null = Invoke-WebRequest "$BaseUrl/fly-body" -UseBasicParsing -TimeoutSec 5
+  Check "demo server reachable" $true $BaseUrl
+} catch {
+  Check "demo server reachable" $false "$BaseUrl is not serving ($($_.Exception.Message)); start the demo server or pass -BaseUrl"
+  exit 1
+}
 $pages = @("fly-body", "brain-demo", "mb-3d", "vfb-brain", "fly-viz")
 foreach ($p in $pages) {
   try {
-    $code = (Invoke-WebRequest "http://127.0.0.1:8787/$p" -UseBasicParsing -TimeoutSec 20).StatusCode
+    $code = (Invoke-WebRequest "$BaseUrl/$p" -UseBasicParsing -TimeoutSec 20).StatusCode
     Check "page /$p" ($code -eq 200) "$code"
   } catch { Check "page /$p" $false $_.Exception.Message }
 }
 foreach ($m in @("fly-app.js", "fly-anatomy.js", "fly-brain.js", "fly-state.js")) {
   try {
-    $code = (Invoke-WebRequest "http://127.0.0.1:8787/fly-static/$m" -UseBasicParsing -TimeoutSec 20).StatusCode
+    $code = (Invoke-WebRequest "$BaseUrl/fly-static/$m" -UseBasicParsing -TimeoutSec 20).StatusCode
     Check "module $m" ($code -eq 200) "$code"
   } catch { Check "module $m" $false $_.Exception.Message }
 }
@@ -57,6 +76,8 @@ $ctx = Call "1" "system.context" "{}"
 Check "system.context" ($ctx.status -eq "ok") ("mode=" + $ctx.data.routing_mode)
 
 # 3. fly mode + recommendation
+# Always restore normal mode, even on a terminating error or early exit.
+try {
 & $exe --set-routing-mode fly --repo-root $Root | Out-Null
 $ctx = Call "2" "system.context" "{}"
 Check "mode switch to fly" ($ctx.data.routing_mode -eq "fly") ("version=" + $ctx.data.routing_config_version)
@@ -91,9 +112,16 @@ Check "PPL1 incremented (pain)" ($ppl1After -gt $ppl1Before) ("before=" + $ppl1B
 
 # 7. neuron events log
 $logPath = Join-Path $Root "logs\fly-neuron-events.jsonl"
+$taskMarker = "find anomalies in sensor telemetry"
 $events = @()
-if (Test-Path $logPath) { $events = Get-Content $logPath -Tail 6 | ForEach-Object { $_ | ConvertFrom-Json } }
-$recEvents = @($events | Where-Object { $_.type -eq "recommend" })
+if (Test-Path $logPath) {
+  # Read well beyond the two events under test and filter the recommend events
+  # by the task marker so unrelated/earlier runs cannot push them out.
+  $events = @(Get-Content $logPath -Tail 200 |
+    ForEach-Object { try { $_ | ConvertFrom-Json } catch { $null } } |
+    Where-Object { $_ })
+}
+$recEvents = @($events | Where-Object { $_.type -eq "recommend" -and $_.task -eq $taskMarker })
 $fbEvents = @($events | Where-Object { $_.type -eq "feedback" })
 Check "neuron events: recommend" ($recEvents.Count -ge 1) (($recEvents | Select-Object -Last 1).encoder)
 $lastRec = $recEvents | Select-Object -Last 1
@@ -110,6 +138,9 @@ Check "kNN memory" ($memCount -ge 2) ($memCount.ToString() + " examples")
 & $exe --set-routing-mode normal --repo-root $Root | Out-Null
 $ctx = Call "6" "system.context" "{}"
 Check "restored normal mode" ($ctx.data.routing_mode -eq "normal") ("version=" + $ctx.data.routing_config_version)
+} finally {
+  & $exe --set-routing-mode normal --repo-root $Root | Out-Null
+}
 
 Write-Host ""
 if ($fail -eq 0) { Write-Host "[e2e-fly] ALL CHECKS PASSED"; exit 0 }

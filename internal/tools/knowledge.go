@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -40,13 +41,22 @@ func tokenize(text string) []string {
 	var out []string
 	var cur strings.Builder
 	flush := func() {
-		if utf8.RuneCountInString(cur.String()) >= 2 {
-			token := cur.String()
-			if !stopwords[token] {
-				out = append(out, token)
-			}
-		}
+		token := cur.String()
 		cur.Reset()
+		if token == "" {
+			return
+		}
+		if containsUnsegmented([]rune(token)) {
+			// Scripts without word spacing collapse into one giant run; index
+			// each character so a query of any length can still match.
+			for _, r := range token {
+				out = append(out, string(r))
+			}
+			return
+		}
+		if utf8.RuneCountInString(token) >= 2 && !stopwords[token] {
+			out = append(out, token)
+		}
 	}
 	for _, r := range strings.ToLower(text) {
 		if unicode.IsLetter(r) || unicode.IsDigit(r) {
@@ -57,6 +67,58 @@ func tokenize(text string) []string {
 	}
 	flush()
 	return out
+}
+
+// chunkSnippet returns a rune window of text centered on the earliest matched
+// query term, so the returned text actually contains the matched term instead
+// of only the chunk prefix.
+func chunkSnippet(text string, terms map[string]bool, limit int) string {
+	if limit <= 0 {
+		return ""
+	}
+	r := []rune(text)
+	if len(r) <= limit {
+		return string(r)
+	}
+	lower := strings.ToLower(text)
+	pos := -1
+	for term := range terms {
+		if idx := strings.Index(lower, term); idx >= 0 && (pos < 0 || idx < pos) {
+			pos = idx
+		}
+	}
+	start := 0
+	if pos >= 0 {
+		start = utf8.RuneCountInString(lower[:pos]) - (limit-1)/2
+		if start < 0 {
+			start = 0
+		}
+	}
+	if start+limit > len(r) {
+		start = len(r) - limit
+	}
+	return string(r[start:start+limit]) + "..."
+}
+
+// containsUnsegmented reports whether the run contains a script that does not
+// delimit words with spaces (CJK, Hangul, Thai, Lao, Khmer, Myanmar).
+func containsUnsegmented(runes []rune) bool {
+	for _, r := range runes {
+		switch {
+		case r >= 0x0E00 && r <= 0x0E7F, // Thai
+			r >= 0x0E80 && r <= 0x0EFF,   // Lao
+			r >= 0x1000 && r <= 0x109F,   // Myanmar
+			r >= 0x1780 && r <= 0x17FF,   // Khmer
+			r >= 0x3040 && r <= 0x30FF,   // Hiragana, Katakana
+			r >= 0x3400 && r <= 0x4DBF,   // CJK extension A
+			r >= 0x4E00 && r <= 0x9FFF,   // CJK unified ideographs
+			r >= 0xAC00 && r <= 0xD7AF,   // Hangul syllables
+			r >= 0xF900 && r <= 0xFAFF,   // CJK compatibility ideographs
+			r >= 0x20000 && r <= 0x2FA1F: // CJK extensions B+
+			return true
+		}
+	}
+	return false
 }
 
 func chunkText(text string, size, overlap int) []string {
@@ -110,9 +172,25 @@ func registerKnowledge(reg *mcp.Registry, d Deps) {
 			var text string
 			var warnings []string
 			if artifactID != "" {
-				raw, err := d.Store.ReadArtifact(artifactID)
+				path, err := d.Store.ArtifactPath(artifactID, false)
 				if err != nil {
 					return mcp.Fail(trace(ctx), err.Error()), nil
+				}
+				raw, err := readCapped(path, int64(maxRawTextBytes)+1)
+				if err != nil {
+					if !os.IsNotExist(err) {
+						return mcp.Fail(trace(ctx), err.Error()), nil
+					}
+					// Not materialized locally: fall back to the store read
+					// path (object-store rehydrate), then bound the result.
+					raw, err = d.Store.ReadArtifact(artifactID)
+					if err != nil {
+						return mcp.Fail(trace(ctx), err.Error()), nil
+					}
+					if len(raw) > maxRawTextBytes {
+						raw = raw[:maxRawTextBytes]
+						warnings = append(warnings, fmt.Sprintf("artifact truncated to %d bytes for indexing", maxRawTextBytes))
+					}
 				}
 				text = string(raw)
 				source = artifactID
@@ -227,11 +305,18 @@ func registerKnowledge(reg *mcp.Registry, d Deps) {
 				ID  string
 				Doc indexDoc
 			}
+			const maxIndexesPerSearch = 500
 			docs := []loadedDoc{}
+			scanned := 0
 			for _, name := range indexFiles {
 				if len(allowed) > 0 && !allowed[name] {
 					continue
 				}
+				if len(allowed) == 0 && scanned >= maxIndexesPerSearch {
+					warnings = append(warnings, fmt.Sprintf("knowledge index is large; only the first %d indexes were searched; narrow the query with index_id", maxIndexesPerSearch))
+					break
+				}
+				scanned++
 				raw, err := d.Store.ReadIndex(name)
 				if err != nil {
 					warnings = append(warnings, "index "+name+" is unreadable and was skipped")
@@ -287,19 +372,31 @@ func registerKnowledge(reg *mcp.Registry, d Deps) {
 						score += (1 + math.Log(float64(tf))) * idf
 					}
 					if score > 0 {
+						snippetLimit := textChars
+						if snippetLimit > 300 {
+							snippetLimit = 300
+						}
 						hits = append(hits, hit{
 							Source:     ld.Doc.Source,
 							ArtifactID: ld.Doc.ArtifactID,
 							IndexID:    ld.ID,
 							ChunkID:    chunk.ID,
 							Score:      float64(int(score*1000+0.5)) / 1000,
-							Snippet:    snippet(chunk.Text, 300),
-							Text:       snippet(chunk.Text, textChars),
+							Snippet:    chunkSnippet(chunk.Text, queryTerms, snippetLimit),
+							Text:       chunkSnippet(chunk.Text, queryTerms, textChars),
 						})
 					}
 				}
 			}
-			sort.Slice(hits, func(i, j int) bool { return hits[i].Score > hits[j].Score })
+			sort.Slice(hits, func(i, j int) bool {
+				if hits[i].Score != hits[j].Score {
+					return hits[i].Score > hits[j].Score
+				}
+				if hits[i].IndexID != hits[j].IndexID {
+					return hits[i].IndexID < hits[j].IndexID
+				}
+				return hits[i].ChunkID < hits[j].ChunkID
+			})
 			matchedTotal := len(hits)
 			if len(hits) > limit {
 				hits = hits[:limit]

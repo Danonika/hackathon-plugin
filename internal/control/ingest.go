@@ -12,16 +12,13 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 )
 
 // maxIngestBytes bounds one ingest cycle's read so an unbounded backlog or a
 // rotated file cannot exhaust memory; the cursor resumes from the last complete
 // line on the next cycle.
 const maxIngestBytes = 64 << 20
-
-// cursorFlushEvery bounds how many records can be replayed if the process dies
-// between appends and the cursor write.
-const cursorFlushEvery = 64
 
 type IngestResult struct {
 	Sessions int      `json:"sessions"`
@@ -114,7 +111,11 @@ func (s *Store) ingestJSONL(ctx context.Context, name, path string, handle func(
 		return 0, 0, false, ferr
 	}
 	if !rotated && hasFP {
-		if stored, cerr := s.Cursor(ctx, name+":head"); cerr == nil && stored != 0 && stored != fingerprint {
+		stored, set, cerr := s.CursorSet(ctx, name+":head")
+		if cerr != nil {
+			return 0, 0, false, cerr
+		}
+		if set && stored != fingerprint {
 			offset = 0
 			rotated = true
 		}
@@ -124,6 +125,12 @@ func (s *Store) ingestJSONL(ctx context.Context, name, path string, handle func(
 		// re-read from the beginning instead of seeking to a stale offset and
 		// silently skipping the head of the new file.
 		if err := s.SetCursor(ctx, name, 0); err != nil {
+			return 0, 0, rotated, err
+		}
+		// Drop the stale head fingerprint too: the new file may still be
+		// shorter than the fingerprint window, and a leftover value would be
+		// mistaken for a second rotation once it grows.
+		if err := s.DeleteCursor(ctx, name+":head"); err != nil {
 			return 0, 0, rotated, err
 		}
 	}
@@ -173,16 +180,16 @@ func (s *Store) ingestJSONL(ctx context.Context, name, path string, handle func(
 		}
 		if err := handle(ctx, record); err != nil {
 			if cerr := flush(lastGood); cerr != nil {
-				return count, skipped, rotated, cerr
+				return count, skipped, rotated, fmt.Errorf("%w (also failed to persist cursor: %v)", err, cerr)
 			}
 			return count, skipped, rotated, err
 		}
 		count++
 		lastGood = consumed
-		if count%cursorFlushEvery == 0 {
-			if cerr := flush(lastGood); cerr != nil {
-				return count, skipped, rotated, cerr
-			}
+		// Persist the cursor after every applied record so a crash cannot
+		// replay already-ingested records on the next run.
+		if cerr := flush(lastGood); cerr != nil {
+			return count, skipped, rotated, cerr
 		}
 	}
 	if err := flush(lastGood); err != nil {
@@ -218,7 +225,10 @@ func (s *Store) handleSessionRecord(ctx context.Context, rec map[string]any) err
 	if id == "" {
 		return nil
 	}
-	ts := parseTime(stringField(rec, "ts"))
+	ts, err := recordTime(rec)
+	if err != nil {
+		return err
+	}
 	switch stringField(rec, "type") {
 	case "session_end":
 		return s.EndSession(ctx, id, ts)
@@ -233,17 +243,25 @@ func (s *Store) handleSessionRecord(ctx context.Context, rec map[string]any) err
 }
 
 func (s *Store) handleToolRecord(ctx context.Context, rec map[string]any) error {
+	ts, err := recordTime(rec)
+	if err != nil {
+		return err
+	}
 	return s.AppendEvent(ctx, Event{
 		SessionID: stringField(rec, "session_id"),
-		TS:        parseTime(stringField(rec, "ts")),
+		TS:        ts,
 		Type:      "tool_use",
 		Tool:      stringField(rec, "tool"),
 	})
 }
 
 func (s *Store) handleMCPCallRecord(ctx context.Context, rec map[string]any) error {
+	ts, err := recordTime(rec)
+	if err != nil {
+		return err
+	}
 	return s.AppendEvent(ctx, Event{
-		TS:         parseTime(stringField(rec, "ts")),
+		TS:         ts,
 		Type:       "mcp_call",
 		Tool:       stringField(rec, "tool"),
 		Status:     stringField(rec, "status"),
@@ -253,8 +271,12 @@ func (s *Store) handleMCPCallRecord(ctx context.Context, rec map[string]any) err
 }
 
 func (s *Store) handleFlyFeedbackRecord(ctx context.Context, rec map[string]any) error {
+	ts, err := recordTime(rec)
+	if err != nil {
+		return err
+	}
 	return s.AppendEvent(ctx, Event{
-		TS:      parseTime(stringField(rec, "ts")),
+		TS:      ts,
 		Type:    "fly_feedback",
 		Payload: rec,
 	})
@@ -288,9 +310,12 @@ func (s *Store) ingestDecisions(ctx context.Context, root string) (int, int, err
 			rel = path
 		}
 		cursor := "decision:" + filepath.ToSlash(rel)
-		data, readErr := os.ReadFile(path)
+		data, readErr := readFileBounded(path, maxIngestBytes)
 		if readErr != nil {
-			return files, events, fmt.Errorf("reading %s: %w", rel, readErr)
+			// One unreadable or oversized file must not block the rest of
+			// ingestion; surface it and retry on the next cycle.
+			log.Printf("control: skipping decision file %s: %v", rel, readErr)
+			continue
 		}
 		hash := int64(contentHash(data))
 		hashCursor := cursor + ":hash"
@@ -307,8 +332,12 @@ func (s *Store) ingestDecisions(ctx context.Context, root string) (int, int, err
 		if err := json.Unmarshal(data, &payload); err != nil {
 			continue // partially written; retry next cycle
 		}
+		ts, tsErr := recordTime(payload)
+		if tsErr != nil {
+			continue // malformed timestamp; retry next cycle
+		}
 		if err := s.AppendEvent(ctx, Event{
-			TS:      parseTime(stringField(payload, "ts")),
+			TS:      ts,
 			Type:    "eval_decision",
 			Payload: payload,
 		}); err != nil {
@@ -330,6 +359,32 @@ func contentHash(data []byte) uint64 {
 	h := fnv.New64a()
 	_, _ = h.Write(data)
 	return h.Sum64()
+}
+
+// readFileBounded reads at most max bytes so a large or growing decision file
+// cannot exhaust memory.
+func readFileBounded(path string, max int64) ([]byte, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	return io.ReadAll(io.LimitReader(f, max))
+}
+
+// recordTime extracts a timestamp from a JSONL record. An absent ts is allowed
+// (callers substitute the ingest time); a present-but-unparseable ts is an
+// error so a corrupt record is surfaced instead of being silently stamped.
+func recordTime(rec map[string]any) (time.Time, error) {
+	raw := stringField(rec, "ts")
+	if raw == "" {
+		return time.Time{}, nil
+	}
+	ts, ok := parseTimeOK(raw)
+	if !ok {
+		return time.Time{}, fmt.Errorf("malformed ts %q", raw)
+	}
+	return ts, nil
 }
 
 func stringField(rec map[string]any, key string) string {

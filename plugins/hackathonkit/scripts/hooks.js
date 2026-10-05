@@ -19,6 +19,9 @@ const { execFileSync } = require("child_process");
 
 // A session without a stop event is expired after this window.
 const SESSION_TTL_MS = 12 * 60 * 60 * 1000;
+// Upper bound for a single hook payload. Larger input is truncated with a
+// warning instead of being silently mangled.
+const STDIN_LIMIT = 8 * 1024 * 1024;
 
 const EVENT = process.argv[2] || "";
 
@@ -52,19 +55,33 @@ function safeBinary(root, name) {
   try {
     const bin = path.join(root, "bin", name);
     const st = fs.statSync(bin);
-    if (!st.isFile()) return "";
+    if (!st.isFile()) return null;
     // POSIX-only hardening: on Windows ordinary files report mode 0o100666,
     // which would reject every candidate.
     if (process.platform !== "win32") {
-      if (st.mode & 0o022) return "";
+      if (st.mode & 0o022) return null;
       if (typeof process.getuid === "function" && typeof st.uid === "number") {
         const uid = process.getuid();
-        if (st.uid !== uid && st.uid !== 0) return "";
+        if (st.uid !== uid && st.uid !== 0) return null;
       }
     }
-    return bin;
+    return { path: bin, dev: st.dev, ino: st.ino };
   } catch (_) {
-    return "";
+    return null;
+  }
+}
+
+// safeBinary stats the candidate, but execFileSync resolves the path again. A
+// re-stat immediately before the exec (matching device/inode) narrows the
+// window in which a writable or foreign-owned file could be swapped in.
+function binaryStillSafe(candidate) {
+  try {
+    const st = fs.statSync(candidate.path);
+    if (!st.isFile() || st.dev !== candidate.dev || st.ino !== candidate.ino) return false;
+    if (process.platform !== "win32" && st.mode & 0o022) return false;
+    return true;
+  } catch (_) {
+    return false;
   }
 }
 
@@ -147,7 +164,15 @@ function appendJSONL(file, record) {
 function readStdin() {
   try {
     if (process.stdin.isTTY) return "";
-    return fs.readFileSync(0, "utf8").slice(0, 1024 * 1024);
+    const buf = fs.readFileSync(0);
+    // Hook payloads are normally small; only a pathological payload is capped,
+    // and that is reported rather than silently cut mid-JSON (which would drop
+    // the session id and misattribute the event).
+    if (buf.length > STDIN_LIMIT) {
+      process.stderr.write("hackathonkit hooks: stdin payload exceeds " + STDIN_LIMIT + " bytes; truncating\n");
+      return buf.subarray(0, STDIN_LIMIT).toString("utf8");
+    }
+    return buf.toString("utf8");
   } catch (_) {
     return "";
   }
@@ -241,6 +266,17 @@ function removeActive(id) {
   } catch (_) {}
 }
 
+// Refresh updated_at (and the file mtime) on each tool call so a legitimate
+// long-running session is not treated as expired while it is still active.
+function touchActive(id) {
+  if (!id || !ROOT_VALID) return;
+  try {
+    const entry = JSON.parse(fs.readFileSync(sessionFile(id), "utf8"));
+    if (!entry || entry.root !== ROOT) return;
+    writeActive({ ...entry, id: entry.id });
+  } catch (_) {}
+}
+
 function isExpired(full, entry) {
   try {
     const stat = fs.statSync(full);
@@ -274,11 +310,12 @@ function readActive() {
           } catch (_) {}
           continue;
         }
-        entries.push({ entry, mtime: stat.mtimeMs });
+        entries.push({ entry, mtime: stat.mtimeMs, started: Date.parse(entry.started_at || "") || stat.mtimeMs });
       } catch (_) {}
     }
-    // Oldest first; lastActiveID takes the tail (most recently started).
-    entries.sort((a, b) => a.mtime - b.mtime);
+    // Oldest first by start time; lastActiveID takes the tail (most recently
+    // started). mtime is only a fallback for entries without started_at.
+    entries.sort((a, b) => a.started - b.started);
     return entries.map((item) => item.entry);
   } catch (_) {
     return [];
@@ -300,8 +337,16 @@ function pruneExpiredSessions() {
   } catch (_) {}
 }
 
-function lastActiveID() {  const active = readActive();
+function lastActiveID() {
+  const active = readActive();
   return active.length ? active[active.length - 1].id : "";
+}
+
+// lastActiveID is derived from ordering, not from the payload; only attribute
+// an event to it when it is a session this repository actually owns.
+function validatedFallbackID() {
+  const id = lastActiveID();
+  return id && ownedByRoot(id) ? id : "";
 }
 
 function fallbackContext() {
@@ -322,10 +367,10 @@ function binaryContext() {
       ? ["hackathonkit-mcp.exe", "hackathonkit-mcp"]
       : ["hackathonkit-mcp", "hackathonkit-mcp.exe"];
   for (const name of names) {
-    const bin = safeBinary(ROOT, name);
-    if (!bin) continue;
+    const candidate = safeBinary(ROOT, name);
+    if (!candidate || !binaryStillSafe(candidate)) continue;
     try {
-      return execFileSync(bin, ["--repo-root", ROOT, "--session-context"], {
+      return execFileSync(candidate.path, ["--repo-root", ROOT, "--session-context"], {
         timeout: 15000,
         encoding: "utf8",
       });
@@ -383,7 +428,8 @@ try {
       if (!tool) {
         tool = (raw.match(/"tool_name"\s*:\s*"([^"]+)"/) || [])[1] || "";
       }
-      const id = payloadSessionID(payload) || lastActiveID();
+      const id = payloadSessionID(payload) || validatedFallbackID();
+      touchActive(id);
       appendJSONL(EVENTS_LOG, {
         ts: new Date().toISOString(),
         type: "tool_use",

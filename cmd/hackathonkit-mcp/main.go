@@ -31,7 +31,7 @@ import (
 	"hackathonkit.local/agentkit/internal/tools"
 )
 
-const version = "0.16.85"
+const version = "0.16.86"
 
 // redactBackendError strips credentials from driver/connection errors before
 // they are logged (DSNs can appear in Postgres and MinIO errors).
@@ -40,11 +40,16 @@ func redactBackendError(err error) string {
 		return ""
 	}
 	text := redactURLUserinfo(err.Error())
-	for _, marker := range []string{
-		"password=", "passwd=", "secret=", "secret_key=", "access_key=",
-		"api_key=", "apikey=", "token=", "credential=",
+	// Longest keys first so "secret key" is not consumed by "secret".
+	for _, key := range []string{
+		"secret_key", "secret key", "access_key", "access key",
+		"api_key", "api key", "apikey",
+		"password", "passwd", "secret", "token", "credential", "bearer",
 	} {
-		text = redactMarkerValues(text, marker)
+		// Cover key=value, key: value and key value renderings.
+		text = redactMarkerValues(text, key+"=")
+		text = redactMarkerValues(text, key+":")
+		text = redactMarkerValues(text, key+" ")
 	}
 	return text
 }
@@ -100,6 +105,11 @@ func redactMarkerValues(text, marker string) string {
 		}
 		idx += searchFrom
 		valueStart := idx + len(marker)
+		// The separator marker consumes one delimiter; skip any remaining
+		// whitespace so "key:  value" (double space) is redacted too.
+		for valueStart < len(text) && (text[valueStart] == ' ' || text[valueStart] == '\t') {
+			valueStart++
+		}
 		quote := byte(0)
 		if valueStart < len(text) && (text[valueStart] == '"' || text[valueStart] == '\'') {
 			quote = text[valueStart]
@@ -363,7 +373,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 			observability.Log(logger, "info", "server_stop", map[string]any{"reason": "signal"})
 			return 0
 		}
-		observability.Log(logger, "error", "server_stop", map[string]any{"error": err.Error()})
+		observability.Log(logger, "error", "server_stop", map[string]any{"error": redactBackendError(err)})
 		return 1
 	}
 	return 0
@@ -394,7 +404,11 @@ func printSessionContext(root string, mgr *config.Manager, out, diag io.Writer) 
 	settings := mgr.Config().Learning
 	if settings.Enabled {
 		store := learning.NewStore(filepath.Join(root, "data", "index", "learnings.json"), learning.ProjectKey(root))
-		if items, err := store.Top(settings.MaxInject, settings.InjectMinConfidence); err == nil && len(items) > 0 {
+		items, err := store.Top(settings.MaxInject, settings.InjectMinConfidence)
+		switch {
+		case err != nil:
+			fmt.Fprintf(diag, "session-context: learnings unavailable: %v\n", err)
+		case len(items) > 0:
 			fmt.Fprintln(out, "learnings:")
 			for _, item := range items {
 				fmt.Fprintf(out, "- [%.2f] when %s -> %s\n", item.Confidence, clip(item.Trigger, 80), clip(item.Insight, 160))

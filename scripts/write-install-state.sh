@@ -47,6 +47,30 @@ else
   echo "[install-state] warning: .agents/skills is missing; skills count is 0" >&2
 fi
 
+# Component flags are derived from real filesystem evidence (matching the
+# PowerShell sibling) rather than hard-coded, so a core/full or partial install
+# is described accurately.
+HOOKS=false
+if [ -f "$ROOT/plugins/hackathonkit/hooks/codex-hooks.json" ]; then HOOKS=true; fi
+AGENTS=false
+if [ -d "$ROOT/.codex/agents" ] && [ -n "$(find "$ROOT/.codex/agents" -name '*.toml' 2>/dev/null | head -n 1)" ]; then
+  AGENTS=true
+fi
+LEARNING=false
+if [ -d "$ROOT/.agents/skills/learning-loop" ]; then LEARNING=true; fi
+ADAPTERS_JSON=""
+for pair in "codex:AGENTS.md" "opencode:.opencode/opencode.json" "claude:.claude-plugin/plugin.json" "cursor:.cursor/rules/hackathonkit.mdc"; do
+  name=${pair%%:*}
+  path=${pair#*:}
+  if [ -e "$ROOT/$path" ]; then
+    if [ -n "$ADAPTERS_JSON" ]; then
+      ADAPTERS_JSON="$ADAPTERS_JSON, \"$name\""
+    else
+      ADAPTERS_JSON="\"$name\""
+    fi
+  fi
+done
+
 STAMP=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 VERSION_JSON=$(json_escape "$VERSION")
 PROFILE_JSON=$(json_escape "$PROFILE")
@@ -63,10 +87,10 @@ cat > "$TMP_STATE" <<EOF
   "runtime": "$RUNTIME_JSON",
   "skills": $SKILLS,
   "components": {
-    "hooks": true,
-    "agents": true,
-    "learning": true,
-    "adapters": ["codex", "opencode", "claude", "cursor"]
+    "hooks": $HOOKS,
+    "agents": $AGENTS,
+    "learning": $LEARNING,
+    "adapters": [$ADAPTERS_JSON]
   },
   "generated_at": "$STAMP"
 }

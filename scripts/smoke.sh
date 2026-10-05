@@ -27,8 +27,18 @@ trap cleanup_smoke EXIT
 trap 'cleanup_smoke; exit 130' INT
 trap 'cleanup_smoke; exit 143' TERM
 
+# Bound the MCP invocation so a hanging server fails the smoke test instead of
+# stalling CI forever. `timeout` may be absent (e.g. macOS); then run directly.
+run_with_timeout() {
+  if command -v timeout >/dev/null 2>&1; then
+    timeout 60 "$@"
+  else
+    "$@"
+  fi
+}
+
 run_binary() {
-  printf '%s\n' "$REQUESTS" | "$ROOT/bin/hackathonkit-mcp" --repo-root "$ROOT" 2>"$ERR_FILE"
+  printf '%s\n' "$REQUESTS" | run_with_timeout "$ROOT/bin/hackathonkit-mcp" --repo-root "$ROOT" 2>"$ERR_FILE"
 }
 
 fail_with_stderr() {
@@ -40,7 +50,7 @@ fail_with_stderr() {
 }
 
 run_compose() {
-  printf '%s\n' "$REQUESTS" | "$DOCKER_BIN" compose -f "$ROOT/docker-compose.yml" run --rm -T hackathonkit-mcp 2>"$ERR_FILE"
+  printf '%s\n' "$REQUESTS" | run_with_timeout "$DOCKER_BIN" compose -f "$ROOT/docker-compose.yml" run --rm -T hackathonkit-mcp 2>"$ERR_FILE"
 }
 
 case "$TRANSPORT" in
@@ -64,7 +74,13 @@ case "$TRANSPORT" in
     ;;
   auto)
     if [ -x "$ROOT/bin/hackathonkit-mcp" ]; then
-      NEWEST=$(find "$ROOT/cmd" "$ROOT/internal" -name '*.go' -newer "$ROOT/bin/hackathonkit-mcp" 2>/dev/null | head -n 1)
+      # Sort the candidates so the diagnostic name is deterministic; HACKATHONKIT_SMOKE_SKIP_STALE
+      # forces the local binary when the freshness heuristic is not wanted.
+      if [ -n "${HACKATHONKIT_SMOKE_SKIP_STALE:-}" ]; then
+        NEWEST=""
+      else
+        NEWEST=$(find "$ROOT/cmd" "$ROOT/internal" -name '*.go' -newer "$ROOT/bin/hackathonkit-mcp" 2>/dev/null | LC_ALL=C sort | head -n 1)
+      fi
       if [ -n "$NEWEST" ] && command -v "$DOCKER_BIN" >/dev/null 2>&1; then
         echo "[smoke] bin/hackathonkit-mcp is older than $NEWEST; using the compose runtime" >&2
         if ! OUT="$(run_compose)"; then
@@ -127,9 +143,13 @@ for rid in (1, 2, 3):
     exit 1
   fi
 else
-  GOT_IDS=$(printf '%s\n' "$OUT" | grep -o '"id"[[:space:]]*:[[:space:]]*[0-9]*' | sed 's/.*[^0-9]\([0-9]*\)$/\1/' | sort -u | paste -sd, -)
-  if [ "$GOT_IDS" != "1,2,3" ]; then
-    echo "[smoke] MCP handshake FAILED: expected response ids 1,2,3, got '$GOT_IDS'" >&2
+  # Reject duplicate and missing integer ids: sorting without de-duplication
+  # would let three responses that are all id=1 pass as a valid handshake.
+  GOT_IDS_RAW=$(printf '%s\n' "$OUT" | grep -o '"id"[[:space:]]*:[[:space:]]*[0-9]*' | sed 's/.*[^0-9]\([0-9]*\)$/\1/')
+  GOT_ID_COUNT=$(printf '%s\n' "$GOT_IDS_RAW" | grep -c . || true)
+  GOT_IDS=$(printf '%s\n' "$GOT_IDS_RAW" | sort | uniq | paste -sd, -)
+  if [ "$GOT_ID_COUNT" != "3" ] || [ "$GOT_IDS" != "1,2,3" ]; then
+    echo "[smoke] MCP handshake FAILED: expected exactly one response each for ids 1,2,3, got '$GOT_IDS' ($GOT_ID_COUNT integer id response(s))" >&2
     exit 1
   fi
   if printf '%s\n' "$OUT" | grep -q '"error"'; then

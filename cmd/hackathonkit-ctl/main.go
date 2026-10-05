@@ -94,6 +94,9 @@ func cmdIngest(args []string, stdout io.Writer) error {
 	fs := flag.NewFlagSet("ingest", flag.ContinueOnError)
 	root := fs.String("root", "", "repository root")
 	if err := fs.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return nil
+		}
 		return err
 	}
 	r := *root
@@ -131,6 +134,9 @@ func cmdSessions(args []string, stdout io.Writer) error {
 		fs := flag.NewFlagSet("sessions list", flag.ContinueOnError)
 		limit := fs.Int("limit", 20, "maximum sessions")
 		if err := fs.Parse(args[1:]); err != nil {
+			if errors.Is(err, flag.ErrHelp) {
+				return nil
+			}
 			return err
 		}
 		sessions, err := store.Sessions(ctx, *limit)
@@ -143,9 +149,10 @@ func cmdSessions(args []string, stdout io.Writer) error {
 		}
 		fmt.Fprintf(stdout, "%-28s %-8s %-6s %-20s %s\n", "ID", "STATUS", "RISK", "UPDATED", "TASK")
 		for _, sess := range sessions {
-			task := sess.Task
-			if len(task) > 40 {
-				task = truncate(task, 40) + "..."
+			collapsed := strings.Join(strings.Fields(sess.Task), " ")
+			task := truncate(sess.Task, 40)
+			if task != collapsed {
+				task += "..."
 			}
 			fmt.Fprintf(stdout, "%-28s %-8s %-6.1f %-20s %s\n", sess.ID, sess.Status, sess.RiskScore, sess.UpdatedAt.Format("2006-01-02 15:04:05"), task)
 		}
@@ -248,7 +255,7 @@ func addWorktree(root, name string, stdout, stderr io.Writer) (string, error) {
 		return "", firstErr
 	}
 	if err := runGit(stdout, stderr, root, "worktree", "add", dir, branch); err != nil {
-		return "", fmt.Errorf("%v (retry without -b: %w)", firstErr, err)
+		return "", fmt.Errorf("%w (retry without -b: %w)", firstErr, err)
 	}
 	return dir, nil
 }
@@ -303,7 +310,11 @@ func cmdRun(args []string, stdout, stderr io.Writer) error {
 	slug := fs.String("slug", "", "session slug (default: derived from the task)")
 	useWorktree := fs.Bool("worktree", false, "create and run inside a git worktree")
 	model := fs.String("model", "", "optional model override for codex exec")
+	fs.SetOutput(stderr)
 	if err := fs.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return nil
+		}
 		return err
 	}
 	if strings.TrimSpace(*task) == "" {
@@ -379,7 +390,7 @@ func cmdRun(args []string, stdout, stderr io.Writer) error {
 		bookkeepingErr = err
 	}
 	if err := store.EndSession(ctx, sessionID, time.Now().UTC()); err != nil {
-		fmt.Fprintln(os.Stderr, "session end not stored:", err)
+		fmt.Fprintln(stderr, "session end not stored:", err)
 		status = "error"
 		if bookkeepingErr == nil {
 			bookkeepingErr = err
@@ -389,9 +400,9 @@ func cmdRun(args []string, stdout, stderr io.Writer) error {
 		// Risk is a derived, best-effort metric: report it without changing the
 		// command's status or exit code, which reflect the codex run and
 		// bookkeeping only.
-		fmt.Fprintln(os.Stderr, "risk recompute failed:", err)
+		fmt.Fprintln(stderr, "risk recompute failed:", err)
 	}
-	fmt.Printf("\nsession %s finished (%s)\nresume: hackathonkit-ctl sessions resume %s\n", sessionID, status, sessionID)
+	fmt.Fprintf(stdout, "\nsession %s finished (%s)\nresume: hackathonkit-ctl sessions resume %s\n", sessionID, status, sessionID)
 	return errors.Join(runErr, bookkeepingErr)
 }
 

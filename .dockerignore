@@ -31,5 +31,8 @@ htmlcov
 configs/install-state.json
 configs/resources.json
 plugins/hackathonkit/.mcp.json
+# Drop documentation from the build context; no Go package embeds markdown
+# (the embedded assets are cmd/demo-api/static/*.html|js), so only the root
+# README is kept. Add an explicit negation here if a go:embed'd .md appears.
 **/*.md
 !README.md

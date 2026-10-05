@@ -12,14 +12,22 @@ import (
 	"hackathonkit.local/agentkit/internal/plans"
 )
 
-func validPlanSlug(rawSlug, slug string) bool {
-	if rawSlug == "" || slug == "" {
-		return false
+// normalizePlanSlug validates and normalizes a raw plan slug. The reserved
+// fallback name "plan" is only accepted when the caller asked for it
+// explicitly, so a bogus slug cannot silently address evals/plans/plan.json.
+func normalizePlanSlug(rawSlug string) (string, error) {
+	raw := strings.TrimSpace(rawSlug)
+	if raw == "" {
+		return "", fmt.Errorf("slug is required")
 	}
-	if slug == "plan" && strings.ToLower(strings.TrimSpace(rawSlug)) != "plan" {
-		return false
+	slug := plans.Slug(raw)
+	if slug == "plan" && !strings.EqualFold(raw, "plan") {
+		return "", fmt.Errorf("slug %q normalizes to the reserved name %q; use letters or digits", rawSlug, "plan")
 	}
-	return containsLetterOrDigit(slug)
+	if !containsLetterOrDigit(slug) {
+		return "", fmt.Errorf("slug must contain at least one letter or digit")
+	}
+	return slug, nil
 }
 
 func containsLetterOrDigit(value string) bool {
@@ -52,10 +60,9 @@ func registerPlans(reg *mcp.Registry, d Deps) {
 		},
 		[]string{"slug"},
 		func(ctx context.Context, args map[string]any) (any, error) {
-			rawSlug := argString(args, "slug")
-			slug := plans.Slug(rawSlug)
-			if !validPlanSlug(rawSlug, slug) {
-				return mcp.Fail(trace(ctx), "slug must contain at least one letter or digit"), nil
+			slug, slugErr := normalizePlanSlug(argString(args, "slug"))
+			if slugErr != nil {
+				return mcp.Fail(trace(ctx), slugErr.Error()), nil
 			}
 			if !argBool(args, "overwrite", false) {
 				existing, err := plans.Load(d.Cfg.Root(), slug)
@@ -153,12 +160,14 @@ func registerPlans(reg *mcp.Registry, d Deps) {
 		},
 		[]string{"slug", "stage", "status"},
 		func(ctx context.Context, args map[string]any) (any, error) {
-			rawSlug := argString(args, "slug")
-			slug := plans.Slug(rawSlug)
+			slug, slugErr := normalizePlanSlug(argString(args, "slug"))
 			stageID := argString(args, "stage")
 			status := plans.NormalizeStatus(argString(args, "status"))
-			if !validPlanSlug(rawSlug, slug) || stageID == "" || status == "" {
-				return mcp.Fail(trace(ctx), "slug, stage and status are required (slug must contain at least one letter or digit)"), nil
+			if slugErr != nil {
+				return mcp.Fail(trace(ctx), slugErr.Error()), nil
+			}
+			if stageID == "" || status == "" {
+				return mcp.Fail(trace(ctx), "stage and status are required"), nil
 			}
 			if !plans.ValidStatus(status) {
 				return mcp.Fail(trace(ctx), fmt.Sprintf("invalid status %q", status)), nil
@@ -167,6 +176,9 @@ func registerPlans(reg *mcp.Registry, d Deps) {
 			if err != nil {
 				return mcp.Fail(trace(ctx), err.Error()), nil
 			}
+			// Never let the slug stored inside the file redirect the write to a
+			// different plan than the one just read.
+			plan.Slug = slug
 			found := false
 			for i := range plan.Stages {
 				if plan.Stages[i].ID != stageID {
@@ -212,7 +224,11 @@ func registerPlans(reg *mcp.Registry, d Deps) {
 			var plan plans.Plan
 			var ok bool
 			if slug != "" {
-				plan, err := plans.Load(d.Cfg.Root(), plans.Slug(slug))
+				normalized, slugErr := normalizePlanSlug(slug)
+				if slugErr != nil {
+					return mcp.Fail(trace(ctx), slugErr.Error()), nil
+				}
+				plan, err := plans.Load(d.Cfg.Root(), normalized)
 				if err != nil {
 					return mcp.Fail(trace(ctx), err.Error()), nil
 				}
@@ -220,13 +236,19 @@ func registerPlans(reg *mcp.Registry, d Deps) {
 			}
 			var latestErr error
 			plan, ok, latestErr = plans.LatestErr(d.Cfg.Root())
-			if latestErr != nil {
-				return mcp.Partial(trace(ctx), map[string]any{"plan": nil}, "latest plan unreadable: "+latestErr.Error()), nil
-			}
 			if !ok {
+				if latestErr != nil {
+					return mcp.Partial(trace(ctx), map[string]any{"plan": nil}, "latest plan unreadable: "+latestErr.Error()), nil
+				}
 				return mcp.Partial(trace(ctx), map[string]any{"plan": nil}, "no plan found; create one with plan.create"), nil
 			}
-			return mcp.OK(trace(ctx), planData(d.Cfg.Root(), plan)), nil
+			env := mcp.OK(trace(ctx), planData(d.Cfg.Root(), plan))
+			if latestErr != nil {
+				// The latest readable plan is returned, but a sibling file was
+				// unreadable/unparseable: surface that instead of hiding it.
+				env = env.WithWarnings("some plan files could not be read: " + latestErr.Error())
+			}
+			return env, nil
 		},
 	))
 }

@@ -159,18 +159,26 @@ func formatTime(t time.Time) string {
 	return t.UTC().Format(timeLayout)
 }
 
-func parseTime(value string) time.Time {
+// parseTimeOK parses a stored/stream timestamp and reports whether the value
+// was usable, so callers can distinguish a corrupt timestamp from an unset one
+// instead of fabricating a time.
+func parseTimeOK(value string) (time.Time, bool) {
 	if value == "" {
-		return time.Time{}
+		return time.Time{}, false
 	}
 	// Prefer the fixed-width layout written by formatTime so stored values sort
 	// consistently; the others are read-compat fallbacks for older records.
 	for _, layout := range []string{timeLayout, time.RFC3339Nano, time.RFC3339, "2006-01-02T15:04:05.000Z"} {
 		if t, err := time.Parse(layout, value); err == nil {
-			return t.UTC()
+			return t.UTC(), true
 		}
 	}
-	return time.Time{}
+	return time.Time{}, false
+}
+
+func parseTime(value string) time.Time {
+	t, _ := parseTimeOK(value)
+	return t
 }
 
 func (s *Store) UpsertSession(ctx context.Context, sess Session) error {
@@ -187,13 +195,13 @@ func (s *Store) UpsertSession(ctx context.Context, sess Session) error {
 INSERT INTO sessions (id, root, kind, task, status, stage, plan_slug, worktree, risk_score, risk_reasons, created_at, updated_at, ended_at)
 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
 ON CONFLICT(id) DO UPDATE SET
-  root=excluded.root,
-  kind=excluded.kind,
-  task=excluded.task,
+  root=COALESCE(NULLIF(excluded.root,''), sessions.root),
+  kind=COALESCE(NULLIF(excluded.kind,''), sessions.kind),
+  task=COALESCE(NULLIF(excluded.task,''), sessions.task),
   status=CASE WHEN sessions.ended_at IS NOT NULL THEN sessions.status ELSE excluded.status END,
-  stage=excluded.stage,
-  plan_slug=excluded.plan_slug,
-  worktree=excluded.worktree,
+  stage=COALESCE(NULLIF(excluded.stage,''), sessions.stage),
+  plan_slug=COALESCE(NULLIF(excluded.plan_slug,''), sessions.plan_slug),
+  worktree=COALESCE(NULLIF(excluded.worktree,''), sessions.worktree),
   risk_score=excluded.risk_score,
   risk_reasons=excluded.risk_reasons,
   ended_at=COALESCE(sessions.ended_at, excluded.ended_at),
@@ -238,9 +246,17 @@ func (s *Store) EndSession(ctx context.Context, id string, ts time.Time) error {
 	if ts.IsZero() {
 		ts = time.Now().UTC()
 	}
+	tsText := formatTime(ts)
+	// Replayed or out-of-order session_end records must not move ended_at (or
+	// the ordering-relevant updated_at) backwards, so keep the earliest end
+	// time and never regress updated_at.
 	result, err := s.db.ExecContext(ctx,
-		`UPDATE sessions SET status='ended', ended_at=?, updated_at=? WHERE id=?`,
-		formatTime(ts), formatTime(ts), id)
+		`UPDATE sessions SET
+		   status='ended',
+		   ended_at=CASE WHEN ended_at IS NOT NULL AND ended_at <> '' AND ended_at <= ? THEN ended_at ELSE ? END,
+		   updated_at=CASE WHEN updated_at > ? THEN updated_at ELSE ? END
+		 WHERE id=?`,
+		tsText, tsText, tsText, tsText, id)
 	if err != nil {
 		return err
 	}
@@ -425,12 +441,58 @@ func (s *Store) Cursor(ctx context.Context, name string) (int64, error) {
 	return offset, err
 }
 
+// CursorSet reports whether a cursor exists and its stored value, so callers
+// can distinguish an unset cursor from a legitimately stored zero.
+func (s *Store) CursorSet(ctx context.Context, name string) (int64, bool, error) {
+	var offset int64
+	err := s.db.QueryRowContext(ctx, `SELECT offset FROM cursors WHERE name=?`, name).Scan(&offset)
+	if err == sql.ErrNoRows {
+		return 0, false, nil
+	}
+	if err != nil {
+		return 0, false, err
+	}
+	return offset, true, nil
+}
+
 func (s *Store) SetCursor(ctx context.Context, name string, offset int64) error {
 	_, err := s.db.ExecContext(ctx,
 		`INSERT INTO cursors (name, offset, updated_at) VALUES (?,?,?)
 		 ON CONFLICT(name) DO UPDATE SET offset=excluded.offset, updated_at=excluded.updated_at`,
 		name, offset, formatTime(time.Now().UTC()))
 	return err
+}
+
+func (s *Store) DeleteCursor(ctx context.Context, name string) error {
+	_, err := s.db.ExecContext(ctx, `DELETE FROM cursors WHERE name=?`, name)
+	return err
+}
+
+// CountEventsByType counts events of one type for a session (all sessions when
+// sessionID is empty) without materializing event rows.
+func (s *Store) CountEventsByType(ctx context.Context, sessionID, eventType string) (int, error) {
+	var count int
+	err := s.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM events WHERE session_id=? AND type=?`, sessionID, eventType).Scan(&count)
+	return count, err
+}
+
+// CountEventsByTypeBetween counts global (session-less) events of one type
+// inside a time window without materializing event rows.
+func (s *Store) CountEventsByTypeBetween(ctx context.Context, from, to time.Time, eventType string) (int, error) {
+	fromText := formatTime(from)
+	if fromText == "" {
+		fromText = "0000-01-01T00:00:00.000000000Z"
+	}
+	toText := formatTime(to)
+	if toText == "" {
+		toText = "9999-12-31T23:59:59.999999999Z"
+	}
+	var count int
+	err := s.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM events WHERE session_id='' AND ts>=? AND ts<=? AND type=?`,
+		fromText, toText, eventType).Scan(&count)
+	return count, err
 }
 
 func (s *Store) AppendOutput(ctx context.Context, out Output) error {

@@ -54,13 +54,15 @@ fi
 if [ -f .env ]; then
   ENV_MODE=$(stat -c '%a' .env 2>/dev/null || stat -f '%Lp' .env 2>/dev/null || true)
   if [ -z "$ENV_MODE" ]; then
+    # An unreadable mode must never be treated as "already safe"; force it.
     echo "[setup] warning: cannot read the mode of .env; forcing 600" >&2
-    ENV_MODE=600
+    chmod 600 .env 2>/dev/null || echo "[setup] warning: could not chmod .env to 600" >&2
+  else
+    case "$ENV_MODE" in
+      *00) ;;
+      *) chmod 600 .env 2>/dev/null || echo "[setup] warning: could not chmod .env to 600" >&2 ;;
+    esac
   fi
-  case "$ENV_MODE" in
-    *00) ;;
-    *) chmod 600 .env 2>/dev/null || echo "[setup] warning: could not chmod .env to 600" >&2 ;;
-  esac
 fi
 # A deterministic demo token protects the demo API without manual steps.
 if ! grep -q '^HACKATHONKIT_DEMO_TOKEN=.' .env 2>/dev/null; then
@@ -89,13 +91,21 @@ sh "$ROOT/scripts/install-prompts.sh" install || echo "[setup] warning: could no
 
 EXPLICIT_ONLY_SKILLS="judge project-cost roast-project cp-expert-refactoring system-design-expert self-improvement-controller output-self-check skill-authoring qa-expert"
 if [ "$PROFILE" = "core" ]; then
+  removed=0
   for dir in "$ROOT/.agents/skills" "$ROOT/.claude/skills"; do
     [ -d "$dir" ] || continue
     for skill in $EXPLICIT_ONLY_SKILLS; do
-      rm -rf "$dir/$skill"
+      target="$dir/$skill"
+      if [ -e "$target" ]; then
+        if rm -rf "$target" 2>/dev/null; then
+          removed=$((removed + 1))
+        else
+          echo "[setup] warning: could not remove $target" >&2
+        fi
+      fi
     done
   done
-  echo "[setup] core profile: explicit-only evaluation skills excluded from mirrors (the plugin still ships all skills)"
+  echo "[setup] core profile: removed $removed explicit-only skill mirror(s) (the plugin still ships all skills)"
 fi
 
 sh "$ROOT/scripts/gen-mcp-manifest.sh" "$ROOT"
@@ -112,8 +122,11 @@ if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
     RUNTIME="docker"
     echo "[setup] MCP image built, infrastructure started"
   else
-    echo "[setup] docker path failed (partial containers may be running); falling back to local binaries" >&2
+    echo "[setup] docker path failed (partial containers may be running); stopping it and falling back to local binaries" >&2
     docker compose -f "$ROOT/docker-compose.yml" ps >&2 2>/dev/null || true
+    # Stop the partial stack so its published ports (5432/6379/9000) do not
+    # conflict with the local-binary path; keep named volumes (-v omitted).
+    docker compose -f "$ROOT/docker-compose.yml" down >&2 2>/dev/null || true
   fi
 fi
 

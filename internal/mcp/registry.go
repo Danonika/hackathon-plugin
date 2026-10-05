@@ -2,6 +2,8 @@ package mcp
 
 import (
 	"context"
+	"log"
+	"reflect"
 	"sync"
 )
 
@@ -27,7 +29,14 @@ func NewRegistry() *Registry {
 func (r *Registry) Register(t Tool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if _, exists := r.tools[t.Name]; !exists {
+	if r.tools == nil {
+		// A zero-value Registry is usable; initialize the map lazily so
+		// Register cannot panic with "assignment to entry in nil map".
+		r.tools = map[string]*Tool{}
+	}
+	if _, exists := r.tools[t.Name]; exists {
+		log.Printf("mcp: duplicate tool registration for %q; overwriting", t.Name)
+	} else {
 		r.order = append(r.order, t.Name)
 	}
 	r.tools[t.Name] = cloneTool(&t)
@@ -67,22 +76,7 @@ func cloneTool(t *Tool) *Tool {
 func cloneMap(in map[string]any) map[string]any {
 	out := make(map[string]any, len(in))
 	for k, v := range in {
-		switch value := v.(type) {
-		case map[string]any:
-			out[k] = cloneMap(value)
-		case []any:
-			out[k] = cloneSlice(value)
-		case []string:
-			out[k] = append([]string(nil), value...)
-		case map[string]string:
-			copied := make(map[string]string, len(value))
-			for mk, mv := range value {
-				copied[mk] = mv
-			}
-			out[k] = copied
-		default:
-			out[k] = v
-		}
+		out[k] = cloneValue(v)
 	}
 	return out
 }
@@ -90,16 +84,54 @@ func cloneMap(in map[string]any) map[string]any {
 func cloneSlice(in []any) []any {
 	out := make([]any, len(in))
 	for i, v := range in {
-		switch value := v.(type) {
-		case map[string]any:
-			out[i] = cloneMap(value)
-		case []any:
-			out[i] = cloneSlice(value)
-		default:
-			out[i] = v
-		}
+		out[i] = cloneValue(v)
 	}
 	return out
+}
+
+// cloneValue deep-copies the JSON-like containers used by input schemas,
+// including typed slices, maps and nested combinations, so callers can never
+// mutate registry state through a returned schema.
+func cloneValue(v any) any {
+	switch value := v.(type) {
+	case nil:
+		return nil
+	case map[string]any:
+		return cloneMap(value)
+	case []any:
+		return cloneSlice(value)
+	case []string:
+		return append([]string(nil), value...)
+	case map[string]string:
+		copied := make(map[string]string, len(value))
+		for mk, mv := range value {
+			copied[mk] = mv
+		}
+		return copied
+	}
+	rv := reflect.ValueOf(v)
+	switch rv.Kind() {
+	case reflect.Map:
+		if rv.IsNil() {
+			return v
+		}
+		out := reflect.MakeMapWithSize(rv.Type(), rv.Len())
+		for _, key := range rv.MapKeys() {
+			out.SetMapIndex(key, reflect.ValueOf(cloneValue(rv.MapIndex(key).Interface())))
+		}
+		return out.Interface()
+	case reflect.Slice:
+		if rv.IsNil() {
+			return v
+		}
+		out := reflect.MakeSlice(rv.Type(), rv.Len(), rv.Len())
+		for i := 0; i < rv.Len(); i++ {
+			out.Index(i).Set(reflect.ValueOf(cloneValue(rv.Index(i).Interface())))
+		}
+		return out.Interface()
+	default:
+		return v
+	}
 }
 
 func (r *Registry) Names() []string {

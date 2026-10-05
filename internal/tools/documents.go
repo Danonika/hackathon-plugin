@@ -35,6 +35,20 @@ func (c *countingReader) Read(p []byte) (int, error) {
 const maxExtractedChars = 10_000_000
 const maxRawTextBytes = 20 << 20
 
+// clampMaxChars resolves the requested max_chars against the configured
+// default and the hard 10M cap. The config layer guarantees a positive
+// default, so no further fallback is needed.
+func clampMaxChars(args map[string]any, configured int) int {
+	maxChars := argInt(args, "max_chars", configured)
+	if maxChars <= 0 {
+		maxChars = configured
+	}
+	if maxChars > 10_000_000 {
+		maxChars = 10_000_000
+	}
+	return maxChars
+}
+
 func pdfText(path string) (text string, truncated bool, err error) {
 	defer func() {
 		if r := recover(); r != nil {
@@ -92,6 +106,9 @@ func extractText(path string) (string, []string, error) {
 			}
 			fmt.Fprintf(&b, "## Sheet: %s\n", s.Name)
 			b.WriteString(tableAsText(s.Table))
+			if omitted := len(s.Table.Rows) - 500; omitted > 0 {
+				warnings = append(warnings, fmt.Sprintf("sheet %s: %d row(s) omitted from the extracted text", s.Name, omitted))
+			}
 		}
 		return strings.TrimSpace(b.String()), warnings, nil
 	case "xls":
@@ -294,16 +311,7 @@ func registerDocuments(reg *mcp.Registry, d Deps) {
 			if err != nil {
 				return mcp.Fail(trace(ctx), err.Error()), nil
 			}
-			maxChars := argInt(args, "max_chars", d.Cfg.Config().Tools.MaxTextChars)
-			if maxChars <= 0 || maxChars > 10_000_000 {
-				maxChars = d.Cfg.Config().Tools.MaxTextChars
-			}
-			if maxChars > 10_000_000 {
-				maxChars = 10_000_000
-			}
-			if maxChars <= 0 {
-				maxChars = 60000
-			}
+			maxChars := clampMaxChars(args, d.Cfg.Config().Tools.MaxTextChars)
 			truncated := false
 			r := []rune(text)
 			if len(r) > maxChars {
@@ -343,16 +351,7 @@ func registerDocuments(reg *mcp.Registry, d Deps) {
 				return mcp.Fail(trace(ctx), err.Error()), nil
 			}
 			text := string(raw)
-			maxChars := argInt(args, "max_chars", d.Cfg.Config().Tools.MaxTextChars)
-			if maxChars <= 0 || maxChars > 10_000_000 {
-				maxChars = d.Cfg.Config().Tools.MaxTextChars
-			}
-			if maxChars <= 0 {
-				maxChars = 60000
-			}
-			if maxChars > 10_000_000 {
-				maxChars = 10_000_000
-			}
+			maxChars := clampMaxChars(args, d.Cfg.Config().Tools.MaxTextChars)
 			offset := argInt(args, "offset", 0)
 			if offset < 0 {
 				offset = 0

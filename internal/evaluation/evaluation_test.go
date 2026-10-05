@@ -170,8 +170,8 @@ func TestValidateJudgeReportUnknownCriteriaAreSorted(t *testing.T) {
 }
 
 func TestCalibrateUsesRetestDelta(t *testing.T) {
-	run1 := Aggregate{ValidJudges: 10, MeanTotal: 80}
-	run2 := Aggregate{ValidJudges: 10, MeanTotal: 83.4}
+	run1 := Aggregate{ValidJudges: 10, MeanTotal: 80, RubricVersion: RubricVersion}
+	run2 := Aggregate{ValidJudges: 10, MeanTotal: 83.4, RubricVersion: RubricVersion}
 	cal, err := Calibrate(run1, run2, 0.5, DefaultMinValidJudges)
 	if err != nil {
 		t.Fatal(err)
@@ -183,7 +183,7 @@ func TestCalibrateUsesRetestDelta(t *testing.T) {
 		t.Fatalf("noise floor = %v, want 6.8", cal.NoiseFloor)
 	}
 	// min_delta dominates when retest noise is small.
-	cal, err = Calibrate(Aggregate{ValidJudges: 10, MeanTotal: 80}, Aggregate{ValidJudges: 10, MeanTotal: 80.2}, 1, DefaultMinValidJudges)
+	cal, err = Calibrate(Aggregate{ValidJudges: 10, MeanTotal: 80, RubricVersion: RubricVersion}, Aggregate{ValidJudges: 10, MeanTotal: 80.2, RubricVersion: RubricVersion}, 1, DefaultMinValidJudges)
 	if err != nil {
 		t.Fatal(err)
 	}

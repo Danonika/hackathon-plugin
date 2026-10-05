@@ -18,7 +18,7 @@ func LoadDotEnv(root string) {
 	fileSet := map[string]bool{}
 	for _, line := range strings.Split(string(data), "\n") {
 		line = strings.TrimSpace(strings.TrimSuffix(line, "\r"))
-		line = strings.TrimSpace(strings.TrimPrefix(line, "export "))
+		line = stripExportPrefix(line)
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
@@ -48,6 +48,20 @@ func LoadDotEnv(root string) {
 	}
 }
 
+// stripExportPrefix removes a leading `export` keyword followed by whitespace,
+// accepting any whitespace and letter case, while leaving a real key such as
+// `exportFOO=1` untouched.
+func stripExportPrefix(line string) string {
+	if len(line) < len("export") || !strings.EqualFold(line[:len("export")], "export") {
+		return line
+	}
+	rest := line[len("export"):]
+	if rest == "" || !(rest[0] == ' ' || rest[0] == '\t') {
+		return line
+	}
+	return strings.TrimSpace(rest)
+}
+
 func validEnvKey(key string) bool {
 	if key == "" {
 		return false
@@ -63,11 +77,13 @@ func validEnvKey(key string) bool {
 
 func unquoteEnvValue(value string) string {
 	if len(value) > 0 {
-		switch q := value[0]; q {
+		switch value[0] {
 		case '"':
+			runes := []rune(value)
 			var b strings.Builder
 			escaped := false
-			for _, r := range value[1:] {
+			for i := 1; i < len(runes); i++ {
+				r := runes[i]
 				if escaped {
 					switch r {
 					case 'n':
@@ -91,14 +107,24 @@ func unquoteEnvValue(value string) string {
 					continue
 				}
 				if r == '"' {
-					return b.String()
+					if isClosingQuote(runes, i) {
+						return b.String()
+					}
+					// An interior quote (e.g. KEY="abc"def) is not a
+					// terminator: keep it rather than silently dropping the
+					// rest of the value.
+					b.WriteRune(r)
+					continue
 				}
 				b.WriteRune(r)
 			}
 			return b.String()
 		case '\'':
-			if end := strings.IndexByte(value[1:], '\''); end >= 0 {
-				return value[1 : 1+end]
+			runes := []rune(value)
+			for i := 1; i < len(runes); i++ {
+				if runes[i] == '\'' && isClosingQuote(runes, i) {
+					return string(runes[1:i])
+				}
 			}
 			return value[1:]
 		}
@@ -107,4 +133,13 @@ func unquoteEnvValue(value string) string {
 		value = strings.TrimSpace(value[:idx])
 	}
 	return value
+}
+
+// isClosingQuote reports whether the quote at index idx terminates the value:
+// only when the remainder is empty, whitespace, or a `#` comment. Any other
+// remainder means the quote is interior (e.g. KEY="abc"def) and must not
+// truncate the value.
+func isClosingQuote(runes []rune, idx int) bool {
+	rest := strings.TrimSpace(string(runes[idx+1:]))
+	return rest == "" || strings.HasPrefix(rest, "#")
 }

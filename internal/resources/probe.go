@@ -26,7 +26,10 @@ type ProbeResult struct {
 // ProbeOpenAICompatible checks GET {base}/models with a bearer key. OpenAI and
 // NVIDIA expose the same endpoint shape, so both providers share this probe.
 func ProbeOpenAICompatible(ctx context.Context, providerID, baseURL, apiKey string) ProbeResult {
-	result := ProbeResult{Provider: providerID, Configured: strings.TrimSpace(apiKey) != ""}
+	// Normalize once so the guard and the request use the same value (a key
+	// read from a CRLF .env would otherwise pass the guard and fail the call).
+	apiKey = strings.TrimSpace(apiKey)
+	result := ProbeResult{Provider: providerID, Configured: apiKey != ""}
 	if !result.Configured {
 		result.Error = "not configured"
 		return result
@@ -51,12 +54,15 @@ func ProbeOpenAICompatible(ctx context.Context, providerID, baseURL, apiKey stri
 		result.Error = redact(err.Error(), apiKey)
 		return result
 	}
-	result.Live = true
 	defer resp.Body.Close()
 	result.StatusCode = resp.StatusCode
-	body, readErr := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	body, readErr := io.ReadAll(io.LimitReader(resp.Body, 1<<20+1))
 	if readErr != nil {
 		result.Error = "reading response: " + redact(readErr.Error(), apiKey)
+		return result
+	}
+	if len(body) > 1<<20 {
+		result.Error = "response exceeds 1MB"
 		return result
 	}
 	if resp.StatusCode != http.StatusOK {
@@ -66,9 +72,14 @@ func ProbeOpenAICompatible(ctx context.Context, providerID, baseURL, apiKey stri
 	var parsed struct {
 		Data []json.RawMessage `json:"data"`
 	}
-	if err := json.Unmarshal(body, &parsed); err == nil {
-		result.Models = len(parsed.Data)
+	if err := json.Unmarshal(body, &parsed); err != nil {
+		result.Error = "invalid models response: " + redact(err.Error(), apiKey)
+		return result
 	}
+	result.Models = len(parsed.Data)
+	// Live and Reachable only after a validated 200 response, so a caller
+	// reading Live as a health signal is not contradicted by an earlier error.
+	result.Live = true
 	result.Reachable = true
 	return result
 }

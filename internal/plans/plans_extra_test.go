@@ -50,17 +50,20 @@ func TestSaveErrors(t *testing.T) {
 	}
 
 	if os.Geteuid() != 0 && runtime.GOOS != "windows" {
+		// atomicfile.Write tightens an existing state directory back to 0700,
+		// so a read-only plans directory can no longer be simulated that way;
+		// block the parent instead so MkdirAll of evals/plans fails.
 		root3 := t.TempDir()
-		dir := Dir(root3)
-		if err := os.MkdirAll(dir, 0o755); err != nil {
+		parent := filepath.Join(root3, "evals")
+		if err := os.MkdirAll(parent, 0o755); err != nil {
 			t.Fatal(err)
 		}
-		if err := os.Chmod(dir, 0o555); err != nil {
+		if err := os.Chmod(parent, 0o555); err != nil {
 			t.Fatal(err)
 		}
-		t.Cleanup(func() { _ = os.Chmod(dir, 0o755) })
+		t.Cleanup(func() { _ = os.Chmod(parent, 0o755) })
 		if err := Save(root3, Plan{Slug: "readonly"}); err == nil {
-			t.Fatal("expected create-temp error in a read-only directory")
+			t.Fatal("expected mkdir error in a read-only parent directory")
 		}
 	}
 }

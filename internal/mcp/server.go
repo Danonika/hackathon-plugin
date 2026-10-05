@@ -58,12 +58,16 @@ func (s *Server) Serve(ctx context.Context) error {
 
 func sanitizeRPCError(msg string) string {
 	msg = strings.TrimSpace(msg)
-	if len(msg) > 500 {
-		msg = msg[:500] + "..."
+	if runes := []rune(msg); len(runes) > 500 {
+		msg = string(runes[:500]) + "..."
 	}
 	return msg
 }
 
+// ServeStreams serves JSON-RPC requests read from in and writes responses to
+// out. When in also implements io.Closer it is closed on return, which is the
+// only way to unblock the reader goroutine if it is parked in Read; callers
+// passing a non-closing reader risk leaving that goroutine running.
 func (s *Server) ServeStreams(ctx context.Context, in io.Reader, out io.Writer) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -80,6 +84,17 @@ func (s *Server) ServeStreams(ctx context.Context, in io.Reader, out io.Writer) 
 	}
 	lines := make(chan []byte)
 	scanErr := make(chan error, 1)
+	// deliverOversize reports the discarded over-long frame, respecting
+	// cancellation. It returns false when the send was cancelled.
+	deliverOversize := func() bool {
+		select {
+		case lines <- oversizeFrame:
+			return true
+		case <-ctx.Done():
+			scanErr <- ctx.Err()
+			return false
+		}
+	}
 	go func() {
 		defer close(lines)
 		reader := bufio.NewReaderSize(in, 64*1024)
@@ -117,16 +132,17 @@ func (s *Server) ServeStreams(ctx context.Context, in io.Reader, out io.Writer) 
 						continue
 					}
 					if errors.Is(derr, io.EOF) {
-						scanErr <- nil
-					} else {
-						scanErr <- derr
+						// The frame ended at EOF without a newline: still
+						// report the oversize error before signalling EOF.
+						if deliverOversize() {
+							scanErr <- nil
+						}
+						return
 					}
+					scanErr <- derr
 					return
 				}
-				select {
-				case lines <- oversizeFrame:
-				case <-ctx.Done():
-					scanErr <- ctx.Err()
+				if !deliverOversize() {
 					return
 				}
 				continue
@@ -197,7 +213,7 @@ func (s *Server) handle(ctx context.Context, req *Request) *Response {
 	case "tools/call":
 		s.handleToolCall(ctx, req, resp)
 	default:
-		resp.Error = &RPCError{Code: CodeMethodNotFound, Message: "method not found: " + req.Method}
+		resp.Error = &RPCError{Code: CodeMethodNotFound, Message: "method not found: " + sanitizeRPCError(req.Method)}
 	}
 	return resp
 }
@@ -236,7 +252,7 @@ func (s *Server) handleToolCall(ctx context.Context, req *Request, resp *Respons
 	tool, ok := s.registry.Get(p.Name)
 	if !ok {
 		s.inc("mcp_tool_unknown_total")
-		resp.Error = &RPCError{Code: CodeInvalidParams, Message: "unknown tool: " + p.Name}
+		resp.Error = &RPCError{Code: CodeInvalidParams, Message: "unknown tool: " + sanitizeRPCError(p.Name)}
 		return
 	}
 	if p.Arguments == nil {
@@ -263,11 +279,7 @@ func (s *Server) handleToolCall(ctx context.Context, req *Request, resp *Respons
 		s.inc("mcp_tool_errors_total")
 	}
 	if err != nil {
-		result = Envelope{
-			Status:  StatusError,
-			Data:    map[string]any{"error": sanitizeRPCError(err.Error())},
-			TraceID: observability.TraceFrom(callCtx),
-		}
+		result = Fail(observability.TraceFrom(callCtx), sanitizeRPCError(err.Error()))
 	}
 	if s.opts.Metrics != nil {
 		s.opts.Metrics.Add("tool_duration_ms_total", duration.Milliseconds())

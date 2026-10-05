@@ -330,6 +330,16 @@ func TestRedactBackendError(t *testing.T) {
 			want:  "API_KEY=[redacted] access_key=[redacted]",
 		},
 		{
+			name:  "colon and space separated secrets",
+			input: "cfg password: hunter2 token abc123",
+			want:  "cfg password: [redacted] token [redacted]",
+		},
+		{
+			name:  "authorization bearer token",
+			input: "auth error: Authorization: Bearer eyJ0eXAi",
+			want:  "auth error: Authorization: Bearer [redacted]",
+		},
+		{
 			name:  "no credentials unchanged",
 			input: "connection refused to db:5432",
 			want:  "connection refused to db:5432",

@@ -8,7 +8,7 @@ if (-not $root -or -not (Test-Path -LiteralPath (Join-Path $root "docker-compose
   Write-Error "[repair] refusing: '$root' does not look like the hackathonkit repository root"
   exit 1
 }
-Set-Location -LiteralPath $root
+Set-Location -LiteralPath $root -ErrorAction Stop
 Write-Host "[repair] repository root: $root"
 
 $global:LASTEXITCODE = 0
@@ -17,6 +17,7 @@ if ($LASTEXITCODE -ne 0) { Write-Error "[repair] sync-harness failed"; exit 1 }
 $global:LASTEXITCODE = 0
 & (Join-Path $root "scripts\gen-mcp-manifest.ps1") -Root $root
 if ($LASTEXITCODE -ne 0) { Write-Error "[repair] manifest generation failed"; exit 1 }
+$global:LASTEXITCODE = 0
 & (Join-Path $root "scripts\install-prompts.ps1") install
 if ($LASTEXITCODE -ne 0) { Write-Warning "[repair] could not install the Codex command prompts" }
 $dirFailures = 0
@@ -30,13 +31,13 @@ foreach ($d in @("logs", "evals", "data\artifacts", "data\index", "data\control"
 }
 if ($dirFailures -gt 0) { Write-Error "[repair] $dirFailures directory creation failure(s)"; exit 1 }
 
-$profile = "full"
+$installProfile = "full"
 $statePath = Join-Path $root "configs\install-state.json"
 if (Test-Path -LiteralPath $statePath) {
   try {
     $state = Get-Content -LiteralPath $statePath -Raw | ConvertFrom-Json
     if ($state.profile -in @("core", "full")) {
-      $profile = $state.profile
+      $installProfile = $state.profile
     } elseif ($state.profile) {
       Write-Warning "[repair] unknown profile '$($state.profile)' in install-state; using 'full'"
     }
@@ -46,7 +47,8 @@ if (Test-Path -LiteralPath $statePath) {
 }
 
 $runtime = "binary"
-if (Get-Command docker -ErrorAction SilentlyContinue) {
+if (Get-Command docker -CommandType Application -ErrorAction SilentlyContinue) {
+  $global:LASTEXITCODE = 0
   docker info *> $null
   if ($LASTEXITCODE -eq 0) { $runtime = "docker" }
 }
@@ -54,15 +56,16 @@ if (Get-Command docker -ErrorAction SilentlyContinue) {
 $bin = Join-Path $root "bin\hackathonkit-mcp.exe"
 $demo = Join-Path $root "bin\hackathonkit-demo-api.exe"
 $ctl = Join-Path $root "bin\hackathonkit-ctl.exe"
-if ((-not (Test-Path $bin)) -or (-not (Test-Path $demo)) -or (-not (Test-Path $ctl))) {
+if ((-not (Test-Path -LiteralPath $bin)) -or (-not (Test-Path -LiteralPath $demo)) -or (-not (Test-Path -LiteralPath $ctl))) {
   if ($runtime -eq "binary") {
-    if (Get-Command go -ErrorAction SilentlyContinue) {
-      New-Item -ItemType Directory -Force -Path (Join-Path $root "bin") | Out-Null
-      go build -o bin/hackathonkit-mcp.exe ./cmd/hackathonkit-mcp
+    if (Get-Command go -CommandType Application -ErrorAction SilentlyContinue) {
+      $binDir = Join-Path $root "bin"
+      New-Item -ItemType Directory -Force -Path $binDir -ErrorAction Stop | Out-Null
+      go build -o (Join-Path $binDir "hackathonkit-mcp.exe") ./cmd/hackathonkit-mcp
       if ($LASTEXITCODE -ne 0) { Write-Error "[repair] go build hackathonkit-mcp failed"; exit 1 }
-      go build -o bin/hackathonkit-demo-api.exe ./cmd/demo-api
+      go build -o (Join-Path $binDir "hackathonkit-demo-api.exe") ./cmd/demo-api
       if ($LASTEXITCODE -ne 0) { Write-Error "[repair] go build demo-api failed"; exit 1 }
-      go build -o bin/hackathonkit-ctl.exe ./cmd/hackathonkit-ctl
+      go build -o (Join-Path $binDir "hackathonkit-ctl.exe") ./cmd/hackathonkit-ctl
       if ($LASTEXITCODE -ne 0) { Write-Error "[repair] go build hackathonkit-ctl failed"; exit 1 }
       Write-Host "[repair] rebuilt local binaries in bin/"
     } else {
@@ -75,7 +78,7 @@ if ((-not (Test-Path $bin)) -or (-not (Test-Path $demo)) -or (-not (Test-Path $c
 }
 
 $global:LASTEXITCODE = 0
-& (Join-Path $root "scripts\write-install-state.ps1") -Root $root -Profile $profile -Runtime $runtime
+& (Join-Path $root "scripts\write-install-state.ps1") -Root $root -Profile $installProfile -Runtime $runtime
 if ($LASTEXITCODE -ne 0) { Write-Error "[repair] write-install-state failed"; exit 1 }
 
 if (Get-Command codex -CommandType Application -ErrorAction SilentlyContinue) {

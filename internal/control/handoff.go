@@ -32,9 +32,11 @@ func BuildHandoff(ctx context.Context, store *Store, learn *learning.Store, root
 	}
 	handoff.Session = session
 
-	if plan, ok, planErr := plans.LatestErr(root); ok {
+	plan, ok, planErr := plans.LatestErr(root)
+	if ok {
 		handoff.Plan = &plan
-	} else if planErr != nil {
+	}
+	if planErr != nil {
 		handoff.Notes = append(handoff.Notes, "latest plan unreadable: "+planErr.Error())
 	}
 	if learn != nil {
@@ -60,22 +62,14 @@ func BuildHandoff(ctx context.Context, store *Store, learn *learning.Store, root
 	if session.EndedAt != nil && session.EndedAt.Before(end) {
 		end = *session.EndedAt
 	}
-	if globalEvents, derr := store.EventsBetween(ctx, session.CreatedAt, end, 10000); derr == nil {
-		for _, ev := range globalEvents {
-			if ev.Type == "eval_decision" {
-				handoff.PendingDecisions++
-			}
-		}
+	if count, derr := store.CountEventsByTypeBetween(ctx, session.CreatedAt, end, "eval_decision"); derr == nil {
+		handoff.PendingDecisions += count
 	} else {
 		handoff.Notes = append(handoff.Notes, "decision history unreadable: "+derr.Error())
 	}
 	// Older records may still carry a session id; count those too.
-	if scopedEvents, derr := store.Events(ctx, sessionID, 10000); derr == nil {
-		for _, ev := range scopedEvents {
-			if ev.Type == "eval_decision" {
-				handoff.PendingDecisions++
-			}
-		}
+	if count, derr := store.CountEventsByType(ctx, sessionID, "eval_decision"); derr == nil {
+		handoff.PendingDecisions += count
 	} else {
 		handoff.Notes = append(handoff.Notes, "scoped decision history unreadable: "+derr.Error())
 	}
@@ -102,7 +96,7 @@ func RenderHandoff(h Handoff) string {
 	if h.Plan != nil {
 		fmt.Fprintf(&b, "- plan: %s\n", plans.Summary(*h.Plan))
 		if stage, ok := plans.CurrentStage(*h.Plan); ok && stage.Goal != "" {
-			fmt.Fprintf(&b, "  next: %s - %s\n", stage.ID, stage.Goal)
+			fmt.Fprintf(&b, "  next: %s - %s\n", line(stage.ID), line(stage.Goal))
 		}
 	}
 	if len(h.RecentEvents) > 0 {

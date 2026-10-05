@@ -121,7 +121,8 @@ func (r *Router) embedTask(ctx context.Context, task string) ([]float64, bool) {
 	if r.embedCacheSet && r.embedCacheTask == task {
 		vec, ok := r.embedCacheVec, r.embedCacheOK
 		r.embedCacheMu.Unlock()
-		return vec, ok
+		// Return a copy: callers must not be able to mutate the cached slice.
+		return append([]float64(nil), vec...), ok
 	}
 	r.embedCacheMu.Unlock()
 	if r.embedder == nil {
@@ -133,10 +134,14 @@ func (r *Router) embedTask(ctx context.Context, task string) ([]float64, bool) {
 	if ok {
 		vec = normalizeVector(vectors[0])
 	}
-	r.embedCacheMu.Lock()
-	r.embedCacheTask, r.embedCacheVec, r.embedCacheOK, r.embedCacheSet = task, vec, ok, true
-	r.embedCacheMu.Unlock()
-	return vec, ok
+	if ok {
+		// Cache only successful results: a transient failure must be retried
+		// rather than replayed until a different task evicts the entry.
+		r.embedCacheMu.Lock()
+		r.embedCacheTask, r.embedCacheVec, r.embedCacheOK, r.embedCacheSet = task, vec, true, true
+		r.embedCacheMu.Unlock()
+	}
+	return append([]float64(nil), vec...), ok
 }
 
 func (r *Router) embeddingCategoryScores(ctx context.Context, task string) (map[string]float64, bool) {

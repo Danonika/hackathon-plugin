@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -44,6 +45,7 @@ type flyLiveFeed struct {
 	feedback       json.RawMessage
 	pollInterval   time.Duration
 	heartbeat      time.Duration
+	logger         *log.Logger
 
 	// published is the latest immutable snapshot, read by every subscriber and
 	// the ?snapshot=1 endpoint without touching the file or the lock. A single
@@ -53,8 +55,9 @@ type flyLiveFeed struct {
 	stopOnce  sync.Once
 }
 
-func newFlyLiveHandler(root string) http.Handler {
+func newFlyLiveHandler(root string, logger *log.Logger) http.Handler {
 	f := newFlyLiveFeed(root)
+	f.logger = logger
 	f.publish(false)
 	go f.run()
 	return f
@@ -194,11 +197,13 @@ func (f *flyLiveFeed) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 // refresh is called under mu by the poller. Unchanged polls only stat the file.
 // Appends are consumed once and published to all subscribers, including
-// split/unfinished lines.
+// split/unfinished lines. File errors are best-effort: the feed is marked
+// unavailable and logged once per transition so a broken feed is diagnosable
+// rather than indistinguishable from a deliberate outage.
 func (f *flyLiveFeed) refresh() {
 	info, err := os.Stat(f.path)
 	if err != nil {
-		f.setAvailable(false)
+		f.markUnavailable(err)
 		return
 	}
 	if f.info != nil && os.SameFile(f.info, info) && info.Size() == f.offset && info.ModTime().Equal(f.info.ModTime()) {
@@ -207,7 +212,7 @@ func (f *flyLiveFeed) refresh() {
 	}
 	file, err := os.Open(f.path)
 	if err != nil {
-		f.setAvailable(false)
+		f.markUnavailable(err)
 		return
 	}
 	defer file.Close()
@@ -224,7 +229,7 @@ func (f *flyLiveFeed) refresh() {
 	data := make([]byte, min(flyLiveReadLimit, max(0, info.Size()-f.offset)))
 	n, err := file.ReadAt(data, f.offset)
 	if err != nil && err != io.EOF {
-		f.setAvailable(false)
+		f.markUnavailable(err)
 		return
 	}
 	f.offset += int64(n)
@@ -257,6 +262,15 @@ func (f *flyLiveFeed) setAvailable(available bool) {
 		f.available = available
 		f.revision++
 	}
+}
+
+// markUnavailable records a file error and logs it once per unavailable
+// transition so a transient or broken feed leaves an operator-visible trace.
+func (f *flyLiveFeed) markUnavailable(err error) {
+	if f.logger != nil && f.available {
+		f.logger.Printf("fly-live: feed unavailable: %v (path %s)", err, f.path)
+	}
+	f.setAvailable(false)
 }
 
 func (f *flyLiveFeed) consume(line []byte) {

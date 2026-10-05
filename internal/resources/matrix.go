@@ -11,7 +11,10 @@ import (
 )
 
 // Variant is one way to execute a capability. A variant without a provider is
-// always available and acts as the deterministic fallback.
+// always available and acts as the deterministic fallback. A ready
+// provider-backed variant is preferred over a providerless fallback regardless
+// of declaration order; when no provider is ready, the first providerless
+// variant is used.
 type Variant struct {
 	ID       string `json:"id" yaml:"id"`
 	Provider string `json:"provider,omitempty" yaml:"provider,omitempty"`
@@ -58,7 +61,11 @@ func LoadMatrix(root string) (Matrix, error) {
 		return Matrix{}, err
 	}
 	var matrix Matrix
-	if err := yaml.Unmarshal(data, &matrix); err != nil {
+	dec := yaml.NewDecoder(strings.NewReader(string(data)))
+	// Fail fast on typo'd/unknown keys instead of silently degrading to an
+	// empty playbook.
+	dec.KnownFields(true)
+	if err := dec.Decode(&matrix); err != nil {
 		return Matrix{}, fmt.Errorf("configs/resource-matrix.yaml is not valid YAML: %w", err)
 	}
 	if err := matrix.Validate(); err != nil {
@@ -72,6 +79,21 @@ func LoadMatrix(root string) (Matrix, error) {
 func (m Matrix) Validate() error {
 	if len(m.Capabilities) == 0 || len(m.Tracks) == 0 {
 		return fmt.Errorf("resource matrix is empty")
+	}
+	for capability, variants := range m.Capabilities {
+		if len(variants) == 0 {
+			return fmt.Errorf("resource matrix capability %q has no variants", capability)
+		}
+		seen := map[string]bool{}
+		for _, variant := range variants {
+			if strings.TrimSpace(variant.ID) == "" {
+				return fmt.Errorf("resource matrix capability %q has a variant with an empty id", capability)
+			}
+			if seen[variant.ID] {
+				return fmt.Errorf("resource matrix capability %q repeats variant id %q", capability, variant.ID)
+			}
+			seen[variant.ID] = true
+		}
 	}
 	for trackID, plan := range m.Tracks {
 		if _, ok := LookupTrack(trackID); !ok {
@@ -110,30 +132,32 @@ func Plan(matrix Matrix, statuses []Status, trackRef string) (TrackPlan, []Decis
 		}
 		decision := Decision{Capability: capability}
 		chosenIndex := -1
+		// Prefer a ready provider-backed variant over a providerless fallback,
+		// regardless of where the fallback is declared.
 		for i, variant := range variants {
-			if variant.Provider == "" || Ready(statuses, variant.Provider) {
+			if variant.Provider != "" && Ready(statuses, variant.Provider) {
 				decision.Chosen = variant
 				chosenIndex = i
 				break
 			}
 		}
 		if chosenIndex < 0 {
-			fallbackIndex := -1
-			for i := len(variants) - 1; i >= 0; i-- {
-				if variants[i].Provider == "" {
-					fallbackIndex = i
+			for i, variant := range variants {
+				if variant.Provider == "" {
+					decision.Chosen = variant
+					chosenIndex = i
 					break
 				}
 			}
-			if fallbackIndex < 0 {
-				fallbackIndex = len(variants) - 1
-			}
+		}
+		if chosenIndex < 0 {
+			// No provider is ready and there is no providerless fallback: use the
+			// terminal variant and surface its missing key.
+			fallbackIndex := len(variants) - 1
 			decision.Chosen = variants[fallbackIndex]
 			chosenIndex = fallbackIndex
 			decision.Degraded = true
 			if decision.Chosen.Provider != "" {
-				// No variant is ready and the fallback itself is provider-backed:
-				// surface the missing key instead of pretending it is available.
 				decision.Missing = append(decision.Missing, providerMissing(statuses, decision.Chosen.Provider)...)
 			}
 		} else if decision.Chosen.Provider == "" && chosenIndex > 0 {
@@ -168,7 +192,13 @@ func Plan(matrix Matrix, statuses []Status, trackRef string) (TrackPlan, []Decis
 func DecisionSummary(decisions []Decision) string {
 	parts := make([]string, 0, len(decisions))
 	for _, decision := range decisions {
-		parts = append(parts, decision.Capability+"="+decision.Chosen.ID)
+		id := decision.Chosen.ID
+		if id == "" {
+			// A capability with no variant must be visible, not rendered as an
+			// ambiguous "capability=".
+			id = "(undefined)"
+		}
+		parts = append(parts, decision.Capability+"="+id)
 	}
 	return strings.Join(parts, " ")
 }
@@ -195,9 +225,12 @@ func providerMissing(statuses []Status, providerID string) []string {
 		}
 		// The full key list is the actionable hint for a provider that was
 		// never configured (and the subset for a partially configured one).
-		return status.EnvKeys
+		if len(status.EnvKeys) > 0 {
+			return status.EnvKeys
+		}
+		return []string{providerID + " is not configured"}
 	}
-	return nil
+	return []string{"unresolved provider " + providerID}
 }
 
 func dedupe(items []string) []string {

@@ -8,33 +8,51 @@ function Fail([string]$Message) {
   exit 1
 }
 
-# Compare two trees by relative file path and content hash so a user-authored
-# skill that merely shares a folder name with a shipped skill is not deleted,
-# and a same-size edit is not mistaken for an unmodified copy.
+# Compare two trees by relative directory/file entries and content hash so a
+# user-authored skill that merely shares a folder name with a shipped skill is
+# not deleted, and a same-size edit is not mistaken for an unmodified copy.
+function Get-TreeEntries([string]$Base) {
+  @(Get-ChildItem -LiteralPath $Base -Recurse -Force |
+    Where-Object { -not ($_.Attributes -band [System.IO.FileAttributes]::ReparsePoint) } |
+    ForEach-Object {
+      $rel = $_.FullName.Substring($Base.Length).TrimStart('\', '/')
+      if ($_.PSIsContainer) { "d|$rel" }
+      else { "f|$rel|$((Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash)" }
+    } | Sort-Object)
+}
+
 function Test-SameTree([string]$A, [string]$B) {
   if (-not (Test-Path -LiteralPath $A) -or -not (Test-Path -LiteralPath $B)) { return $false }
-  $aFiles = @(Get-ChildItem -LiteralPath $A -Recurse -File -Force |
-    Where-Object { -not ($_.Attributes -band [System.IO.FileAttributes]::ReparsePoint) } |
-    ForEach-Object {
-      $rel = $_.FullName.Substring($A.Length).TrimStart('\')
-      "$rel|$((Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash)"
-    } | Sort-Object)
-  $bFiles = @(Get-ChildItem -LiteralPath $B -Recurse -File -Force |
-    Where-Object { -not ($_.Attributes -band [System.IO.FileAttributes]::ReparsePoint) } |
-    ForEach-Object {
-      $rel = $_.FullName.Substring($B.Length).TrimStart('\')
-      "$rel|$((Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash)"
-    } | Sort-Object)
-  return @(Compare-Object -ReferenceObject $aFiles -DifferenceObject $bFiles).Count -eq 0
+  # Directory entries are included so two trees differing only in empty
+  # subdirectories do not compare equal.
+  return @(Compare-Object -ReferenceObject (Get-TreeEntries $A) -DifferenceObject (Get-TreeEntries $B)).Count -eq 0
+}
+
+# Recursively delete a tree without following junctions/symlinks.
+function Remove-TreeNoReparse([string]$Path) {
+  $item = Get-Item -LiteralPath $Path -Force
+  if ($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) {
+    Remove-Item -LiteralPath $Path -Force -ErrorAction Stop
+    return
+  }
+  if ($item.PSIsContainer) {
+    foreach ($child in Get-ChildItem -LiteralPath $Path -Force) {
+      Remove-TreeNoReparse $child.FullName
+    }
+  }
+  Remove-Item -LiteralPath $Path -Force -ErrorAction Stop
 }
 
 if (-not $PSCommandPath) {
   Fail "[uninstall] PSCommandPath is empty; run this script as a file, not dot-sourced"
 }
 $root = Split-Path -Parent (Split-Path -Parent $PSCommandPath)
-$markers = @("docker-compose.yml", "go.mod", "plugins\hackathonkit\.codex-plugin\plugin.json", "plugins\hackathonkit\skills")
+if (-not $root) {
+  Fail "[uninstall] cannot resolve the repository root from '$PSCommandPath'"
+}
+$markers = @("docker-compose.yml", "go.mod", "plugins/hackathonkit/.codex-plugin/plugin.json", "plugins/hackathonkit/skills")
 $missingMarkers = @($markers | Where-Object { -not (Test-Path -LiteralPath (Join-Path $root $_)) })
-if (-not $root -or $missingMarkers.Count -gt 0) {
+if ($missingMarkers.Count -gt 0) {
   Fail "[uninstall] refusing: '$root' does not look like the hackathonkit repository root (missing: $($missingMarkers -join ', '))"
 }
 
@@ -49,7 +67,11 @@ if (Get-Command codex -CommandType Application -ErrorAction SilentlyContinue) {
     & codex plugin marketplace remove hackathonkit-local *> $null
     $marketExit = $LASTEXITCODE
     if ($marketExit -ne 0) { Write-Warning "[uninstall] codex marketplace remove failed (exit $marketExit)"; $codexFail = 1 }
-    Write-Host "[uninstall] removed hackathonkit plugin and marketplace"
+    if ($codexFail -eq 0) {
+      Write-Host "[uninstall] removed hackathonkit plugin and marketplace"
+    } else {
+      Write-Warning "[uninstall] hackathonkit plugin/marketplace removal reported errors"
+    }
   } else {
     Write-Host "would run: codex plugin remove hackathonkit"
     Write-Host "would run: codex plugin marketplace remove hackathonkit-local"
@@ -57,11 +79,11 @@ if (Get-Command codex -CommandType Application -ErrorAction SilentlyContinue) {
 }
 
 $targets = @(
-  "plugins\hackathonkit\.mcp.json",
-  ".agents\skills",
-  ".claude\skills",
-  "configs\install-state.json",
-  "data\control",
+  "plugins/hackathonkit/.mcp.json",
+  ".agents/skills",
+  ".claude/skills",
+  "configs/install-state.json",
+  "data/control",
   "bin"
 )
 # Remove the /verify custom prompt this installer placed for Codex.
@@ -95,12 +117,12 @@ foreach ($rel in $targets) {
     $Failures++
     continue
   }
-  if ($rel -in @(".agents\skills", ".claude\skills")) {
+  if ($rel -in @(".agents/skills", ".claude/skills")) {
     # Shared skill directories: remove only the skills this plugin ships so
     # user-authored skills survive.
-    $src = Join-Path $root "plugins\hackathonkit\skills"
+    $src = Join-Path $root "plugins/hackathonkit/skills"
     if (-not (Test-Path -LiteralPath $src)) { continue }
-    foreach ($skill in Get-ChildItem -LiteralPath $src -Directory) {
+    foreach ($skill in Get-ChildItem -LiteralPath $src -Directory -Force) {
       $skillTarget = Join-Path $target $skill.Name
       if (-not (Test-Path -LiteralPath $skillTarget)) { continue }
       $item = Get-Item -LiteralPath $skillTarget -Force
@@ -113,7 +135,7 @@ foreach ($rel in $targets) {
         continue
       }
       if ($Yes) {
-        try { Remove-Item -LiteralPath $skillTarget -Recurse -Force -ErrorAction Stop }
+        try { Remove-TreeNoReparse $skillTarget }
         catch { Write-Warning "[uninstall] failed to remove ${rel}\$($skill.Name): $($_.Exception.Message)"; $Failures++ }
       } else {
         Write-Host "would remove: $rel\$($skill.Name)"
@@ -123,7 +145,14 @@ foreach ($rel in $targets) {
   }
   if ($Yes) {
     try {
-      if (Test-Path -LiteralPath $target) { Remove-Item -LiteralPath $target -Recurse -Force -ErrorAction Stop }
+      if (Test-Path -LiteralPath $target) {
+        $targetItem = Get-Item -LiteralPath $target -Force
+        if ($targetItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint) {
+          Remove-Item -LiteralPath $target -Force -ErrorAction Stop
+        } else {
+          Remove-TreeNoReparse $target
+        }
+      }
     } catch {
       Write-Warning "[uninstall] failed to remove ${rel}: $($_.Exception.Message)"
       $Failures++
@@ -138,6 +167,6 @@ if (-not $Yes) {
   exit 0
 }
 if ($Failures -gt 0 -or $codexFail -ne 0) {
-  Fail "[uninstall] finished with warnings ($Failures path failure(s))"
+  Fail "[uninstall] finished with warnings ($Failures path failure(s), $codexFail codex failure(s))"
 }
 Write-Host "[uninstall] done. data/input, data/artifacts, logs/ and committed files were kept (data/control was removed)."

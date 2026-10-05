@@ -48,6 +48,9 @@ func parseNumber(s string) (float64, bool) {
 // has exactly three digits ("1,234", "1,234,567"), which is a thousands
 // separator rather than a decimal mark ("1,5").
 func commaIsThousands(s string) bool {
+	// A leading sign is not part of the first digit group, so strip it before
+	// checking group lengths ("-123,456" is thousands, not a decimal mark).
+	s = strings.TrimLeft(s, "+-")
 	parts := strings.Split(s, ",")
 	if len(parts) < 2 || len(parts[0]) == 0 || len(parts[0]) > 3 {
 		return false
@@ -193,6 +196,9 @@ func slugify(s string) string {
 }
 
 func snippet(text string, limit int) string {
+	if limit <= 0 {
+		return ""
+	}
 	r := []rune(strings.TrimSpace(text))
 	if len(r) <= limit {
 		return string(r)
@@ -221,20 +227,34 @@ func mean(values []float64) float64 {
 	for _, v := range values {
 		sum += v
 	}
-	return sum / float64(len(values))
+	m := sum / float64(len(values))
+	if math.IsNaN(m) || math.IsInf(m, 0) {
+		// A naive sum can overflow to +Inf for extreme magnitudes; returning a
+		// finite value keeps JSON serialization of callers from failing.
+		return 0
+	}
+	return m
 }
 
 func stddev(values []float64) float64 {
 	if len(values) < 2 {
 		return 0
 	}
-	m := mean(values)
-	sum := 0.0
+	// Welford's online algorithm accumulates the variance without a separate
+	// naive sum of squares, avoiding overflow for large-magnitude input.
+	var m, m2 float64
+	n := 0
 	for _, v := range values {
-		d := v - m
-		sum += d * d
+		n++
+		delta := v - m
+		m += delta / float64(n)
+		m2 += delta * (v - m)
 	}
-	return sqrt(sum / float64(len(values)-1))
+	sd := math.Sqrt(m2 / float64(n-1))
+	if math.IsNaN(sd) || math.IsInf(sd, 0) {
+		return 0
+	}
+	return sd
 }
 
 // sqrt delegates to math.Sqrt: the previous hand-rolled Newton iteration

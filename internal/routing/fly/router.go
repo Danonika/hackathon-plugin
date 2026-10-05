@@ -41,6 +41,12 @@ type Router struct {
 	llm       LLMClassifier
 	building  chan struct{}
 
+	// brainSaveMu serializes brain writers without blocking scoring readers;
+	// memoryMu serializes this router's memory-file access (per router, so
+	// unrelated routers do not serialize on each other's disk I/O).
+	brainSaveMu sync.Mutex
+	memoryMu    sync.Mutex
+
 	embedCacheMu   sync.Mutex
 	embedCacheTask string
 	embedCacheVec  []float64
@@ -144,6 +150,12 @@ func (r *Router) Recommend(ctx context.Context, task string, meta map[string]any
 	if keywordSignal {
 		encoderParts = append(encoderParts, "keyword")
 	}
+	// Fusion is intentionally asymmetric: embedding only reweights categories
+	// it has an opinion on, while kNN/MB/LLM decay every existing category
+	// before adding theirs. This keeps a keyword-only category at full weight
+	// when the embedding signal has nothing to say about it; the consequence is
+	// that a category's absolute score depends on which encoders are available
+	// (tracked as backlog item L67).
 	if embeddingScores, ok := r.embeddingCategoryScores(ctx, task); ok {
 		encoderParts = append(encoderParts, "embedding")
 		for category, emb := range embeddingScores {

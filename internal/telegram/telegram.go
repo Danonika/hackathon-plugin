@@ -105,6 +105,12 @@ func New(settings Settings) *Client {
 
 func (c *Client) WithHTTPClient(client *http.Client) *Client {
 	if client != nil {
+		// Preserve the security guard: the bot token is part of the request URL,
+		// so a redirect must never be followed. This overrides any caller
+		// CheckRedirect that would allow one.
+		client.CheckRedirect = func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
+		}
 		c.http = client
 	}
 	return c
@@ -156,7 +162,10 @@ type SendOptions struct {
 type SendResult struct {
 	MessageID int64  `json:"message_id"`
 	ChatID    string `json:"chat_id"`
-	Chunks    int    `json:"chunks"`
+	// Chunks counts chunks actually delivered; Planned is the total the message
+	// was split into. A partial failure reports Chunks < Planned.
+	Chunks  int `json:"chunks"`
+	Planned int `json:"planned"`
 }
 
 type BotInfo struct {
@@ -232,12 +241,22 @@ func (c *Client) SendMessage(ctx context.Context, text string, opts SendOptions)
 		return SendResult{}, fmt.Errorf("text is required")
 	}
 	var chunks []string
-	if strings.EqualFold(opts.ParseMode, "HTML") {
+	switch {
+	case strings.EqualFold(opts.ParseMode, "HTML"):
 		chunks = ChunkHTML(text, MaxMessageChars)
-	} else {
+	case opts.ParseMode == "":
 		chunks = ChunkText(text, MaxMessageChars)
+	case len([]rune(text)) > MaxMessageChars:
+		// Other entity-bearing parse modes (MarkdownV2, Markdown) cannot be
+		// split without risking a boundary inside an entity/escape that makes
+		// every chunk unparsable. Fail closed with a clear message instead of
+		// emitting chunks the API will reject.
+		return SendResult{}, fmt.Errorf("cannot split a %s message longer than %d characters; send it in shorter pieces", opts.ParseMode, MaxMessageChars)
+	default:
+		chunks = []string{text}
 	}
-	result := SendResult{ChatID: chatID, Chunks: len(chunks)}
+	result := SendResult{ChatID: chatID, Planned: len(chunks)}
+	sent := 0
 	for i, chunk := range chunks {
 		payload := map[string]any{"chat_id": chatID, "text": chunk}
 		if opts.ParseMode != "" {
@@ -250,12 +269,15 @@ func (c *Client) SendMessage(ctx context.Context, text string, opts SendOptions)
 			payload["reply_to_message_id"] = opts.ReplyTo
 		}
 		if err := c.wait(ctx); err != nil {
+			result.Chunks = sent
 			return result, err
 		}
 		raw, err := c.callWithRetry(ctx, "sendMessage", payload)
 		if err != nil {
+			result.Chunks = sent
 			return result, err
 		}
+		sent++
 		var message struct {
 			MessageID int64 `json:"message_id"`
 		}
@@ -263,6 +285,7 @@ func (c *Client) SendMessage(ctx context.Context, text string, opts SendOptions)
 			result.MessageID = message.MessageID
 		}
 	}
+	result.Chunks = sent
 	return result, nil
 }
 
@@ -555,7 +578,19 @@ func ChunkHTML(text string, limit int) []string {
 		}
 		budget := limit - len([]rune(prefix)) - closersBudget
 		if budget < 1 {
-			budget = 1
+			// The open tags need more than `limit` runes to reopen and close,
+			// so no valid chunk can be produced with this prefix. Close the
+			// pending tags in their own chunk and restart with a clean stack
+			// instead of emitting an oversized chunk Telegram rejects.
+			closers := ""
+			for i := len(stack) - 1; i >= 0; i-- {
+				closers += "</" + stack[i].name + ">"
+			}
+			if closers != "" {
+				chunks = append(chunks, closers)
+			}
+			stack = nil
+			continue
 		}
 		cut := pos + budget
 		if cut > len(runes) {
@@ -621,7 +656,8 @@ func scanTags(fragment string, stack []openTag) ([]openTag, string) {
 	return open, closers
 }
 
-// cutOutsideTag moves a cut back when it would land inside a tag.
+// cutOutsideTag moves a cut back when it would land inside a tag or split an
+// HTML entity such as &lt; or &#39;.
 func cutOutsideTag(runes []rune, start, cut int) int {
 	open := -1
 	for i := start; i < cut; i++ {
@@ -635,5 +671,28 @@ func cutOutsideTag(runes []rune, start, cut int) int {
 	if open >= 0 {
 		return open
 	}
+	if amp := unterminatedEntityStart(runes, start, cut); amp >= 0 {
+		return amp
+	}
 	return cut
+}
+
+// unterminatedEntityStart returns the index of an `&` whose entity is not
+// terminated by `;` before the cut, or -1 when the window contains no such
+// entity start.
+func unterminatedEntityStart(runes []rune, start, cut int) int {
+	for i := cut - 1; i >= start; i-- {
+		switch runes[i] {
+		case ';':
+			return -1
+		case '&':
+			return i
+		}
+		// Entity names are short; an older ampersand is not part of an entity
+		// straddling the cut.
+		if cut-i > 32 {
+			return -1
+		}
+	}
+	return -1
 }

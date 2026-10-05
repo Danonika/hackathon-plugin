@@ -4,14 +4,12 @@
     "SessionStart": [
       {
         "matcher": ".*",
-        "id": "session:start",
-        "description": "Inject routing mode, current plan stage, top learnings and pending eval decisions",
         "hooks": [
           {
             "type": "command",
             "command": "node \"$PLUGIN_ROOT/scripts/hooks.js\" session-start",
             "commandWindows": "node %PLUGIN_ROOT%\\scripts\\hooks.js session-start",
-            "timeout": 10
+            "timeout": 60
           }
         ]
       }
@@ -19,8 +17,6 @@
     "PostToolUse": [
       {
         "matcher": ".*",
-        "id": "session:tool",
-        "description": "Append tool events to logs/session-events.jsonl for the control plane",
         "hooks": [
           {
             "type": "command",
@@ -34,8 +30,6 @@
     "Stop": [
       {
         "matcher": ".*",
-        "id": "session:stop",
-        "description": "Close the session and clear the session marker",
         "hooks": [
           {
             "type": "command",

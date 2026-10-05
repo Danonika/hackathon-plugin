@@ -162,7 +162,10 @@ func registerCharts(reg *mcp.Registry, d Deps) {
 				return mcp.Fail(trace(ctx), werr.Error()), nil
 			}
 			total := 0
-			for _, s := range series {
+			for si, s := range series {
+				if kind == "bar" && si > 0 {
+					break
+				}
 				total += len(s.Points)
 			}
 			envelope := mcp.OK(trace(ctx), map[string]any{
@@ -384,7 +387,21 @@ func renderChartSVG(title, kind string, series []chartSeries) string {
 		}
 	}
 
-	labelSeries := series[0]
+	// Label the X axis from the longest line series (or the only drawn series
+	// for a bar chart) so labels are not compressed by a shorter first series.
+	labelIdx := 0
+	if kind != "bar" {
+		for i, s := range series {
+			if len(s.Points) > len(series[labelIdx].Points) {
+				labelIdx = i
+			}
+		}
+	}
+	labelSeries := series[labelIdx]
+	labelOffset := 0
+	for i := 0; i < labelIdx; i++ {
+		labelOffset += len(series[i].Points)
+	}
 	if len(labelSeries.Points) > 0 {
 		positions := []int{0, len(labelSeries.Points) / 2, len(labelSeries.Points) - 1}
 		seen := map[int]bool{}
@@ -401,8 +418,8 @@ func renderChartSVG(title, kind string, series []chartSeries) string {
 				label = string(runes[:24]) + "..."
 			}
 			labelX := xPos(idx, len(labelSeries.Points))
-			if useX && idx < len(xVals) {
-				labelX = xPosValue(xVals[idx])
+			if useX && labelOffset+idx < len(xVals) {
+				labelX = xPosValue(xVals[labelOffset+idx])
 			}
 			if kind == "bar" {
 				slot := plotW / float64(len(labelSeries.Points))
@@ -413,8 +430,13 @@ func renderChartSVG(title, kind string, series []chartSeries) string {
 		}
 	}
 
+	// Only drawn series belong in the legend (a bar chart renders series[0]).
+	legend := series
+	if kind == "bar" {
+		legend = series[:1]
+	}
 	legendY := 50.0
-	for si, s := range series {
+	for si, s := range legend {
 		color := colors[si%len(colors)]
 		x := left + float64(si)*170
 		fmt.Fprintf(&b, `<rect x="%.0f" y="%.0f" width="10" height="10" fill="%s"/>`+"\n", x, legendY-9, color)

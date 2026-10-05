@@ -406,8 +406,8 @@ func TestApplyCommissionKeepsDecidedEntriesFirst(t *testing.T) {
 }
 
 func TestCalibrateValidationAndRounding(t *testing.T) {
-	run1 := Aggregate{ValidJudges: 3, MeanTotal: 80, SnapshotSHA: "sha"}
-	run2 := Aggregate{ValidJudges: 3, MeanTotal: 83.456, SnapshotSHA: "sha"}
+	run1 := Aggregate{ValidJudges: 3, MeanTotal: 80, SnapshotSHA: "sha", RubricVersion: RubricVersion}
+	run2 := Aggregate{ValidJudges: 3, MeanTotal: 83.456, SnapshotSHA: "sha", RubricVersion: RubricVersion}
 	cal, err := Calibrate(run1, run2, 0.5, 0)
 	if err != nil {
 		t.Fatal(err)
@@ -448,8 +448,8 @@ func TestCalibrateValidationAndRounding(t *testing.T) {
 	}
 
 	cal, err = Calibrate(
-		Aggregate{ValidJudges: 3, MeanTotal: 80},
-		Aggregate{ValidJudges: 3, MeanTotal: 80},
+		Aggregate{ValidJudges: 3, MeanTotal: 80, RubricVersion: RubricVersion},
+		Aggregate{ValidJudges: 3, MeanTotal: 80, RubricVersion: RubricVersion},
 		0, 3,
 	)
 	if err != nil || cal.RetestDelta != 0 || cal.NoiseFloor != 0 {

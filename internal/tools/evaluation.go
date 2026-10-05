@@ -367,7 +367,9 @@ func registerEvaluation(reg *mcp.Registry, d Deps) {
 				if votes, ok := raw["votes"].(map[string]any); ok {
 					for sha, value := range votes {
 						fv, isNum := value.(float64)
-						if !isNum || fv < 0 || fv != math.Trunc(fv) {
+						// Bound the value before the int conversion: Go's
+						// float->int conversion is undefined out of range.
+						if !isNum || math.IsNaN(fv) || math.IsInf(fv, 0) || fv < 0 || fv > math.MaxInt32 || fv != math.Trunc(fv) {
 							return mcp.Fail(trace(ctx), fmt.Sprintf("vote for %s must be a non-negative integer", sha)), nil
 						}
 						commission.Votes[sha] = int(fv)
@@ -473,8 +475,13 @@ func aggregateData(agg evaluation.Aggregate) map[string]any {
 func readReports(root string, args map[string]any, pathsKey, jsonKey string) ([]evaluation.JudgeReport, []evaluation.InvalidReport, error) {
 	reports := []evaluation.JudgeReport{}
 	invalids := []evaluation.InvalidReport{}
+	// Use one monotonically increasing index across both input kinds so an
+	// inline entry and a file entry can never share the same Index.
+	index := 0
 	if raw, ok := args[jsonKey].([]any); ok {
-		for i, item := range raw {
+		for _, item := range raw {
+			i := index
+			index++
 			data, err := json.Marshal(item)
 			if err != nil {
 				invalids = append(invalids, evaluation.InvalidReport{Index: i, Reasons: []string{"cannot marshal inline report: " + err.Error()}})
@@ -488,7 +495,9 @@ func readReports(root string, args map[string]any, pathsKey, jsonKey string) ([]
 			reports = append(reports, report)
 		}
 	}
-	for i, rel := range argStringSlice(args, pathsKey) {
+	for _, rel := range argStringSlice(args, pathsKey) {
+		i := index
+		index++
 		full, err := resolveRepoPath(root, rel)
 		if err != nil {
 			// Kept as a dropped-invalid entry (the specific reason, e.g.
@@ -530,11 +539,15 @@ func resolveRepoPath(root, rel string) (string, error) {
 		return "", fmt.Errorf("path escapes repository root: %s", rel)
 	}
 	full := filepath.Join(root, clean)
-	if resolvedRoot, err := filepath.EvalSymlinks(root); err == nil {
-		resolved := resolveExistingPath(full)
-		if resolved != resolvedRoot && !strings.HasPrefix(resolved, resolvedRoot+string(filepath.Separator)) {
-			return "", fmt.Errorf("path resolves outside the repository root: %s", rel)
-		}
+	// Fail closed: if the root cannot be resolved the containment check is
+	// unverifiable, so reject the path instead of accepting it unchecked.
+	resolvedRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		return "", fmt.Errorf("cannot resolve repository root: %w", err)
+	}
+	resolved := resolveExistingPath(full)
+	if resolved != resolvedRoot && !strings.HasPrefix(resolved, resolvedRoot+string(filepath.Separator)) {
+		return "", fmt.Errorf("path resolves outside the repository root: %s", rel)
 	}
 	return full, nil
 }
@@ -616,7 +629,14 @@ func pathSegment(value string) string {
 		return "unknown"
 	}
 	if len(value) > 64 {
-		value = value[:64]
+		// Keep a short hash of the full value so distinct inputs that share a
+		// long prefix do not collapse onto the same path segment.
+		suffix := "-" + shortHash(value)
+		keep := 64 - len(suffix)
+		if keep < 1 {
+			keep = 1
+		}
+		value = value[:keep] + suffix
 	}
 	return value
 }

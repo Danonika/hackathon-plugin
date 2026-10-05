@@ -6,6 +6,7 @@ package atomicfile
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 )
@@ -17,6 +18,11 @@ const (
 	// reports, approvals) per the security-review checklist.
 	ModeState os.FileMode = 0o600
 )
+
+// tempMarker namespaces the temporary files this package creates, so the
+// stale-temp reclamation below can never touch a file another tool happens to
+// name like ours.
+const tempMarker = ".hackathonkit-tmp."
 
 // Write writes data to path atomically, creating parent directories as needed.
 // The temporary file is chmodded to mode because os.CreateTemp creates it with
@@ -37,8 +43,9 @@ func Write(path string, data []byte, mode os.FileMode) error {
 	}
 	// Best-effort: reclaim temp files left by a previous crash. Iterate the
 	// directory instead of globbing so metacharacters in the base name cannot
-	// widen the match set.
-	prefix := filepath.Base(path) + "."
+	// widen the match set, and require our unique marker so only files this
+	// package created are ever candidates.
+	prefix := filepath.Base(path) + tempMarker
 	if entries, err := os.ReadDir(dir); err == nil {
 		for _, entry := range entries {
 			name := entry.Name()
@@ -51,11 +58,21 @@ func Write(path string, data []byte, mode os.FileMode) error {
 			}
 		}
 	}
-	tmp, err := os.CreateTemp(dir, filepath.Base(path)+".*.tmp")
+	tmp, err := os.CreateTemp(dir, filepath.Base(path)+tempMarker+"*.tmp")
 	if err != nil {
 		return err
 	}
 	tmpName := tmp.Name()
+	if mode&0o077 == 0 && runtime.GOOS != "windows" {
+		// MkdirAll leaves an existing directory's mode untouched, so tighten it
+		// explicitly to keep the private-directory guarantee for state files.
+		// Done after CreateTemp so an unwritable directory still fails here.
+		if err := os.Chmod(dir, dirMode); err != nil {
+			tmp.Close()
+			os.Remove(tmpName)
+			return err
+		}
+	}
 	if _, err := tmp.Write(data); err != nil {
 		tmp.Close()
 		os.Remove(tmpName)
@@ -81,9 +98,16 @@ func Write(path string, data []byte, mode os.FileMode) error {
 		os.Remove(tmpName)
 		return err
 	}
-	if dirHandle, err := os.Open(dir); err == nil {
-		_ = dirHandle.Sync()
-		_ = dirHandle.Close()
+	// Sync the directory so the rename itself is durable, not just the file
+	// contents. A sync failure means the new name can disappear on a crash, so
+	// it must be surfaced instead of silently reported as success.
+	dirHandle, err := os.Open(dir)
+	if err != nil {
+		return err
 	}
-	return nil
+	if err := dirHandle.Sync(); err != nil {
+		dirHandle.Close()
+		return err
+	}
+	return dirHandle.Close()
 }

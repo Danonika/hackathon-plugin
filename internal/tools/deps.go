@@ -51,6 +51,10 @@ func trace(ctx context.Context) string {
 }
 
 func tool(name, description string, props map[string]any, required []string, handler mcp.Handler) mcp.Tool {
+	if props == nil {
+		// properties must be a JSON Schema object; emit {} rather than null.
+		props = map[string]any{}
+	}
 	schema := map[string]any{"type": "object", "properties": props}
 	if len(required) > 0 {
 		schema["required"] = required
@@ -112,9 +116,13 @@ func argInt(args map[string]any, key string, def int) int {
 	if math.IsNaN(value) || math.IsInf(value, 0) {
 		return def
 	}
-	// Out-of-range values fall back to the default so callers can tell that
-	// the supplied value was not usable.
+	// Out-of-range values and fractions fall back to the default so callers can
+	// tell that the supplied value was not usable instead of getting a silently
+	// truncated integer.
 	if value > float64(math.MaxInt32) || value < float64(math.MinInt32) {
+		return def
+	}
+	if value != math.Trunc(value) {
 		return def
 	}
 	return int(value)
@@ -164,7 +172,13 @@ func argStringSlice(args map[string]any, key string) []string {
 
 func argMap(args map[string]any, key string) map[string]any {
 	if v, ok := args[key].(map[string]any); ok {
-		return v
+		// Return a shallow copy so later in-place mutation by a handler does
+		// not leak into the caller's argument map.
+		out := make(map[string]any, len(v))
+		for k, item := range v {
+			out[k] = item
+		}
+		return out
 	}
 	return nil
 }

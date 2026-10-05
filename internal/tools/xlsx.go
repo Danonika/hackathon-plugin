@@ -73,7 +73,7 @@ func readXLSXTable(path string, sheetName string) (*table, []string, error) {
 	}
 	styles, styleWarnings := readXLSXStyles(zr)
 	warnings = append(warnings, styleWarnings...)
-	rows, err := readSheetRows(f, shared, styles)
+	rows, err := readSheetRows(f, shared, styles, &xlsxBudget{})
 	if err != nil {
 		return nil, warnings, err
 	}
@@ -111,15 +111,24 @@ func readXLSXSheets(path string) ([]xlsxSheet, []string, error) {
 	}
 
 	out := make([]xlsxSheet, 0, len(refs))
+	budget := &xlsxBudget{}
 	for _, ref := range refs {
+		if budget.cells > maxXLSXCells || budget.rows > maxXLSXRows {
+			warnings = append(warnings, "xlsx: workbook budget exhausted; remaining sheets were skipped")
+			break
+		}
 		f := zipFind(zr, ref.Path)
 		if f == nil {
 			warnings = append(warnings, fmt.Sprintf("xlsx: sheet %s file %s is missing", ref.Name, ref.Path))
 			continue
 		}
-		rows, err := readSheetRows(f, shared, styles)
+		rows, err := readSheetRows(f, shared, styles, budget)
 		if err != nil {
 			warnings = append(warnings, fmt.Sprintf("xlsx: sheet %s failed: %v", ref.Name, err))
+			if budget.cells > maxXLSXCells || budget.rows > maxXLSXRows {
+				warnings = append(warnings, "xlsx: workbook budget exhausted; remaining sheets were skipped")
+				break
+			}
 			continue
 		}
 		out = append(out, xlsxSheet{Name: ref.Name, Table: rowsToTable(rows)})
@@ -162,7 +171,10 @@ func workbookSheets(zr *zip.ReadCloser) ([]xlsxSheetRef, []string) {
 	warnings := []string{}
 	rels := map[string]string{}
 	if f := zipFind(zr, "xl/_rels/workbook.xml.rels"); f != nil {
-		if rc, err := f.Open(); err == nil {
+		rc, openErr := f.Open()
+		if openErr != nil {
+			warnings = append(warnings, "xlsx: workbook.xml.rels could not be opened: "+openErr.Error())
+		} else {
 			dec := xml.NewDecoder(&maxBytesReader{r: rc, remaining: maxXLSXPartBytes})
 			for {
 				tok, err := dec.Token()
@@ -236,6 +248,8 @@ func workbookSheets(zr *zip.ReadCloser) ([]xlsxSheetRef, []string) {
 				refs = append(refs, xlsxSheetRef{Name: name, Path: path})
 			}
 			rc.Close()
+		} else {
+			warnings = append(warnings, "xlsx: workbook.xml could not be opened: "+err.Error())
 		}
 	}
 	return refs, warnings
@@ -304,7 +318,38 @@ func readSharedStrings(f *zip.File) ([]string, error) {
 	return out, nil
 }
 
-func readSheetRows(f *zip.File, shared []string, styles xlsxStyles) ([][]string, error) {
+// xlsxBudget tracks work across all worksheets of a workbook so a multi-sheet
+// file cannot bypass the per-sheet caps.
+type xlsxBudget struct {
+	cells int
+	rows  int
+}
+
+func (b *xlsxBudget) addCells(n int) error {
+	b.cells += n
+	if b.cells > maxXLSXCells {
+		return fmt.Errorf("workbook exceeds %d cells", maxXLSXCells)
+	}
+	return nil
+}
+
+func (b *xlsxBudget) addRow() error {
+	b.rows++
+	if b.rows > maxXLSXRows {
+		return fmt.Errorf("workbook exceeds %d rows", maxXLSXRows)
+	}
+	return nil
+}
+
+func budgetOrNew(b *xlsxBudget) *xlsxBudget {
+	if b == nil {
+		return &xlsxBudget{}
+	}
+	return b
+}
+
+func readSheetRows(f *zip.File, shared []string, styles xlsxStyles, budget *xlsxBudget) ([][]string, error) {
+	budget = budgetOrNew(budget)
 	rc, err := f.Open()
 	if err != nil {
 		return nil, err
@@ -312,7 +357,6 @@ func readSheetRows(f *zip.File, shared []string, styles xlsxStyles) ([][]string,
 	defer rc.Close()
 	dec := xml.NewDecoder(&maxBytesReader{r: rc, remaining: maxXLSXSheetBytes})
 	var rows [][]string
-	totalCells := 0
 	var curRow []string
 	var curVal strings.Builder
 	var curType, curRef string
@@ -376,7 +420,7 @@ func readSheetRows(f *zip.File, shared []string, styles xlsxStyles) ([][]string,
 					}
 				}
 				if (curType == "" || curType == "n") && curStyle >= 0 {
-					if serial, ok := parseNumber(value); ok {
+					if serial, ok := parseNumber(value); ok && validExcelSerial(serial) {
 						switch {
 						case styles.dateStyles[curStyle]:
 							value = formatExcelDateTime(excelSerialToTime(serial, styles.date1904))
@@ -398,17 +442,16 @@ func readSheetRows(f *zip.File, shared []string, styles xlsxStyles) ([][]string,
 				if newCells < 1 {
 					newCells = 1
 				}
-				totalCells += newCells
-				if totalCells > maxXLSXCells {
-					return nil, fmt.Errorf("worksheet exceeds %d cells", maxXLSXCells)
+				if err := budget.addCells(newCells); err != nil {
+					return nil, err
 				}
 				for len(curRow) <= col {
 					curRow = append(curRow, "")
 				}
 				curRow[col] = value
 			case "row":
-				if len(rows) >= maxXLSXRows {
-					return nil, fmt.Errorf("worksheet exceeds %d rows", maxXLSXRows)
+				if err := budget.addRow(); err != nil {
+					return nil, err
 				}
 				rows = append(rows, curRow)
 				inRow = false
@@ -441,8 +484,23 @@ type maxBytesReader struct {
 }
 
 func (m *maxBytesReader) Read(p []byte) (int, error) {
-	if m.remaining <= 0 {
+	if m.remaining < 0 {
 		return 0, fmt.Errorf("zip entry exceeds the configured size limit")
+	}
+	if m.remaining == 0 {
+		// Probe one extra byte so an entry whose decompressed size is exactly
+		// the limit ends with a clean io.EOF instead of a false overrun.
+		var one [1]byte
+		for {
+			n, err := m.r.Read(one[:])
+			if n > 0 {
+				m.remaining = -1
+				return 0, fmt.Errorf("zip entry exceeds the configured size limit")
+			}
+			if err != nil {
+				return 0, err
+			}
+		}
 	}
 	if int64(len(p)) > m.remaining {
 		p = p[:m.remaining]
@@ -505,6 +563,8 @@ func readXLSXStyles(zr *zip.ReadCloser) (xlsxStyles, []string) {
 				}
 			}
 			rc.Close()
+		} else {
+			warnings = append(warnings, "xlsx: workbook.xml could not be opened: "+err.Error())
 		}
 	}
 	f := zipFind(zr, "xl/styles.xml")
@@ -513,6 +573,7 @@ func readXLSXStyles(zr *zip.ReadCloser) (xlsxStyles, []string) {
 	}
 	rc, err := f.Open()
 	if err != nil {
+		warnings = append(warnings, "xlsx: styles.xml could not be opened: "+err.Error())
 		return out, warnings
 	}
 	defer rc.Close()
@@ -647,6 +708,14 @@ func isElapsedToken(section string) bool {
 		}
 	}
 	return true
+}
+
+// maxExcelSerial is the serial for 9999-12-31; values outside a sane range
+// would overflow the integer conversions in the formatters below.
+const maxExcelSerial = 2958466.0
+
+func validExcelSerial(serial float64) bool {
+	return !math.IsNaN(serial) && !math.IsInf(serial, 0) && serial > -maxExcelSerial && serial < maxExcelSerial
 }
 
 func excelSerialToTime(serial float64, date1904 bool) time.Time {

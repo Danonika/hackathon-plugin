@@ -8,6 +8,22 @@ function Fail([string]$Message) {
   exit 1
 }
 
+# Recursively delete a tree without following junctions/symlinks (Windows
+# PowerShell 5.1's Remove-Item -Recurse descends into directory links).
+function Remove-TreeNoReparse([string]$Path) {
+  $item = Get-Item -LiteralPath $Path -Force
+  if ($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) {
+    Remove-Item -LiteralPath $Path -Force -ErrorAction Stop
+    return
+  }
+  if ($item.PSIsContainer) {
+    foreach ($child in Get-ChildItem -LiteralPath $Path -Force) {
+      Remove-TreeNoReparse $child.FullName
+    }
+  }
+  Remove-Item -LiteralPath $Path -Force -ErrorAction Stop
+}
+
 if ($Profile -notin @("core", "full")) {
   Fail "[setup] invalid profile: $Profile (expected core or full)"
 }
@@ -44,6 +60,16 @@ $envPath = Join-Path $root ".env"
 $hasToken = $false
 if (Test-Path -LiteralPath $envPath) {
   $hasToken = [bool](Select-String -LiteralPath $envPath -Pattern '^HACKATHONKIT_DEMO_TOKEN=.' -Quiet -ErrorAction SilentlyContinue)
+  if ($hasToken) {
+    # A shipped placeholder must not be mistaken for a real secret.
+    $tokenMatch = Select-String -LiteralPath $envPath -Pattern '^HACKATHONKIT_DEMO_TOKEN=(.*)$' -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($tokenMatch) {
+      $tokenValue = $tokenMatch.Matches[0].Groups[1].Value.Trim()
+      if ($tokenValue -match '^(?i)(changeme|change-me|your-token-here|your_token_here|replace-me|placeholder|example|demo|demo-token|<[^>]*>)$') {
+        $hasToken = $false
+      }
+    }
+  }
 }
 if (-not $hasToken) {
   $bytes = New-Object byte[] 16
@@ -57,7 +83,20 @@ if (-not $hasToken) {
       if ($lines[$i] -match '^HACKATHONKIT_DEMO_TOKEN=') { $lines[$i] = "HACKATHONKIT_DEMO_TOKEN=$token"; $replaced = $true }
     }
     if (-not $replaced) { $lines += "HACKATHONKIT_DEMO_TOKEN=$token" }
-    Set-Content -LiteralPath $envPath -Value $lines
+    # Write atomically with BOM-less UTF-8 so an interrupted run cannot corrupt
+    # .env and PowerShell 5.1 does not prepend a BOM.
+    $envTmp = "$envPath.tmp.$PID"
+    try {
+      [System.IO.File]::WriteAllLines($envTmp, [string[]]$lines, (New-Object System.Text.UTF8Encoding($false)))
+      if (Test-Path -LiteralPath $envPath) {
+        [System.IO.File]::Replace($envTmp, $envPath, $null)
+      } else {
+        [System.IO.File]::Move($envTmp, $envPath)
+      }
+    } finally {
+      if (Test-Path -LiteralPath $envTmp) { Remove-Item -LiteralPath $envTmp -Force -ErrorAction SilentlyContinue }
+    }
+    if (-not (Test-Path -LiteralPath $envPath)) { throw "atomic .env write did not produce $envPath" }
     Write-Host "[setup] generated HACKATHONKIT_DEMO_TOKEN for the demo API"
   } catch {
     Write-Warning "[setup] could not generate a demo token; set HACKATHONKIT_DEMO_TOKEN manually"
@@ -65,16 +104,16 @@ if (-not $hasToken) {
 }
 
 $global:LASTEXITCODE = 0
-& (Join-Path $root "scripts\sync-harness.ps1")
+& (Join-Path $root "scripts/sync-harness.ps1")
 if ($LASTEXITCODE -ne 0) { Fail "[setup] sync-harness failed" }
 
 # Codex plugins cannot bundle slash commands; install /verify as a custom prompt.
-& (Join-Path $root "scripts\install-prompts.ps1") install
+& (Join-Path $root "scripts/install-prompts.ps1") install
 if ($LASTEXITCODE -ne 0) { Write-Warning "[setup] could not install the Codex command prompts" }
 
 if ($Profile -eq "core") {
-  foreach ($dir in @((Join-Path $root ".agents\skills"), (Join-Path $root ".claude\skills"))) {
-    if (-not (Test-Path $dir)) { continue }
+  foreach ($dir in @((Join-Path $root ".agents/skills"), (Join-Path $root ".claude/skills"))) {
+    if (-not (Test-Path -LiteralPath $dir)) { continue }
     $dirFull = [System.IO.Path]::GetFullPath($dir).TrimEnd([System.IO.Path]::DirectorySeparatorChar) + [System.IO.Path]::DirectorySeparatorChar
     foreach ($skill in @("judge", "project-cost", "roast-project", "cp-expert-refactoring", "system-design-expert", "self-improvement-controller", "output-self-check", "skill-authoring", "qa-expert")) {
       $skillPath = Join-Path $dir $skill
@@ -89,7 +128,8 @@ if ($Profile -eq "core") {
           Write-Warning "[setup] skipping reparse point: $skillPath"
           continue
         }
-        Remove-Item -LiteralPath $skillPath -Recurse -Force -ErrorAction SilentlyContinue
+        try { Remove-TreeNoReparse $skillPath }
+        catch { Write-Warning "[setup] could not remove ${skillPath}: $($_.Exception.Message)" }
       }
     }
   }
@@ -97,15 +137,25 @@ if ($Profile -eq "core") {
 }
 
 $global:LASTEXITCODE = 0
-& (Join-Path $root "scripts\gen-mcp-manifest.ps1") -Root $root
+& (Join-Path $root "scripts/gen-mcp-manifest.ps1") -Root $root
 if ($LASTEXITCODE -ne 0) { Fail "[setup] manifest generation failed" }
 
-New-Item -ItemType Directory -Force -Path (Join-Path $root "logs"), (Join-Path $root "evals"), (Join-Path $root "data\artifacts"), (Join-Path $root "data\index"), (Join-Path $root "data\control"), (Join-Path $root "data\judge-bundles") | Out-Null
+New-Item -ItemType Directory -Force -Path (Join-Path $root "logs"), (Join-Path $root "evals"), (Join-Path $root "data/artifacts"), (Join-Path $root "data/index"), (Join-Path $root "data/control"), (Join-Path $root "data/judge-bundles") | Out-Null
 
 $dockerOk = $false
-if (Get-Command docker -ErrorAction SilentlyContinue) {
+if (Get-Command docker -CommandType Application -ErrorAction SilentlyContinue) {
+  $global:LASTEXITCODE = 0
   docker info *> $null
   $dockerOk = ($LASTEXITCODE -eq 0)
+  if ($dockerOk) {
+    # A reachable daemon is not enough: the compose plugin must exist too.
+    $global:LASTEXITCODE = 0
+    docker compose version *> $null
+    if ($LASTEXITCODE -ne 0) {
+      Write-Warning "[setup] docker is running but the compose plugin is unavailable; building local binaries instead"
+      $dockerOk = $false
+    }
+  }
 }
 
 $runtime = "binary"
@@ -134,7 +184,7 @@ if ($dockerOk) {
 }
 
 $global:LASTEXITCODE = 0
-& (Join-Path $root "scripts\write-install-state.ps1") -Root $root -Profile $Profile -Runtime $runtime
+& (Join-Path $root "scripts/write-install-state.ps1") -Root $root -Profile $Profile -Runtime $runtime
 if ($LASTEXITCODE -ne 0) { Fail "[setup] write-install-state failed" }
 
 $codex = Get-Command codex -ErrorAction SilentlyContinue
@@ -145,14 +195,16 @@ if ($codex) {
   & codex plugin marketplace add $root *> $null
   $marketExit = $LASTEXITCODE
   if ($marketExit -ne 0) {
-    Write-Warning "[setup] codex plugin marketplace add failed (exit $marketExit)"
-  }
-  & codex plugin add hackathonkit@hackathonkit-local *> $null
-  $addExit = $LASTEXITCODE
-  if ($addExit -eq 0) {
-    Write-Host "[setup] plugin installed; start a NEW Codex session to load it"
+    # Adding the plugin cannot succeed while the marketplace is unregistered.
+    Write-Warning "[setup] codex plugin marketplace add failed (exit $marketExit); skipping plugin install. Run manually: codex plugin marketplace add '$root'; codex plugin add hackathonkit@hackathonkit-local"
   } else {
-    Write-Warning "[setup] could not install the plugin automatically (marketplace exit $marketExit, add exit $addExit). Run manually: codex plugin marketplace add '$root'; codex plugin add hackathonkit@hackathonkit-local"
+    & codex plugin add hackathonkit@hackathonkit-local *> $null
+    $addExit = $LASTEXITCODE
+    if ($addExit -eq 0) {
+      Write-Host "[setup] plugin installed; start a NEW Codex session to load it"
+    } else {
+      Write-Warning "[setup] could not install the plugin automatically (add exit $addExit). Run manually: codex plugin add hackathonkit@hackathonkit-local"
+    }
   }
 } else {
   Write-Warning "[setup] codex CLI not found; install it (npm install -g @openai/codex) and re-run setup"

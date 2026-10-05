@@ -15,6 +15,15 @@ function Copy-NoReparse([string]$From, [string]$To) {
   }
 }
 
+function Get-TreeManifest([string]$Path) {
+  @(Get-ChildItem -LiteralPath $Path -Recurse -File -Force |
+    Where-Object { -not ($_.Attributes -band [System.IO.FileAttributes]::ReparsePoint) } |
+    ForEach-Object {
+      $rel = $_.FullName.Substring($Path.Length).TrimStart('\', '/')
+      "$rel|$((Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash)"
+    } | Sort-Object)
+}
+
 if (-not $PSCommandPath) {
   Fail "[sync-skills] PSCommandPath is empty; run this script as a file, not dot-sourced"
 }
@@ -86,7 +95,11 @@ for ($i = 0; $i -lt 100; $i++) {
           Move-Item -LiteralPath $lock -Destination $stalePath -Force -ErrorAction Stop
           # The stale lock was renamed atomically: only the winner proceeds.
           Remove-Item -LiteralPath $stalePath -Recurse -Force -ErrorAction SilentlyContinue
-        } catch {}
+        } catch {
+          Write-Verbose "[sync-skills] could not evict the stale lock: $($_.Exception.Message)"
+        }
+        # Avoid a tight spin when eviction keeps failing.
+        Start-Sleep -Milliseconds 200
         continue
       }
     }
@@ -128,16 +141,16 @@ if (Test-Path -LiteralPath $tmp) { Remove-Item -LiteralPath $tmp -Recurse -Force
 New-Item -ItemType Directory -Force -Path $tmp | Out-Null
 try {
   Copy-NoReparse $src $tmp
-  $srcNames = @(Get-ChildItem -LiteralPath $src -Directory -Force |
-    Where-Object { -not ($_.Attributes -band [System.IO.FileAttributes]::ReparsePoint) } |
-    Select-Object -ExpandProperty Name | Sort-Object)
-  $dstNames = @(Get-ChildItem -LiteralPath $tmp -Directory -Force |
-    Select-Object -ExpandProperty Name | Sort-Object)
-  if (Compare-Object -ReferenceObject $srcNames -DifferenceObject $dstNames) {
-    Fail "[sync-skills] mirror mismatch: source $($srcNames.Count), copied $($dstNames.Count)"
+  # Compare the full relative file set (path + hash), not just top-level names.
+  if (Compare-Object -ReferenceObject (Get-TreeManifest $src) -DifferenceObject (Get-TreeManifest $tmp)) {
+    Fail "[sync-skills] mirror content mismatch between source and copy"
   }
-  $count = $dstNames.Count
-  $srcCount = $srcNames.Count
+  $srcCount = (Get-ChildItem -LiteralPath $src -Directory -Force).Count
+  $dstCount = (Get-ChildItem -LiteralPath $tmp -Directory -Force).Count
+  if ($srcCount -ne $dstCount) {
+    Fail "[sync-skills] mirror mismatch: source $srcCount, copied $dstCount"
+  }
+  $count = $dstCount
   # Move the live mirror aside before the swap so a failure can restore it.
   $old = "$dst.old.$PID"
   if (Test-Path -LiteralPath $dst) { Move-Item -LiteralPath $dst -Destination $old -Force }

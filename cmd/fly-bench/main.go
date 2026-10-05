@@ -100,7 +100,10 @@ func run(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "fly-bench: %d suite line(s) skipped: %s\n", len(skipped), strings.Join(skipped, "; "))
 	}
 
-	ctx := context.Background()
+	// Bound the whole run so a stalled provider cannot make the benchmark hang
+	// indefinitely; the per-call HTTP timeout alone does not cap the total.
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+	defer cancel()
 	baseline := fly.NewRouter(cfg.Routing)
 	full := fly.NewRouter(cfg.Routing)
 	oa := openai.New(cfg.OpenAI)
@@ -111,8 +114,13 @@ func run(args []string, stdout, stderr io.Writer) int {
 	full.WithEmbeddings(embedder, filepath.Join(root, "data", "index", "fly-embeddings.json"), cfg.OpenAI.EmbeddingModel+"+hash512")
 
 	// Warm the lazy caches (centroids, brain, memory) before timing so the
-	// first row does not absorb their build cost.
-	full.Recommend(ctx, "warmup", nil, nil)
+	// first row does not absorb their build cost. Verify the embedding path
+	// actually engaged, otherwise a silent hash fallback would be published as
+	// if the full pipeline had been measured.
+	warmup := full.Recommend(ctx, "warmup", nil, nil)
+	if !strings.Contains(warmup.Encoder, "embedding") {
+		fmt.Fprintf(stderr, "fly-bench: warning: embedding path did not engage (encoder=%q); semantic signal may be degraded\n", warmup.Encoder)
+	}
 
 	results := make([]rowResult, 0, len(rows))
 	// Normalize the effective k the way fly.NewRouter does (default 5 when the
@@ -141,7 +149,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 			BaselineRecall:  recall(row.Expected, baselineRes.Recommendations, topK),
 			FlyRecall:       recall(row.Expected, flyRes.Recommendations, topK),
 			Agreement:       len(baselineRes.Recommendations) > 0 && len(flyRes.Recommendations) > 0 && top1(baselineRes.Recommendations) == top1(flyRes.Recommendations),
-			Deterministic:   len(flyRes.Recommendations) > 0 && top1(flyRes.Recommendations) == top1(again.Recommendations),
+			Deterministic:   len(flyRes.Recommendations) > 0 && sameOrder(flyRes.Recommendations, again.Recommendations),
 			BaselineLatency: baselineLatency,
 			FlyLatency:      flyLatency,
 			FlyEncoder:      flyRes.Encoder,
@@ -164,7 +172,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		GeneratedAt: time.Now().UTC(),
 		Suite:       *suite,
 		Summary:     summarize(results, topK),
-		Determinism: "warm (caches primed before the loop)",
+		Determinism: "warm router, full ranked order compared across repeats (caches primed before the loop)",
 		Rows:        results,
 	}
 	path, err := save(root, rep)
@@ -175,7 +183,10 @@ func run(args []string, stdout, stderr io.Writer) int {
 	if *jsonOnly {
 		enc := json.NewEncoder(stdout)
 		enc.SetIndent("", "  ")
-		_ = enc.Encode(rep)
+		if err := enc.Encode(rep); err != nil {
+			fmt.Fprintln(stderr, "error:", err)
+			return 1
+		}
 		return 0
 	}
 	fmt.Fprintf(stdout, "fly-bench: %d tasks (top_k=%d)\n", rep.Summary.Tasks, rep.Summary.TopK)
@@ -228,6 +239,20 @@ func top1(recs []fly.Recommendation) string {
 		return ""
 	}
 	return recs[0].Capability
+}
+
+// sameOrder reports whether two recommendation lists are identical, including
+// their full ranked order (not just the top-1 capability).
+func sameOrder(a, b []fly.Recommendation) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i].Capability != b[i].Capability {
+			return false
+		}
+	}
+	return true
 }
 
 func recall(expected []string, recs []fly.Recommendation, k int) float64 {

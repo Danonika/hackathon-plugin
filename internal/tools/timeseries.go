@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"fmt"
+	"math"
 	"sort"
 	"strings"
 	"time"
@@ -16,7 +17,7 @@ type seriesPoint struct {
 	Raw string
 }
 
-func loadSeries(t *table, timeColumn, valueColumn string) ([]seriesPoint, string, string, error) {
+func loadSeries(t *table, timeColumn, valueColumn string) ([]seriesPoint, string, string, int, error) {
 	profiles := profileColumns(t, nil)
 	timeIdx := -1
 	valueIdx := -1
@@ -44,33 +45,36 @@ func loadSeries(t *table, timeColumn, valueColumn string) ([]seriesPoint, string
 	}
 	if timeIdx < 0 {
 		if timeColumn != "" {
-			return nil, "", "", fmt.Errorf("time_column %q was not found in the table", timeColumn)
+			return nil, "", "", 0, fmt.Errorf("time_column %q was not found in the table", timeColumn)
 		}
-		return nil, "", "", fmt.Errorf("could not detect a time column; pass time_column explicitly")
+		return nil, "", "", 0, fmt.Errorf("could not detect a time column; pass time_column explicitly")
 	}
 	if valueIdx < 0 {
 		if valueColumn != "" {
-			return nil, "", "", fmt.Errorf("value_column %q was not found in the table", valueColumn)
+			return nil, "", "", 0, fmt.Errorf("value_column %q was not found in the table", valueColumn)
 		}
-		return nil, "", "", fmt.Errorf("could not detect a value column; pass value_column explicitly")
+		return nil, "", "", 0, fmt.Errorf("could not detect a value column; pass value_column explicitly")
 	}
 	points := []seriesPoint{}
+	skipped := 0
 	for _, row := range t.Rows {
 		if timeIdx >= len(row) || valueIdx >= len(row) {
+			skipped++
 			continue
 		}
 		ts, okT := parseTimeValue(row[timeIdx])
 		val, okV := parseNumber(row[valueIdx])
 		if !okT || !okV {
+			skipped++
 			continue
 		}
 		points = append(points, seriesPoint{T: ts, V: val, Raw: row[timeIdx]})
 	}
 	if len(points) < 3 {
-		return nil, "", "", fmt.Errorf("not enough valid (time, value) rows: %d", len(points))
+		return nil, "", "", skipped, fmt.Errorf("not enough valid (time, value) rows: %d", len(points))
 	}
 	sort.Slice(points, func(i, j int) bool { return points[i].T.Before(points[j].T) })
-	return points, timeColumn, valueColumn, nil
+	return points, timeColumn, valueColumn, skipped, nil
 }
 
 func downsample(points []seriesPoint, maxPoints int) []seriesPoint {
@@ -128,9 +132,12 @@ func registerTimeSeries(reg *mcp.Registry, d Deps) {
 			if fail != nil {
 				return *fail, nil
 			}
-			points, timeCol, valueCol, err := loadSeries(t, argString(args, "time_column"), argString(args, "value_column"))
+			points, timeCol, valueCol, skipped, err := loadSeries(t, argString(args, "time_column"), argString(args, "value_column"))
 			if err != nil {
 				return mcp.Fail(trace(ctx), err.Error()), nil
+			}
+			if skipped > 0 {
+				warnings = append(warnings, fmt.Sprintf("%d row(s) skipped: the time or value cell could not be parsed", skipped))
 			}
 			values := make([]float64, 0, len(points))
 			for _, p := range points {
@@ -144,7 +151,7 @@ func registerTimeSeries(reg *mcp.Registry, d Deps) {
 			series := make([]map[string]any, 0, len(sample))
 			for _, p := range sample {
 				series = append(series, map[string]any{
-					"t": p.T.UTC().Format(time.RFC3339),
+					"t": p.T.UTC().Format(time.RFC3339Nano),
 					"v": round2(p.V),
 				})
 			}
@@ -153,8 +160,8 @@ func registerTimeSeries(reg *mcp.Registry, d Deps) {
 				"time_column":    timeCol,
 				"value_column":   valueCol,
 				"count":          len(points),
-				"start":          first.T.UTC().Format(time.RFC3339),
-				"end":            last.T.UTC().Format(time.RFC3339),
+				"start":          first.T.UTC().Format(time.RFC3339Nano),
+				"end":            last.T.UTC().Format(time.RFC3339Nano),
 				"min":            round2(minOf(values)),
 				"max":            round2(maxOf(values)),
 				"mean":           round2(mean(values)),
@@ -188,9 +195,12 @@ func registerTimeSeries(reg *mcp.Registry, d Deps) {
 			if fail != nil {
 				return *fail, nil
 			}
-			points, timeCol, valueCol, err := loadSeries(t, argString(args, "time_column"), argString(args, "value_column"))
+			points, timeCol, valueCol, skipped, err := loadSeries(t, argString(args, "time_column"), argString(args, "value_column"))
 			if err != nil {
 				return mcp.Fail(trace(ctx), err.Error()), nil
+			}
+			if skipped > 0 {
+				warnings = append(warnings, fmt.Sprintf("%d row(s) skipped: the time or value cell could not be parsed", skipped))
 			}
 			method := strings.ToLower(argString(args, "method"))
 			if method == "" {
@@ -230,7 +240,7 @@ func registerTimeSeries(reg *mcp.Registry, d Deps) {
 							score = dist / iqr
 						}
 						anomalies = append(anomalies, anomaly{
-							Timestamp: p.T.UTC().Format(time.RFC3339),
+							Timestamp: p.T.UTC().Format(time.RFC3339Nano),
 							Value:     round2(p.V),
 							Score:     round2(score),
 							Method:    "iqr",
@@ -248,23 +258,36 @@ func registerTimeSeries(reg *mcp.Registry, d Deps) {
 					warnings = append(warnings, fmt.Sprintf("threshold %v must be positive; using 3.0", threshold))
 					threshold = 3.0
 				}
+				// Rolling sums keep the window statistics O(1) per point instead
+				// of recomputing mean/stddev over the whole window each time.
+				var sum, sumSq float64
 				for i := 1; i < len(points); i++ {
+					v := points[i-1].V
+					sum += v
+					sumSq += v * v
+					if drop := i - 1 - window; drop >= 0 {
+						dv := points[drop].V
+						sum -= dv
+						sumSq -= dv * dv
+					}
 					start := i - window
 					if start < 0 {
 						start = 0
 					}
-					if i-start < 3 {
+					n := i - start
+					if n < 3 {
 						continue
 					}
-					values := make([]float64, 0, i-start)
-					for j := start; j < i; j++ {
-						values = append(values, points[j].V)
+					m := sum / float64(n)
+					variance := (sumSq - sum*sum/float64(n)) / float64(n-1)
+					if variance < 0 {
+						variance = 0
 					}
-					m, s := mean(values), stddev(values)
+					s := math.Sqrt(variance)
 					if s == 0 {
 						if points[i].V != m {
 							anomalies = append(anomalies, anomaly{
-								Timestamp: points[i].T.UTC().Format(time.RFC3339),
+								Timestamp: points[i].T.UTC().Format(time.RFC3339Nano),
 								Value:     round2(points[i].V),
 								Score:     0,
 								Method:    "constant-window",
@@ -278,7 +301,7 @@ func registerTimeSeries(reg *mcp.Registry, d Deps) {
 					}
 					if z >= threshold {
 						anomalies = append(anomalies, anomaly{
-							Timestamp: points[i].T.UTC().Format(time.RFC3339),
+							Timestamp: points[i].T.UTC().Format(time.RFC3339Nano),
 							Value:     round2(points[i].V),
 							Score:     round2(z),
 							Method:    "zscore",
@@ -317,6 +340,9 @@ func registerTimeSeries(reg *mcp.Registry, d Deps) {
 }
 
 func minOf(values []float64) float64 {
+	if len(values) == 0 {
+		return 0
+	}
 	m := values[0]
 	for _, v := range values {
 		if v < m {
@@ -327,6 +353,9 @@ func minOf(values []float64) float64 {
 }
 
 func maxOf(values []float64) float64 {
+	if len(values) == 0 {
+		return 0
+	}
 	m := values[0]
 	for _, v := range values {
 		if v > m {

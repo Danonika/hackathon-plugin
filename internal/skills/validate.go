@@ -79,8 +79,10 @@ type openaiInterface struct {
 
 var (
 	headingPattern = regexp.MustCompile(`(?m)^##\s+(.+?)\s*$`)
-	refPattern     = regexp.MustCompile("`(references/[^`]+)`")
-	mdRefPattern   = regexp.MustCompile(`\]\((references/[^)]+)\)`)
+	// Capture only the path, stopping at a fragment, title, or whitespace so
+	// `references/x.md#anchor` and [x](references/x.md "Title") stay clean.
+	refPattern   = regexp.MustCompile("`(references/[^`\\s#]+)")
+	mdRefPattern = regexp.MustCompile(`\]\((references/[^)\s#]+)`)
 )
 
 func Validate(root string) (Report, error) {
@@ -124,7 +126,11 @@ func validateSkill(base, name string) SkillReport {
 
 	data, err := os.ReadFile(filepath.Join(dir, "SKILL.md"))
 	if err != nil {
-		item.Problems = append(item.Problems, "missing SKILL.md")
+		if os.IsNotExist(err) {
+			item.Problems = append(item.Problems, "missing SKILL.md")
+		} else {
+			item.Problems = append(item.Problems, fmt.Sprintf("cannot read SKILL.md: %v", err))
+		}
 		item.OK = false
 		return item
 	}
@@ -200,9 +206,13 @@ func validateSkill(base, name string) SkillReport {
 	doc, err := validateOpenAIYAML(dir)
 	if err != nil {
 		item.Problems = append(item.Problems, err.Error())
-	} else if strings.Contains(strings.ToLower(fm.Description), "explicit-only:") {
-		if doc.Policy.AllowImplicitInvocation == nil || *doc.Policy.AllowImplicitInvocation {
-			item.Problems = append(item.Problems, "explicit-only skill must set policy.allow_implicit_invocation: false in agents/openai.yaml")
+	} else {
+		desc := strings.ToLower(fm.Description)
+		explicitOnly := strings.Contains(desc, "explicit-only:") || strings.Contains(desc, "explicit-only;")
+		if explicitOnly {
+			if doc.Policy.AllowImplicitInvocation == nil || *doc.Policy.AllowImplicitInvocation {
+				item.Problems = append(item.Problems, "explicit-only skill must set policy.allow_implicit_invocation: false in agents/openai.yaml")
+			}
 		}
 	}
 

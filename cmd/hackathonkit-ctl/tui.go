@@ -32,6 +32,7 @@ type tuiModel struct {
 	width     int
 	height    int
 	err       error
+	eventsErr error
 	ingestErr error
 	status    string
 }
@@ -44,7 +45,11 @@ func cmdTUI(args []string) error {
 	}
 	defer store.Close()
 	var ingestErr error
-	if _, err := store.Ingest(context.Background(), root); err != nil {
+	// Bound the startup ingest so a large or stalled replay cannot block the TUI
+	// from ever starting.
+	ingestCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if _, err := store.Ingest(ingestCtx, root); err != nil {
 		ingestErr = err
 	}
 	program := tea.NewProgram(newTUIModel(store, ingestErr), tea.WithAltScreen())
@@ -92,7 +97,10 @@ func (m *tuiModel) applyLoaded(msg loadedMsg) {
 		m.err = msg.err
 		return
 	}
-	m.err = msg.err // may be an events-only failure
+	// The sessions query succeeded; a failure here can only be the events query,
+	// so keep it separate instead of blanking the whole view.
+	m.err = nil
+	m.eventsErr = msg.err
 	m.sessions = msg.sessions
 	m.selected = msg.selected
 	m.events = msg.events
@@ -224,6 +232,9 @@ func (m tuiModel) View() string {
 	}
 	right.WriteString("\n\n")
 	right.WriteString(dimStyle.Render("EVENTS") + "\n")
+	if m.eventsErr != nil {
+		right.WriteString(badStyle.Render("events unavailable: "+m.eventsErr.Error()) + "\n")
+	}
 	if len(m.events) == 0 {
 		right.WriteString(dimStyle.Render("no events yet") + "\n")
 	}

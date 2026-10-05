@@ -17,6 +17,13 @@ func killProcessGroup(cmd *exec.Cmd) {
 	if cmd.Process == nil {
 		return
 	}
+	// Probe liveness first: once Wait has reaped the child, its PID (and hence
+	// the process-group id) can be recycled, so a raw group kill could signal
+	// an unrelated process group. os.Process.Signal is synchronized with Wait
+	// and returns os.ErrProcessDone after reaping.
+	if err := cmd.Process.Signal(syscall.Signal(0)); err != nil {
+		return
+	}
 	if err := syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL); err != nil && err != syscall.ESRCH {
 		// Best effort: the process may already be gone.
 	}

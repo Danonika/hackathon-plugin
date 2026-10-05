@@ -68,10 +68,6 @@ func run(args []string, stdout, stderr io.Writer) int {
 	if *model == "knn" && *dataset != "" {
 		fmt.Fprintln(stderr, "fly-train: --model knn ignores --dataset (feedback memory rebuild)")
 	}
-	if *epochs <= 0 {
-		fmt.Fprintf(stderr, "fly-train: --epochs must be > 0, got %d\n", *epochs)
-		return 2
-	}
 	if *model == "knn" {
 		// --model knn ignores --dataset: rebuild feedback memory regardless.
 		if err := rebuildFromFeedback(root, cfg, embedder, stdout); err != nil {
@@ -79,6 +75,21 @@ func run(args []string, stdout, stderr io.Writer) int {
 			return 1
 		}
 		return 0
+	}
+	// These flags only affect the mushroom-body (mb) path; validate them after
+	// the knn early return so a valid rebuild is not rejected by an unrelated
+	// out-of-range value.
+	if *epochs <= 0 {
+		fmt.Fprintf(stderr, "fly-train: --epochs must be > 0, got %d\n", *epochs)
+		return 2
+	}
+	if *kc <= 0 {
+		fmt.Fprintf(stderr, "fly-train: --kc must be > 0, got %d\n", *kc)
+		return 2
+	}
+	if *sparsity <= 0 || *sparsity >= 1 {
+		fmt.Fprintf(stderr, "fly-train: --sparsity must be between 0 and 1 (exclusive), got %g\n", *sparsity)
+		return 2
 	}
 	if *dataset == "" {
 		fmt.Fprintln(stderr, "fly-train: --dataset is required for --model mb")

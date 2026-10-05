@@ -111,8 +111,8 @@ func TestListArtifacts(t *testing.T) {
 	if len(got) != 1 || got[0] != "charts/a.svg" {
 		t.Fatalf("listArtifacts = %v", got)
 	}
-	if empty, err := listArtifacts(t.TempDir()); err != nil || len(empty) != 0 {
-		t.Fatalf("listArtifacts(empty) = %v, %v", empty, err)
+	if empty, err := listArtifacts(t.TempDir()); err == nil || len(empty) != 0 {
+		t.Fatalf("listArtifacts(missing root) = %v, %v (want an error)", empty, err)
 	}
 }
 

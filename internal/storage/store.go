@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -14,10 +15,21 @@ import (
 	"hackathonkit.local/agentkit/internal/metadata"
 )
 
-const backendTimeout = 30 * time.Second
+const defaultBackendTimeout = 30 * time.Second
+
+// backendTimeout is configurable so operators can tune how long a request
+// handler may block on a stalled Postgres/MinIO backend.
+func backendTimeout() time.Duration {
+	if value := strings.TrimSpace(os.Getenv("HACKATHONKIT_BACKEND_TIMEOUT_SEC")); value != "" {
+		if seconds, err := strconv.Atoi(value); err == nil && seconds > 0 {
+			return time.Duration(seconds) * time.Second
+		}
+	}
+	return defaultBackendTimeout
+}
 
 func backendContext() (context.Context, context.CancelFunc) {
-	return context.WithTimeout(context.Background(), backendTimeout)
+	return context.WithTimeout(context.Background(), backendTimeout())
 }
 
 type MetaRecorder interface {
@@ -79,7 +91,9 @@ func (s *Store) ensureWithin(full string) error {
 		}
 		parent := filepath.Dir(p)
 		if parent == p {
-			return nil
+			// No ancestor could be resolved: fail closed rather than accepting
+			// a path we could not verify.
+			return fmt.Errorf("cannot resolve any ancestor of %s for containment check", full)
 		}
 		p = parent
 	}
@@ -149,7 +163,10 @@ func (s *Store) ArtifactPath(name string, createParent bool) (string, error) {
 }
 
 // safeWriteFile refuses to follow a symlink at the final path component and
-// re-verifies containment immediately before the write.
+// re-verifies containment immediately before the write. The data is written to
+// a temp file in the verified parent and renamed into place, so a symlink
+// created at the final component between the check and the write is replaced
+// rather than followed.
 func (s *Store) safeWriteFile(full string, data []byte, perm os.FileMode) error {
 	if info, err := os.Lstat(full); err == nil && info.Mode()&os.ModeSymlink != 0 {
 		return fmt.Errorf("refusing to write through a symlink: %s", full)
@@ -157,7 +174,34 @@ func (s *Store) safeWriteFile(full string, data []byte, perm os.FileMode) error 
 	if err := s.ensureWithin(full); err != nil {
 		return err
 	}
-	return os.WriteFile(full, data, perm)
+	dir := filepath.Dir(full)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(dir, ".hackathonkit-write-*.tmp")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		os.Remove(tmpName)
+		return err
+	}
+	if err := tmp.Chmod(perm); err != nil {
+		tmp.Close()
+		os.Remove(tmpName)
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		os.Remove(tmpName)
+		return err
+	}
+	if err := os.Rename(tmpName, full); err != nil {
+		os.Remove(tmpName)
+		return err
+	}
+	return nil
 }
 
 func (s *Store) WriteArtifact(rel string, data []byte) (string, error) {

@@ -4,18 +4,30 @@ set -e
 ROOT="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
 HELPER="$ROOT/scripts/env-set.sh"
 TMP="$(mktemp -d)"
-trap 'rm -rf "$TMP"' EXIT INT TERM
+cleanup_env_set_test() { rm -rf "$TMP"; }
+trap cleanup_env_set_test EXIT
+trap 'cleanup_env_set_test; exit 130' INT
+trap 'cleanup_env_set_test; exit 143' TERM
 FAIL=0
 
 check() {
   name="$1"
   ok="$2"
-  detail="$3"
+  detail="${3:-}"
   if [ "$ok" = "1" ]; then
     echo "[ok]   $name"
   else
     echo "[fail] $name${detail:+: $detail}"
     FAIL=$((FAIL + 1))
+  fi
+}
+
+# Guard an expected-success helper invocation so a failure produces a clear
+# [fail]-style diagnostic instead of aborting under `set -e` with no context.
+require_helper() {
+  if ! "$@"; then
+    echo "[env-set-test] helper invocation failed: $*" >&2
+    exit 1
   fi
 }
 
@@ -61,52 +73,68 @@ fi
 
 # Appending to a non-empty file keeps unrelated keys intact.
 printf 'KEEP=1\n' > "$TMP/append.env"
-sh "$HELPER" "$TMP/append.env" NEW value
+require_helper sh "$HELPER" "$TMP/append.env" NEW value
 check "append keeps existing keys" "$(grep -q '^KEEP=1$' "$TMP/append.env" && echo 1 || echo 0)"
 check "append adds the new key" "$(grep -q '^NEW=value$' "$TMP/append.env" && echo 1 || echo 0)"
 
 # The value can be fed through stdin so secrets stay out of argv.
-(umask 022 && printf 'from-stdin' | sh "$HELPER" "$TMP/stdin.env" S)
+(umask 022 && printf 'from-stdin' | sh "$HELPER" "$TMP/stdin.env" S) || { echo "[env-set-test] helper failed for stdin.env" >&2; exit 1; }
 check "stdin value is stored" "$(grep -q '^S=from-stdin$' "$TMP/stdin.env" && echo 1 || echo 0)"
 check "stdin value file is 0600" "$([ "$(file_mode "$TMP/stdin.env")" = "600" ] && echo 1 || echo 0)" "mode=$(file_mode "$TMP/stdin.env")"
 
 # A single trailing newline from stdin is a terminator, not part of the value.
-(umask 022 && printf 'trailing\n' | sh "$HELPER" "$TMP/stdin-nl.env" NL)
+(umask 022 && printf 'trailing\n' | sh "$HELPER" "$TMP/stdin-nl.env" NL) || { echo "[env-set-test] helper failed for stdin-nl.env" >&2; exit 1; }
 check "stdin trailing newline is stripped" "$(grep -q '^NL=trailing$' "$TMP/stdin-nl.env" && echo 1 || echo 0)" "got: $(cat "$TMP/stdin-nl.env")"
 
+# Command substitution strips every trailing newline, so multiple newlines are
+# stripped too; pin that behaviour down explicitly.
+(umask 022 && printf 'multi\n\n\n' | sh "$HELPER" "$TMP/stdin-multinl.env" MNL) || { echo "[env-set-test] helper failed for stdin-multinl.env" >&2; exit 1; }
+check "stdin multiple trailing newlines are stripped" "$(grep -q '^MNL=multi$' "$TMP/stdin-multinl.env" && echo 1 || echo 0)" "got: $(cat "$TMP/stdin-multinl.env")"
+
 # A value containing spaces/quotes is quoted so the .env stays parseable.
-sh "$HELPER" "$TMP/quote.env" SPACED 'two words'
+require_helper sh "$HELPER" "$TMP/quote.env" SPACED 'two words'
 check "spaced value is quoted" "$(grep -q '^SPACED="two words"$' "$TMP/quote.env" && echo 1 || echo 0)" "got: $(cat "$TMP/quote.env")"
 
+# Boundary quoting cases: empty, leading/trailing space, '#', and a single quote.
+require_helper sh "$HELPER" "$TMP/empty.env" EMPTY ''
+check "empty value stays bare" "$(grep -q '^EMPTY=$' "$TMP/empty.env" && echo 1 || echo 0)" "got: $(cat "$TMP/empty.env")"
+require_helper sh "$HELPER" "$TMP/ws.env" WS ' padded '
+check "leading/trailing spaces are quoted" "$(grep -q '^WS=" padded "$' "$TMP/ws.env" && echo 1 || echo 0)" "got: $(cat "$TMP/ws.env")"
+require_helper sh "$HELPER" "$TMP/hash.env" HASH 'a#b'
+check "hash value is quoted" "$(grep -q '^HASH="a#b"$' "$TMP/hash.env" && echo 1 || echo 0)" "got: $(cat "$TMP/hash.env")"
+require_helper sh "$HELPER" "$TMP/sq.env" SQ "a'b"
+check "single-quote value is quoted" "$(grep -q "^SQ=\"a'b\"$" "$TMP/sq.env" && echo 1 || echo 0)" "got: $(cat "$TMP/sq.env")"
+
 # An embedded newline is preserved as an escaped \n inside a quoted value.
-(umask 022 && printf 'line1\nline2\n' | sh "$HELPER" "$TMP/multi.env" MULTI)
+(umask 022 && printf 'line1\nline2\n' | sh "$HELPER" "$TMP/multi.env" MULTI) || { echo "[env-set-test] helper failed for multi.env" >&2; exit 1; }
 check "embedded newline is escaped" "$(grep -q '^MULTI="line1\\nline2"$' "$TMP/multi.env" && echo 1 || echo 0)" "got: $(cat "$TMP/multi.env")"
 
 # Backslashes trigger quoting and are escaped so a sourced .env yields the
 # original value ("p\q\r").
-sh "$HELPER" "$TMP/escape.env" B 'p\q\r'
+require_helper sh "$HELPER" "$TMP/escape.env" B 'p\q\r'
 check "backslash value is escaped" "$(grep -q '^B="p\\\\q\\\\r"$' "$TMP/escape.env" && echo 1 || echo 0)" "got: $(cat "$TMP/escape.env")"
 
 # Command-substitution and backtick payloads must be emitted inert: sourcing the
 # file must not execute them.
-sh "$HELPER" "$TMP/inject.env" EVIL '$(touch /tmp/hackathonkit-env-inject-marker)'
-rm -f /tmp/hackathonkit-env-inject-marker
+INJECT_MARKER="$TMP/inject-marker"
+rm -f "$INJECT_MARKER"
+require_helper sh "$HELPER" "$TMP/inject.env" EVIL "\$(touch $INJECT_MARKER)"
 ( set -a; . "$TMP/inject.env"; set +a; printf '%s\n' "$EVIL" > "$TMP/evil-value" )
-check "dollar substitution is not executed" "$([ -f /tmp/hackathonkit-env-inject-marker ] && echo 0 || echo 1)" "got: $(cat "$TMP/inject.env")"
-check "dollar value round-trips" "$([ "$(cat "$TMP/evil-value")" = '$(touch /tmp/hackathonkit-env-inject-marker)' ] && echo 1 || echo 0)" "got: $(cat "$TMP/evil-value")"
-rm -f /tmp/hackathonkit-env-inject-marker
+check "dollar substitution is not executed" "$([ -f "$INJECT_MARKER" ] && echo 0 || echo 1)" "got: $(cat "$TMP/inject.env")"
+check "dollar value round-trips" "$([ "$(cat "$TMP/evil-value")" = "\$(touch $INJECT_MARKER)" ] && echo 1 || echo 0)" "got: $(cat "$TMP/evil-value")"
+rm -f "$INJECT_MARKER"
 
 # Default-deny quoting: shell metacharacters that used to be emitted bare must
 # now be quoted so sourcing the file cannot execute them.
 MARKER="$TMP/cmd-marker"
 rm -f "$MARKER"
-sh "$HELPER" "$TMP/meta.env" M1 "semi;touch $MARKER"
-sh "$HELPER" "$TMP/meta.env" M2 'and&&and'
-sh "$HELPER" "$TMP/meta.env" M3 'pipe|sh'
-sh "$HELPER" "$TMP/meta.env" M4 'redir>out'
-sh "$HELPER" "$TMP/meta.env" M5 'glob*?[]'
-sh "$HELPER" "$TMP/meta.env" M6 'subshell(){}'
-sh "$HELPER" "$TMP/meta.env" M7 'tilde~and!bang'
+require_helper sh "$HELPER" "$TMP/meta.env" M1 "semi;touch $MARKER"
+require_helper sh "$HELPER" "$TMP/meta.env" M2 'and&&and'
+require_helper sh "$HELPER" "$TMP/meta.env" M3 'pipe|sh'
+require_helper sh "$HELPER" "$TMP/meta.env" M4 'redir>out'
+require_helper sh "$HELPER" "$TMP/meta.env" M5 'glob*?[]'
+require_helper sh "$HELPER" "$TMP/meta.env" M6 'subshell(){}'
+require_helper sh "$HELPER" "$TMP/meta.env" M7 'tilde~and!bang'
 ( set -a; . "$TMP/meta.env"; set +a; printf '%s\n' "$M1|$M2|$M3|$M4|$M5|$M6|$M7" > "$TMP/meta-values" )
 check "metacharacters are quoted" "$(grep -q '^M3="pipe|sh"$' "$TMP/meta.env" && echo 1 || echo 0)" "got: $(cat "$TMP/meta.env")"
 check "semicolon payload not executed" "$([ -f "$MARKER" ] && echo 0 || echo 1)" "got: $(cat "$TMP/meta.env")"
@@ -114,12 +142,12 @@ check "metachar values round-trip" "$([ "$(cat "$TMP/meta-values")" = "semi;touc
 rm -f "$MARKER"
 
 # A provably-safe value stays bare (no needless quoting).
-sh "$HELPER" "$TMP/safe.env" S 'safe-value_1.2:3'
+require_helper sh "$HELPER" "$TMP/safe.env" S 'safe-value_1.2:3'
 check "safe value stays bare" "$(grep -q '^S=safe-value_1.2:3$' "$TMP/safe.env" && echo 1 || echo 0)" "got: $(cat "$TMP/safe.env")"
 
 # Keys are matched literally, not as regexes.
 printf 'A_B=old\nA_XB=keep\n' > "$TMP/literal.env"
-sh "$HELPER" "$TMP/literal.env" A_B new
+require_helper sh "$HELPER" "$TMP/literal.env" A_B new
 check "literal key is replaced" "$(grep -q '^A_B=new$' "$TMP/literal.env" && echo 1 || echo 0)"
 check "lookalike key is untouched" "$(grep -q '^A_XB=keep$' "$TMP/literal.env" && echo 1 || echo 0)"
 
@@ -157,7 +185,7 @@ check "reclaimed lock cleaned up" "$([ ! -d "$LOCKDIR.lock" ] && echo 1)" "lock 
 # token, and restore afterwards so the writer's cleanup runs against it.
 LOCKDIR2="$TMP/release.env"
 printf 'A=1\n' > "$LOCKDIR2"
-sh "$HELPER" "$LOCKDIR2" B 1 >/dev/null 2>&1
+require_helper sh "$HELPER" "$LOCKDIR2" B 1
 check "writer released its own lock" "$([ ! -d "$LOCKDIR2.lock" ] && echo 1)" "lock left behind"
 # Simulate the race directly: a foreign-owned lock directory is not removed by a
 # cleanup that only owns a different token (exercised via the helper's own

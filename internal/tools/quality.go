@@ -36,6 +36,11 @@ func registerQuality(reg *mcp.Registry, d Deps) {
 				"checks":      report.Checks,
 			}
 			env := mcp.OK(trace(ctx), data)
+			if evidenceErr != nil {
+				// A sibling gate report was unreadable/corrupt; the latest
+				// readable report is returned with the diagnostic surfaced.
+				env = env.WithWarnings("some gate evidence could not be read: " + evidenceErr.Error())
+			}
 			if !report.OK {
 				env = env.WithWarnings("quality gate has failing checks")
 			}
