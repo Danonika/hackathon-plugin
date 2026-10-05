@@ -1,11 +1,13 @@
 #!/usr/bin/env sh
 # Shared credential redactor. Filters stdin -> stdout, replacing:
-#   - URL userinfo (scheme://user:pass@host -> scheme://***@host), including a
-#     password that itself contains '@'; bounded to the authority (stops at
-#     / ? # or whitespace) so it never crosses into another token.
+#   - URL userinfo (scheme://user:pass@host -> scheme://***@host). The authority
+#     match stops at `/` or whitespace and takes the last '@', so a password that
+#     itself contains '@', '?' or '#' is fully masked. This can over-redact a
+#     benign `user@host` inside a query string; over-redaction is preferred to a
+#     leak.
 #   - <keyword>=<value> / <keyword>: <value> for password/pass/token/secret/
 #     dsn/key (case-insensitive), with double-quoted, single-quoted or unquoted
-#     values.
+#     values (unquoted values end at whitespace).
 #   - JSON form: "keyword": "value"
 #
 # Fails closed: if `sed -E` is unavailable it emits a notice and no input, so

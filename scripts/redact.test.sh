@@ -43,6 +43,9 @@ check "single-quoted value redacted whole" "$([ "$out" = "password=[redacted]" ]
 out=$(printf 'the token is rotating slowly\n' | sh "$REDACT")
 check "prose with a bare keyword word is left readable" "$([ "$out" = "the token is rotating slowly" ] && echo 1)" "got: $out"
 
+out=$(printf 'password=ab%s\n' "'cd" | sh "$REDACT")
+check "unquoted value containing a quote fully redacted" "$([ "$out" = "password=[redacted]" ] && echo 1)" "got: $out"
+
 if [ "$FAIL" -gt 0 ]; then
   echo "[redact-test] $FAIL assertion(s) failed"
   exit 1
