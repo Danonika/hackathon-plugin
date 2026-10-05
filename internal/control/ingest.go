@@ -166,7 +166,16 @@ func (s *Store) ingestJSONL(ctx context.Context, name, path string, handle func(
 	for consumed < len(data) {
 		nl := bytes.IndexByte(data[consumed:], '\n')
 		if nl < 0 {
-			// Unterminated trailing line from a concurrent writer: retry next cycle.
+			// No newline in the window. If the window is full, the line exceeds
+			// maxIngestBytes and can never be parsed: advance lastGood past the
+			// whole window so the post-loop flush persists the skip and the
+			// stream cannot wedge. Otherwise it is a trailing partial line from
+			// a concurrent writer, so retry next cycle.
+			if len(data) >= maxIngestBytes {
+				consumed = len(data)
+				lastGood = consumed
+				skipped++
+			}
 			break
 		}
 		line := data[consumed : consumed+nl]

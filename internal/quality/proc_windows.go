@@ -59,10 +59,17 @@ func killProcessGroup(cmd *exec.Cmd) {
 	}
 	// Resolve taskkill from the system directory instead of PATH (or the
 	// current directory, which Windows searches first) so a planted
-	// taskkill.exe cannot be executed.
-	taskkill := filepath.Join(os.Getenv("SystemRoot"), "System32", "taskkill.exe")
+	// taskkill.exe cannot be executed. Without SystemRoot, do not fall back to a
+	// PATH lookup; kill the direct child instead.
+	systemRoot := os.Getenv("SystemRoot")
+	if systemRoot == "" {
+		_ = cmd.Process.Kill()
+		return
+	}
+	taskkill := filepath.Join(systemRoot, "System32", "taskkill.exe")
 	if _, err := os.Stat(taskkill); err != nil {
-		taskkill = "taskkill"
+		_ = cmd.Process.Kill()
+		return
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()

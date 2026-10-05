@@ -97,10 +97,14 @@ func runCheck(ctx context.Context, root string, spec checkSpec) Check {
 	check.DurationMS = time.Since(start).Milliseconds()
 	check.Output = tail(captured.String(), 2000)
 	switch {
-	case errors.Is(runCtx.Err(), context.DeadlineExceeded):
-		check.Status = "timeout"
-	case errors.Is(runCtx.Err(), context.Canceled):
-		check.Status = "canceled"
+	case err == nil:
+		// The command completed successfully. A deadline/cancellation that
+		// fired at the same instant must not override a clean exit.
+		if spec.name == "gofmt" && strings.TrimSpace(captured.String()) != "" {
+			check.Status = "failed"
+		} else {
+			check.Status = "ok"
+		}
 	case errors.Is(err, exec.ErrWaitDelay):
 		// The command exited successfully; WaitDelay only expired while
 		// draining output pipes a lingering grandchild kept open. Report the
@@ -111,12 +115,12 @@ func runCheck(ctx context.Context, root string, spec checkSpec) Check {
 			check.Output += "\n"
 		}
 		check.Output += "note: output pipes remained open past WaitDelay"
-	case err != nil:
-		check.Status = "failed"
-	case spec.name == "gofmt" && strings.TrimSpace(captured.String()) != "":
-		check.Status = "failed"
+	case errors.Is(runCtx.Err(), context.DeadlineExceeded):
+		check.Status = "timeout"
+	case errors.Is(runCtx.Err(), context.Canceled):
+		check.Status = "canceled"
 	default:
-		check.Status = "ok"
+		check.Status = "failed"
 	}
 	return check
 }
