@@ -101,7 +101,9 @@ if (-not $hasToken) {
     if (-not (Test-Path -LiteralPath $envPath)) { throw "atomic .env write did not produce $envPath" }
     Write-Host "[setup] generated HACKATHONKIT_DEMO_TOKEN for the demo API"
   } catch {
-    Write-Warning "[setup] could not generate a demo token; set HACKATHONKIT_DEMO_TOKEN manually"
+    # Fail closed: the demo API rejects an empty/guessable token, so a silent
+    # failure here would leave mutating endpoints unprotected.
+    Fail "[setup] could not generate a demo token: $($_.Exception.Message). Set HACKATHONKIT_DEMO_TOKEN manually in .env and re-run."
   }
 }
 

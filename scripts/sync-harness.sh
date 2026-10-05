@@ -44,8 +44,22 @@ claude_lock_stale() {
 }
 claim_claude_lock() {
   claude_lock_stale || return 0
-  if mv "$CLAUDE_LOCK" "$CLAUDE_LOCK.stale.$$" 2>/dev/null; then
-    rm -rf "$CLAUDE_LOCK.stale.$$"
+  # Snapshot the lock identity, then rename it aside and re-read: if a peer
+  # replaced the lock between the staleness check and the mv, the renamed dir is
+  # a live lock and is restored (or left aside) rather than deleted.
+  holder=$(cat "$CLAUDE_LOCK/pid" 2>/dev/null || true)
+  owner=$(cat "$CLAUDE_LOCK/owner" 2>/dev/null || true)
+  aside="$CLAUDE_LOCK.stale.$$"
+  if mv "$CLAUDE_LOCK" "$aside" 2>/dev/null; then
+    now_holder=$(cat "$aside/pid" 2>/dev/null || true)
+    now_owner=$(cat "$aside/owner" 2>/dev/null || true)
+    if [ "$now_holder" = "$holder" ] && [ "$now_owner" = "$owner" ]; then
+      rm -rf "$aside"
+    elif [ ! -e "$CLAUDE_LOCK" ]; then
+      mv "$aside" "$CLAUDE_LOCK" 2>/dev/null || true
+    elif [ -z "$now_holder" ] || ! kill -0 "$now_holder" 2>/dev/null; then
+      rm -rf "$aside"
+    fi
   fi
 }
 claim_claude_lock

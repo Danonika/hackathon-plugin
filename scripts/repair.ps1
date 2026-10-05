@@ -89,8 +89,13 @@ if ((-not (Test-Path -LiteralPath $bin)) -or (-not (Test-Path -LiteralPath $demo
   }
 }
 
+$stateScript = Join-Path $root "scripts\write-install-state.ps1"
+if (-not (Test-Path -LiteralPath $stateScript)) {
+  Write-Error "[repair] write-install-state.ps1 is missing"
+  exit 1
+}
 $global:LASTEXITCODE = 0
-& (Join-Path $root "scripts\write-install-state.ps1") -Root $root -Profile $installProfile -Runtime $runtime
+& $stateScript -Root $root -Profile $installProfile -Runtime $runtime
 if ($LASTEXITCODE -ne 0) { Write-Error "[repair] write-install-state failed"; exit 1 }
 
 if (Get-Command codex -CommandType Application -ErrorAction SilentlyContinue) {

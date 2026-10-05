@@ -16,12 +16,22 @@ function Copy-NoReparse([string]$From, [string]$To) {
 }
 
 function Get-TreeManifest([string]$Path) {
-  @(Get-ChildItem -LiteralPath $Path -Recurse -File -Force |
-    Where-Object { -not ($_.Attributes -band [System.IO.FileAttributes]::ReparsePoint) } |
-    ForEach-Object {
-      $rel = $_.FullName.Substring($Path.Length).TrimStart('\', '/')
-      "$rel|$((Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash)"
-    } | Sort-Object)
+  # Walk manually instead of `-Recurse`: Windows PowerShell 5.1 follows
+  # directory reparse points (junctions/symlinks) during -Recurse, which would
+  # pull in files from outside the tree. Skip any reparse-point entry entirely.
+  $items = New-Object System.Collections.Generic.List[string]
+  $stack = New-Object System.Collections.Stack
+  $stack.Push($Path)
+  while ($stack.Count -gt 0) {
+    $dir = $stack.Pop()
+    foreach ($entry in (Get-ChildItem -LiteralPath $dir -Force)) {
+      if ($entry.Attributes -band [System.IO.FileAttributes]::ReparsePoint) { continue }
+      if ($entry.PSIsContainer) { $stack.Push($entry.FullName); continue }
+      $rel = $entry.FullName.Substring($Path.Length).TrimStart('\', '/')
+      $items.Add("$rel|$((Get-FileHash -LiteralPath $entry.FullName -Algorithm SHA256).Hash)")
+    }
+  }
+  @($items | Sort-Object)
 }
 
 if (-not $PSCommandPath) {

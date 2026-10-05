@@ -4,7 +4,16 @@ set -e
 SELF="$0"
 case "$SELF" in
   */*) ;;
-  *) SELF=$(command -v -- "$SELF" 2>/dev/null || echo "$SELF") ;;
+  *)
+    # Invoked via PATH: resolve the real path. If that fails, fail clearly
+    # instead of letting `dirname` return "." and pick the wrong root.
+    RESOLVED=$(command -v "$SELF" 2>/dev/null || command -v -- "$SELF" 2>/dev/null || true)
+    if [ -z "$RESOLVED" ]; then
+      echo "[validate-skills] cannot resolve the script path from '$SELF'; run it by path" >&2
+      exit 1
+    fi
+    SELF="$RESOLVED"
+    ;;
 esac
 ROOT="$(CDPATH= cd -- "$(dirname -- "$SELF")/.." && pwd)" || {
   echo "[validate-skills] cannot resolve the repository root" >&2
