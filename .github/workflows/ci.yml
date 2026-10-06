@@ -37,6 +37,7 @@ jobs:
           sh scripts/verify-command.test.sh
           sh scripts/set-version.test.sh
           sh scripts/codex-config.test.sh
+          sh scripts/ocr-dedup.test.sh
           sh scripts/redact.test.sh
       - name: quality gate
         run: ./scripts/quality-gate.sh
