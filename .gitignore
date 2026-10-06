@@ -39,3 +39,6 @@ evals/*/
 !evals/README.md
 # Legacy alias for data/judge-bundles/ (kept for older checkouts).
 judge-bundle/
+
+# OCR scan artifacts (large, regenerable)
+docs/ocr-artifacts/
