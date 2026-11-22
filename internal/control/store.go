@@ -7,13 +7,16 @@ package control
 import (
 	"context"
 	"database/sql"
+	"database/sql/driver"
 	"encoding/json"
 	"fmt"
+	"log"
+	"net/url"
 	"os"
 	"path/filepath"
 	"time"
 
-	_ "modernc.org/sqlite"
+	"modernc.org/sqlite"
 )
 
 const schema = `
@@ -96,11 +99,59 @@ type Output struct {
 }
 
 type Store struct {
-	db *sql.DB
+	ingestLockPath string
+	memoryIngest   chan struct{}
+	db             *sql.DB
+	legacyTimes    bool
+}
+
+// Legacy stores used variable-width RFC3339 strings. Normalize once for
+// indexed comparisons, or compute the same key at read time for a read-only DB.
+func init() {
+	sqlite.MustRegisterDeterministicScalarFunction("hackathonkit_time", 1, func(_ *sqlite.FunctionContext, args []driver.Value) (driver.Value, error) {
+		if text, ok := args[0].(string); ok {
+			if t, valid := parseTimeOK(text); valid {
+				return formatTime(t), nil
+			}
+		}
+		return args[0], nil
+	})
+}
+
+func (s *Store) timeColumn(name string) string {
+	if s.legacyTimes {
+		return "hackathonkit_time(" + name + ")"
+	}
+	return name
+}
+
+func migrateTimeKeys(db *sql.DB) error {
+	tx, err := db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	var version int
+	if err = tx.QueryRow("PRAGMA user_version").Scan(&version); err != nil {
+		return err
+	}
+	if version >= 1 {
+		return nil
+	}
+	for _, field := range []struct{ table, column string }{{"events", "ts"}, {"outputs", "ts"}, {"sessions", "created_at"}, {"sessions", "updated_at"}, {"sessions", "ended_at"}, {"cursors", "updated_at"}} {
+		query := fmt.Sprintf("UPDATE %[1]s SET %[2]s=hackathonkit_time(%[2]s) WHERE %[2]s != hackathonkit_time(%[2]s)", field.table, field.column)
+		if _, err = tx.Exec(query); err != nil {
+			return err
+		}
+	}
+	if _, err = tx.Exec("PRAGMA user_version=1"); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func dsn(path string, readOnly bool) string {
-	base := "file:" + filepath.ToSlash(path)
+	base := "file:" + (&url.URL{Path: filepath.ToSlash(path)}).EscapedPath()
 	if readOnly {
 		return base + "?mode=ro&_pragma=busy_timeout(2000)"
 	}
@@ -120,7 +171,22 @@ func Open(path string) (*Store, error) {
 		db.Close()
 		return nil, err
 	}
-	return &Store{db: db}, nil
+	if err := migrateTimeKeys(db); err != nil {
+		db.Close()
+		return nil, err
+	}
+	// SQLite reports the canonical main database filename even when opened
+	// through an alias. Independent in-memory stores have no filename or peers.
+	var seq int
+	var name, filename string
+	if err := db.QueryRow("PRAGMA database_list").Scan(&seq, &name, &filename); err != nil {
+		db.Close()
+		return nil, err
+	}
+	if filename == "" {
+		return &Store{db: db, memoryIngest: make(chan struct{}, 1)}, nil
+	}
+	return &Store{db: db, ingestLockPath: filename + ".ingest.lock"}, nil
 }
 
 func OpenReadOnly(path string) (*Store, error) {
@@ -137,7 +203,12 @@ func OpenReadOnly(path string) (*Store, error) {
 		db.Close()
 		return nil, err
 	}
-	return &Store{db: db}, nil
+	var version int
+	if err := db.QueryRow("PRAGMA user_version").Scan(&version); err != nil {
+		db.Close()
+		return nil, err
+	}
+	return &Store{db: db, legacyTimes: version < 1}, nil
 }
 
 func (s *Store) Close() error {
@@ -181,16 +252,31 @@ func parseTime(value string) time.Time {
 	return t
 }
 
+func storedTime(value string) (time.Time, error) {
+	if value == "" {
+		return time.Time{}, nil
+	}
+	t, ok := parseTimeOK(value)
+	if !ok {
+		return time.Time{}, fmt.Errorf("invalid stored timestamp %q", value)
+	}
+	return t, nil
+}
+
 func (s *Store) UpsertSession(ctx context.Context, sess Session) error {
+	return s.writeSession(ctx, sess, time.Now().UTC())
+}
+
+// writeSession merges lifecycle records atomically. The event time, not the
+// replay time, determines the session window used for risk and handoff.
+func (s *Store) writeSession(ctx context.Context, sess Session, when time.Time) error {
 	reasons, err := json.Marshal(sess.RiskReasons)
 	if err != nil {
 		return err
 	}
-	now := time.Now().UTC()
 	if sess.CreatedAt.IsZero() {
-		sess.CreatedAt = now
+		sess.CreatedAt = when
 	}
-	sess.UpdatedAt = now
 	_, err = s.db.ExecContext(ctx, `
 INSERT INTO sessions (id, root, kind, task, status, stage, plan_slug, worktree, risk_score, risk_reasons, created_at, updated_at, ended_at)
 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
@@ -198,16 +284,17 @@ ON CONFLICT(id) DO UPDATE SET
   root=COALESCE(NULLIF(excluded.root,''), sessions.root),
   kind=COALESCE(NULLIF(excluded.kind,''), sessions.kind),
   task=COALESCE(NULLIF(excluded.task,''), sessions.task),
-  status=CASE WHEN sessions.ended_at IS NOT NULL THEN sessions.status ELSE excluded.status END,
+  status=CASE WHEN excluded.ended_at IS NOT NULL OR sessions.ended_at IS NOT NULL THEN 'ended' ELSE COALESCE(NULLIF(excluded.status,''), sessions.status) END,
   stage=COALESCE(NULLIF(excluded.stage,''), sessions.stage),
   plan_slug=COALESCE(NULLIF(excluded.plan_slug,''), sessions.plan_slug),
   worktree=COALESCE(NULLIF(excluded.worktree,''), sessions.worktree),
-  risk_score=excluded.risk_score,
-  risk_reasons=excluded.risk_reasons,
-  ended_at=COALESCE(sessions.ended_at, excluded.ended_at),
-  updated_at=excluded.updated_at`,
+  risk_score=CASE WHEN excluded.risk_reasons='null' AND excluded.risk_score=0 THEN sessions.risk_score ELSE excluded.risk_score END,
+  risk_reasons=CASE WHEN excluded.risk_reasons='null' AND excluded.risk_score=0 THEN sessions.risk_reasons ELSE excluded.risk_reasons END,
+  created_at=CASE WHEN NULLIF(sessions.created_at,'') IS NULL THEN excluded.created_at ELSE MIN(sessions.created_at, excluded.created_at) END,
+  ended_at=CASE WHEN sessions.ended_at IS NULL THEN excluded.ended_at WHEN excluded.ended_at IS NULL THEN sessions.ended_at ELSE MIN(sessions.ended_at, excluded.ended_at) END,
+  updated_at=CASE WHEN sessions.ended_at IS NOT NULL AND excluded.ended_at IS NULL THEN sessions.updated_at ELSE MAX(COALESCE(sessions.updated_at,''), excluded.updated_at) END`,
 		sess.ID, sess.Root, sess.Kind, sess.Task, sess.Status, sess.Stage, sess.PlanSlug, sess.Worktree,
-		sess.RiskScore, string(reasons), formatTime(sess.CreatedAt), formatTime(sess.UpdatedAt), nullableTime(sess.EndedAt))
+		sess.RiskScore, string(reasons), formatTime(sess.CreatedAt), formatTime(when), nullableTime(sess.EndedAt))
 	return err
 }
 
@@ -215,55 +302,21 @@ ON CONFLICT(id) DO UPDATE SET
 // last-seen without resurrecting an already ended session, so replayed
 // session_start/heartbeat records cannot flip status back to active.
 func (s *Store) StartSession(ctx context.Context, sess Session) error {
-	now := time.Now().UTC()
 	if sess.CreatedAt.IsZero() {
-		sess.CreatedAt = now
+		sess.CreatedAt = time.Now().UTC()
 	}
-	result, err := s.db.ExecContext(ctx,
-		`UPDATE sessions SET root=COALESCE(NULLIF(?,''), root), updated_at=? WHERE id=? AND status != 'ended'`,
-		sess.Root, formatTime(now), sess.ID)
-	if err != nil {
-		return err
-	}
-	if n, _ := result.RowsAffected(); n > 0 {
-		return nil
-	}
-	var exists int
-	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM sessions WHERE id=?`, sess.ID).Scan(&exists); err != nil {
-		return err
-	}
-	if exists > 0 {
-		return nil
-	}
-	sess.Status = "active"
 	if sess.Kind == "" {
 		sess.Kind = "agent"
 	}
-	return s.UpsertSession(ctx, sess)
+	sess.Status = "active"
+	return s.writeSession(ctx, sess, sess.CreatedAt)
 }
 
 func (s *Store) EndSession(ctx context.Context, id string, ts time.Time) error {
 	if ts.IsZero() {
 		ts = time.Now().UTC()
 	}
-	tsText := formatTime(ts)
-	// Replayed or out-of-order session_end records must not move ended_at (or
-	// the ordering-relevant updated_at) backwards, so keep the earliest end
-	// time and never regress updated_at.
-	result, err := s.db.ExecContext(ctx,
-		`UPDATE sessions SET
-		   status='ended',
-		   ended_at=CASE WHEN ended_at IS NOT NULL AND ended_at <> '' AND ended_at <= ? THEN ended_at ELSE ? END,
-		   updated_at=CASE WHEN updated_at > ? THEN updated_at ELSE ? END
-		 WHERE id=?`,
-		tsText, tsText, tsText, tsText, id)
-	if err != nil {
-		return err
-	}
-	if n, _ := result.RowsAffected(); n == 0 {
-		return s.UpsertSession(ctx, Session{ID: id, Status: "ended", CreatedAt: ts, EndedAt: &ts})
-	}
-	return nil
+	return s.writeSession(ctx, Session{ID: id, Status: "ended", EndedAt: &ts}, ts)
 }
 
 func (s *Store) UpdateRisk(ctx context.Context, id string, score float64, reasons []string) error {
@@ -284,7 +337,7 @@ func (s *Store) Sessions(ctx context.Context, limit int) ([]Session, error) {
 	if limit <= 0 || limit > 10000 {
 		limit = 50
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT id, root, kind, task, status, stage, plan_slug, worktree, risk_score, risk_reasons, created_at, updated_at, ended_at FROM sessions ORDER BY updated_at DESC LIMIT ?`, limit)
+	rows, err := s.db.QueryContext(ctx, `SELECT id, root, kind, task, status, stage, plan_slug, worktree, risk_score, risk_reasons, created_at, updated_at, ended_at FROM sessions ORDER BY `+s.timeColumn("updated_at")+` DESC LIMIT ?`, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -316,16 +369,32 @@ func scanSession(row rowScanner) (Session, error) {
 			return Session{}, fmt.Errorf("session %s has malformed risk reasons: %w", sess.ID, err)
 		}
 	}
-	sess.CreatedAt = parseTime(created.String)
-	sess.UpdatedAt = parseTime(updated.String)
+	var err error
+	sess.CreatedAt, err = storedTime(created.String)
+	if err != nil {
+		return Session{}, err
+	}
+	sess.UpdatedAt, err = storedTime(updated.String)
+	if err != nil {
+		return Session{}, err
+	}
 	if ended.Valid && ended.String != "" {
-		t := parseTime(ended.String)
+		t, err := storedTime(ended.String)
+		if err != nil {
+			return Session{}, err
+		}
 		sess.EndedAt = &t
 	}
 	return sess, nil
 }
 
-func (s *Store) AppendEvent(ctx context.Context, ev Event) error {
+type sqlWriter interface {
+	ExecContext(context.Context, string, ...any) (sql.Result, error)
+}
+
+func (s *Store) AppendEvent(ctx context.Context, ev Event) error { return appendEvent(ctx, s.db, ev) }
+
+func appendEvent(ctx context.Context, db sqlWriter, ev Event) error {
 	payload, err := json.Marshal(ev.Payload)
 	if err != nil {
 		return err
@@ -333,7 +402,7 @@ func (s *Store) AppendEvent(ctx context.Context, ev Event) error {
 	if ev.TS.IsZero() {
 		ev.TS = time.Now().UTC()
 	}
-	_, err = s.db.ExecContext(ctx,
+	_, err = db.ExecContext(ctx,
 		`INSERT INTO events (session_id, ts, type, tool, status, duration_ms, payload) VALUES (?,?,?,?,?,?,?)`,
 		ev.SessionID, formatTime(ev.TS), ev.Type, ev.Tool, ev.Status, ev.DurationMS, string(payload))
 	return err
@@ -367,7 +436,7 @@ func (s *Store) EventsBetween(ctx context.Context, from, to time.Time, limit int
 		toText = "9999-12-31T23:59:59.999999999Z"
 	}
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, session_id, ts, type, tool, status, duration_ms, payload FROM events WHERE session_id='' AND ts>=? AND ts<=? ORDER BY id DESC LIMIT ?`,
+		`SELECT id, session_id, ts, type, tool, status, duration_ms, payload FROM events WHERE session_id='' AND `+s.timeColumn("ts")+`>=? AND `+s.timeColumn("ts")+`<=? ORDER BY id DESC LIMIT ?`,
 		fromText, toText, limit)
 	if err != nil {
 		return nil, err
@@ -377,10 +446,10 @@ func (s *Store) EventsBetween(ctx context.Context, from, to time.Time, limit int
 
 func (s *Store) latestGlobalTS(ctx context.Context) (time.Time, error) {
 	var value string
-	if err := s.db.QueryRowContext(ctx, `SELECT COALESCE(MAX(ts),'') FROM events WHERE session_id=''`).Scan(&value); err != nil {
+	if err := s.db.QueryRowContext(ctx, `SELECT COALESCE(MAX(`+s.timeColumn("ts")+`),'') FROM events WHERE session_id=''`).Scan(&value); err != nil {
 		return time.Time{}, err
 	}
-	return parseTime(value), nil
+	return storedTime(value)
 }
 
 func scanEvents(rows *sql.Rows) ([]Event, error) {
@@ -392,7 +461,11 @@ func scanEvents(rows *sql.Rows) ([]Event, error) {
 		if err := rows.Scan(&ev.ID, &ev.SessionID, &ts, &ev.Type, &ev.Tool, &ev.Status, &ev.DurationMS, &payload); err != nil {
 			return nil, err
 		}
-		ev.TS = parseTime(ts)
+		var err error
+		ev.TS, err = storedTime(ts)
+		if err != nil {
+			return nil, err
+		}
 		if payload != "" && payload != "null" {
 			if err := json.Unmarshal([]byte(payload), &ev.Payload); err != nil {
 				return nil, fmt.Errorf("event has a malformed payload: %w", err)
@@ -429,7 +502,7 @@ func (s *Store) CursorUpdatedAt(ctx context.Context, name string) (time.Time, er
 	if err != nil {
 		return time.Time{}, err
 	}
-	return parseTime(value), nil
+	return storedTime(value)
 }
 
 func (s *Store) Cursor(ctx context.Context, name string) (int64, error) {
@@ -456,10 +529,84 @@ func (s *Store) CursorSet(ctx context.Context, name string) (int64, bool, error)
 }
 
 func (s *Store) SetCursor(ctx context.Context, name string, offset int64) error {
-	_, err := s.db.ExecContext(ctx,
+	return setCursor(ctx, s.db, name, offset)
+}
+
+func setCursor(ctx context.Context, db sqlWriter, name string, offset int64) error {
+	_, err := db.ExecContext(ctx,
 		`INSERT INTO cursors (name, offset, updated_at) VALUES (?,?,?)
 		 ON CONFLICT(name) DO UPDATE SET offset=excluded.offset, updated_at=excluded.updated_at`,
 		name, offset, formatTime(time.Now().UTC()))
+	return err
+}
+
+// claimChangedCursor acquires the SQLite write lock and reports whether the
+// content is new, even when a second process attempts the same update.
+func claimChangedCursor(ctx context.Context, tx *sql.Tx, name string, value int64) (bool, error) {
+	result, err := tx.ExecContext(ctx, `INSERT INTO cursors (name, offset, updated_at) VALUES (?, ?, ?)
+ ON CONFLICT(name) DO UPDATE SET offset=excluded.offset, updated_at=excluded.updated_at
+ WHERE cursors.offset != excluded.offset`, name, value, formatTime(time.Now().UTC()))
+	if err != nil {
+		return false, err
+	}
+	n, err := result.RowsAffected()
+	return n != 0, err
+}
+
+func (s *Store) recordDecision(ctx context.Context, cursor string, hash, size int64, ev Event, legacyFilenameTime bool) (bool, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return false, err
+	}
+	defer tx.Rollback()
+	changed, err := claimChangedCursor(ctx, tx, cursor+":hash", hash)
+	if err != nil {
+		return false, err
+	}
+	if legacyFilenameTime {
+		firstCheck, err := claimChangedCursor(ctx, tx, cursor+":time_checked", hash)
+		if err != nil {
+			return false, err
+		}
+		if !changed && firstCheck {
+			if err := repairDecisionTime(ctx, tx, cursor, hash, size, ev); err != nil {
+				return false, err
+			}
+		}
+	}
+	if changed {
+		if err := appendEvent(ctx, tx, ev); err != nil {
+			return false, err
+		}
+		if err := setCursor(ctx, tx, cursor, size); err != nil {
+			return false, err
+		}
+	}
+	return changed, tx.Commit()
+}
+
+// Earlier imports recorded ingestion time without a source ID on the event.
+// Require the source cursor's original byte count, a unique matching hash
+// cursor, and exactly one identical global event before amending a timestamp.
+func repairDecisionTime(ctx context.Context, tx *sql.Tx, cursor string, hash, size int64, ev Event) error {
+	payload, err := json.Marshal(ev.Payload)
+	if err != nil {
+		return err
+	}
+	var id sql.NullInt64
+	var count int
+	err = tx.QueryRowContext(ctx, `SELECT MIN(id),COUNT(*) FROM events
+ WHERE session_id='' AND type='eval_decision' AND payload=?
+   AND (SELECT offset FROM cursors WHERE name=?)=?
+   AND (SELECT COUNT(*) FROM cursors WHERE name GLOB 'decision:*:hash' AND offset=?)=1`, string(payload), cursor, size, hash).Scan(&id, &count)
+	if err != nil {
+		return err
+	}
+	if count != 1 {
+		log.Printf("control: legacy decision timestamp for %s could not be matched unambiguously", cursor)
+		return nil
+	}
+	_, err = tx.ExecContext(ctx, "UPDATE events SET ts=? WHERE id=?", formatTime(ev.TS), id.Int64)
 	return err
 }
 
@@ -491,7 +638,7 @@ func (s *Store) CountEventsByTypeBetween(ctx context.Context, from, to time.Time
 	}
 	var count int
 	err := s.db.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM events WHERE session_id='' AND ts>=? AND ts<=? AND type=?`,
+		`SELECT COUNT(*) FROM events WHERE session_id='' AND `+s.timeColumn("ts")+`>=? AND `+s.timeColumn("ts")+`<=? AND type=?`,
 		fromText, toText, eventType).Scan(&count)
 	return count, err
 }
@@ -524,7 +671,10 @@ func (s *Store) Outputs(ctx context.Context, sessionID string, limit int) ([]Out
 		if err := rows.Scan(&item.ID, &item.SessionID, &ts, &item.Kind, &item.Ref, &item.Summary); err != nil {
 			return nil, err
 		}
-		item.TS = parseTime(ts)
+		item.TS, err = storedTime(ts)
+		if err != nil {
+			return nil, fmt.Errorf("output %d: %w", item.ID, err)
+		}
 		out = append(out, item)
 	}
 	return out, rows.Err()

@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"html"
 	"io"
 	"net/http"
 	"net/url"
@@ -19,6 +20,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 )
 
 const (
@@ -578,17 +580,7 @@ func ChunkHTML(text string, limit int) []string {
 		}
 		budget := limit - len([]rune(prefix)) - closersBudget
 		if budget < 1 {
-			// The open tags need more than `limit` runes to reopen and close,
-			// so no valid formatted chunk can be produced with this stack.
-			// Chunks already emitted closed all prior tags via scanTags, so
-			// emitting the closers here would be an unmatched end tag Telegram
-			// rejects. Drop the formatting for the remainder and emit the rest
-			// as plain text (tags stripped) so the message stays parseable.
-			rest := htmlTagPattern.ReplaceAllString(string(runes[pos:]), "")
-			if rest != "" {
-				chunks = append(chunks, ChunkText(rest, limit)...)
-			}
-			return chunks
+			return append(chunks, chunkHTMLText(runes[pos:], limit)...)
 		}
 		cut := pos + budget
 		if cut > len(runes) {
@@ -603,18 +595,18 @@ func ChunkHTML(text string, limit int) []string {
 		}
 		cut = cutOutsideTag(runes, pos, cut)
 		if cut <= pos {
-			cut = pos + 1
+			return append(chunks, chunkHTMLText(runes[pos:], limit)...)
 		}
 		body := string(runes[pos:cut])
 		next, closers := scanTags(body, stack)
 		for len([]rune(prefix+body+closers)) > limit && cut > pos+1 {
 			cut--
 			if cut <= pos {
-				cut = pos + 1
+				return append(chunks, chunkHTMLText(runes[pos:], limit)...)
 			}
 			cut = cutOutsideTag(runes, pos, cut)
 			if cut <= pos {
-				cut = pos + 1
+				return append(chunks, chunkHTMLText(runes[pos:], limit)...)
 			}
 			body = string(runes[pos:cut])
 			next, closers = scanTags(body, stack)
@@ -628,6 +620,38 @@ func ChunkHTML(text string, limit int) []string {
 
 // scanTags replays a fragment over the open-tag stack and returns the resulting
 // stack plus the closing tags needed to balance the fragment.
+// chunkHTMLText removes formatting when a tag cannot fit with its closing
+// tag. Escape each decoded rune as one unit so a chunk never splits an entity.
+func chunkHTMLText(rest []rune, limit int) []string {
+	text := html.UnescapeString(htmlTagPattern.ReplaceAllString(string(rest), ""))
+	var chunks []string
+	var chunk strings.Builder
+	width := 0
+	for _, r := range text {
+		value := string(r)
+		switch r {
+		case '<':
+			value = "&lt;"
+		case '>':
+			value = "&gt;"
+		case '&':
+			value = "&amp;"
+		}
+		n := utf8.RuneCountInString(value)
+		if width+n > limit && width > 0 {
+			chunks = append(chunks, chunk.String())
+			chunk.Reset()
+			width = 0
+		}
+		chunk.WriteString(value)
+		width += n
+	}
+	if width > 0 {
+		chunks = append(chunks, chunk.String())
+	}
+	return chunks
+}
+
 func scanTags(fragment string, stack []openTag) ([]openTag, string) {
 	open := append([]openTag{}, stack...)
 	for _, match := range htmlTagPattern.FindAllStringSubmatch(fragment, -1) {

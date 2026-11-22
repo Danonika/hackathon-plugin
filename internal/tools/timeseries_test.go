@@ -229,7 +229,7 @@ func TestLoadSeriesSkipsInvalidRows(t *testing.T) {
 			{"2026-01-01 04:00:00", "4"},
 		},
 	}
-	points, timeCol, valueCol, _, err := loadSeries(tbl, "", "")
+	points, timeCol, valueCol, _, err := loadSeries(t.Context(), tbl, "", "")
 	if err != nil {
 		t.Fatal(err)
 	}

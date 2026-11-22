@@ -15,46 +15,22 @@ check() {
   fi
 }
 
-# Bound child checks when `timeout` is available so a hanging MCP server cannot
-# block doctor.sh indefinitely.
-if command -v timeout >/dev/null 2>&1; then
-  run_bounded() { timeout 180 "$@"; }
-else
-  # POSIX fallback for hosts without `timeout(1)`: run the child in the
-  # background with a watchdog that kills it after the same 180s bound and
-  # reports 124 (like `timeout`), so a hanging check cannot block doctor.sh.
-  run_bounded() {
-    _rb_marker=$(mktemp "${TMPDIR:-/tmp}/hackathonkit-bounded.XXXXXX" 2>/dev/null || echo "")
-    "$@" &
-    _rb_pid=$!
-    ( sleep 180; if [ -n "$_rb_marker" ]; then printf 1 > "$_rb_marker"; fi; kill -TERM "$_rb_pid" 2>/dev/null; sleep 5; kill -KILL "$_rb_pid" 2>/dev/null ) &
-    _rb_watchdog=$!
-    _rb_status=0
-    wait "$_rb_pid" 2>/dev/null || _rb_status=$?
-    kill "$_rb_watchdog" 2>/dev/null || true
-    wait "$_rb_watchdog" 2>/dev/null || true
-    if [ -n "$_rb_marker" ]; then
-      if [ -s "$_rb_marker" ]; then
-        rm -f "$_rb_marker"
-        return 124
-      fi
-      rm -f "$_rb_marker"
-    fi
-    return "$_rb_status"
-  }
-fi
+. "$ROOT/scripts/bounded.sh"
+run_bounded() { run_with_timeout 180 "$@"; }
 
 if [ -f "$ROOT/docker-compose.yml" ]; then check "repository root" 1 "$ROOT"; else check "repository root" 0 "$ROOT"; fi
 if [ -f "$ROOT/configs/routing.yaml" ]; then check "routing config" 1 "$ROOT/configs/routing.yaml"; else check "routing config" 0 "missing"; fi
 
 if command -v go >/dev/null 2>&1; then check "go toolchain (dev)" 1 "$(go version)"; else check "go toolchain (dev)" 1 "not found (not required for docker path)"; fi
 if command -v codex >/dev/null 2>&1; then
-  check "codex CLI" 1 "$(codex --version 2>/dev/null || echo present)"
+  check "codex CLI" 1 "$(run_bounded codex --version 2>/dev/null || echo present)"
   PLUGIN_STATE=missing
-  PLUGIN_JSON=$(codex plugin list --json 2>/dev/null || true)
+  PLUGIN_JSON=$(run_bounded codex plugin list --json 2>/dev/null || true)
   if [ -n "$PLUGIN_JSON" ]; then
     if command -v jq >/dev/null 2>&1; then
-      if printf '%s' "$PLUGIN_JSON" | jq -e '.installed[]? | select(.name == "hackathonkit")' >/dev/null 2>&1; then
+      if ! printf '%s' "$PLUGIN_JSON" | jq -e '.installed | type == "array"' >/dev/null 2>&1; then
+        PLUGIN_STATE=unknown
+      elif printf '%s' "$PLUGIN_JSON" | jq -e '.installed[]? | select(.name == "hackathonkit")'  >/dev/null 2>&1; then
         PLUGIN_STATE=disabled
         if printf '%s' "$PLUGIN_JSON" | jq -e '.installed[]? | select(.name == "hackathonkit" and (.enabled != false))' >/dev/null 2>&1; then
           PLUGIN_STATE=enabled
@@ -126,7 +102,7 @@ else
 fi
 
 DOCKER_OK=0
-if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
+if command -v docker >/dev/null 2>&1 && run_bounded docker info >/dev/null 2>&1; then
   DOCKER_OK=1
 fi
 if [ "$DOCKER_OK" = "1" ]; then
@@ -145,11 +121,17 @@ fi
 
 # Use one consistent listing for both trees (find, not ls) so hidden and
 # symlinked directories are classified identically on both sides.
-SRC_NAMES=$(cd "$ROOT/plugins/hackathonkit/skills" 2>/dev/null && find . -mindepth 1 -maxdepth 1 -type d -print 2>/dev/null | LC_ALL=C sort) || true
+. "$ROOT/scripts/skill-profile.sh"
+PROFILE=$(installed_skill_profile "$ROOT")
+SRC_NAMES=$(cd "$ROOT/plugins/hackathonkit/skills" && find . -mindepth 1 -maxdepth 1 -type d -print | while IFS= read -r dir; do
+  skill_in_profile "$dir" "$PROFILE" && printf '%s\n' "$dir"
+done | LC_ALL=C sort)
 DST_NAMES=$(cd "$ROOT/.agents/skills" 2>/dev/null && find . -mindepth 1 -maxdepth 1 -type d -print 2>/dev/null | LC_ALL=C sort) || true
 SRC_COUNT=$(printf '%s\n' "$SRC_NAMES" | sed '/^$/d' | wc -l | tr -d ' ')
 DST_COUNT=$(printf '%s\n' "$DST_NAMES" | sed '/^$/d' | wc -l | tr -d ' ')
-SRC_SKILLS=$(find "$ROOT/plugins/hackathonkit/skills" -name SKILL.md 2>/dev/null | wc -l | tr -d ' ')
+SRC_SKILLS=$(printf '%s\n' "$SRC_NAMES" | while IFS= read -r skill; do
+  [ -z "$skill" ] || find "$ROOT/plugins/hackathonkit/skills/$skill" -name SKILL.md
+done | wc -l | tr -d ' ')
 DST_SKILLS=0
 if [ -d "$ROOT/.agents/skills" ]; then
   DST_SKILLS=$(find "$ROOT/.agents/skills" -name SKILL.md 2>/dev/null | wc -l | tr -d ' ')
@@ -213,8 +195,8 @@ except Exception:
 v = d.get("version") if isinstance(d, dict) else None
 if isinstance(v, str):
     print(v)' "$ROOT/configs/install-state.json" 2>/dev/null || true)
-  else
-    STATE_VERSION=$(sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$ROOT/configs/install-state.json" | head -n 1)
+  elif command -v node >/dev/null 2>&1; then
+    STATE_VERSION=$(node -e 'const v = require(process.argv[1]).version; if (typeof v === "string") console.log(v)' "$ROOT/configs/install-state.json" 2>/dev/null || true)
   fi
   if [ -n "$STATE_VERSION" ]; then
     check "install state" 1 "version $STATE_VERSION"

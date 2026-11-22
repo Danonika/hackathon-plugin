@@ -348,3 +348,16 @@ func TestSendMessageHTMLChunksAreValid(t *testing.T) {
 		}
 	}
 }
+
+func TestChunkHTMLPreservesTextAfterOversizedTag(t *testing.T) {
+	source := `<a href="https://example.org/` + strings.Repeat("p", 50) + `">a &amp; b</a> <b>и</b>`
+	chunks := ChunkHTML(source, 10)
+	for _, chunk := range chunks {
+		if len([]rune(chunk)) > 10 || strings.Contains(chunk, "<") {
+			t.Fatalf("unexpected chunk %q", chunk)
+		}
+	}
+	if got := strings.Join(chunks, ""); got != "a &amp; b и" {
+		t.Fatalf("lost text in %q", got)
+	}
+}

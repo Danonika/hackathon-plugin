@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -339,7 +340,7 @@ func cmdRun(args []string, stdout, stderr io.Writer) error {
 	if name == "" {
 		name = "session"
 	}
-	sessionID := fmt.Sprintf("s-%s-%d", time.Now().UTC().Format("20060102-150405"), os.Getpid())
+	sessionID := "s-" + time.Now().UTC().Format("20060102-150405") + "-" + rand.Text()
 	worktree := ""
 	dir := root
 	if *useWorktree {
@@ -368,12 +369,12 @@ func cmdRun(args []string, stdout, stderr io.Writer) error {
 	if *model != "" {
 		codexArgs = append(codexArgs, "--model", *model)
 	}
-	codexArgs = append(codexArgs, "--cd", dir, *task)
+	codexArgs = append(codexArgs, "--cd", dir, "--", *task)
 	cmd := newCommand("codex", codexArgs...)
 	cmd.Dir = dir
 	cmd.Stdin = os.Stdin
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
+	cmd.Stdout = stdout
+	cmd.Stderr = stderr
 	runErr := cmd.Run()
 	status := "ok"
 	if runErr != nil {

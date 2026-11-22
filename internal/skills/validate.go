@@ -105,6 +105,9 @@ func Validate(root string) (Report, error) {
 			}
 		}
 	}
+	if len(names) == 0 {
+		return report, fmt.Errorf("no skills found in %s", base)
+	}
 	sort.Strings(names)
 	for _, name := range names {
 		item := validateSkill(base, name)
@@ -194,19 +197,18 @@ func validateSkill(base, name string) SkillReport {
 			item.Problems = append(item.Problems, fmt.Sprintf("referenced file does not exist: %s", ref))
 			continue
 		}
-		if dirReal, derr := filepath.EvalSymlinks(dir); derr == nil {
-			if targetReal, terr := filepath.EvalSymlinks(target); terr == nil {
-				if targetReal != dirReal && !strings.HasPrefix(targetReal, dirReal+string(filepath.Separator)) {
-					item.Problems = append(item.Problems, fmt.Sprintf("reference resolves outside the skill directory: %s", ref))
-				}
-			}
+		dirReal, derr := filepath.EvalSymlinks(dir)
+		targetReal, terr := filepath.EvalSymlinks(target)
+		if derr != nil || terr != nil || (dirReal != targetReal && !strings.HasPrefix(targetReal, dirReal+string(filepath.Separator))) {
+			item.Problems = append(item.Problems, fmt.Sprintf("cannot verify reference within skill directory: %s", ref))
 		}
 	}
 
 	doc, err := validateOpenAIYAML(dir)
 	if err != nil {
 		item.Problems = append(item.Problems, err.Error())
-	} else {
+	}
+	{
 		desc := strings.ToLower(fm.Description)
 		explicitOnly := strings.Contains(desc, "explicit-only:") || strings.Contains(desc, "explicit-only;")
 		if explicitOnly {

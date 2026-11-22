@@ -1,12 +1,13 @@
 # Hackathon Agent Kit OCR Session Log / Handoff
 
-Historical code review and reproducible findings.
+Historical review of the changes leading to v0.16.98, recorded with
+OpenCodeReview v1.12.7.
 
 ---
 
 ## 1. TL;DR / state
 
-- 81 commits were made this session (`v0.16.32` -> `v0.16.99`) on top of `prior revision` (v0.16.31).
+- The review covered 81 commits after v0.16.31.
 - A large **parallel-agent "sweep"** (`v0.16.86`, 120 files, +3882/-1453) fixed 311 findings but
   **introduced regressions**, including 1 critical and ~13 new highs.
 - A **before-24h vs current** full-scan comparison is in section 4. Net actionable findings went
@@ -35,7 +36,7 @@ ocr scan --path <file> --format json -o out.json --audience agent
 
 ```
 
-Use the Go toolchain specified in `go.mod`.
+Use the Go toolchain specified in `go.mod` for build and test.
 
 ---
 
@@ -57,11 +58,11 @@ Full commit list: see Appendix A.
 
 ## 4. Before-24h vs current comparison (the user's request)
 
-Method: checked out `prior revision` (v0.16.66, the last commit >24h old) into a git worktree and ran a
+Method: checked out v0.16.66 (the last version more than 24 hours old) into a git worktree and ran a
 full `ocr scan` on it; compared to a full `ocr scan` of current HEAD. Both are full scans of the
 whole repo, fly-frontend (`cmd/demo-api/static/`) excluded.
 
-| severity | before 24h (prior revision v0.16.66) | current (v0.16.98 scan) | delta |
+| severity | before 24h (73e9631 v0.16.66) | current (v0.16.98 scan) | delta |
 |---|---|---|---|
 | critical | 0 | 1 | +1 |
 | high | 29 | 26 | -3 |
@@ -229,7 +230,7 @@ Net effect is still positive (section 4), but the sweep's size is what produced 
 | Earlier full scans | Local review output |
 | Backlog (359 + pass-2 353) | `docs/OCR-BACKLOG.md` |
 | Session logs | Local review output |
-| Commits this session | `git log prior revision..HEAD` |
+| Review timeline | Appendix A |
 
 `docs/ocr-artifacts/` is gitignored (large, regenerable). Copy the JSONs out before
 the machine is reset if they must survive.
@@ -246,7 +247,7 @@ the machine is reset if they must survive.
 
 ---
 
-## Appendix A - commits this session (`prior revision..HEAD`)
+## Appendix A - changes during this review
 
 ```
 v0.16.99: fix critical - Windows processAlive errno type mismatch

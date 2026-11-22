@@ -55,7 +55,7 @@ type flyLiveFeed struct {
 	stopOnce  sync.Once
 }
 
-func newFlyLiveHandler(root string, logger *log.Logger) http.Handler {
+func newFlyLiveHandler(root string, logger *log.Logger) *flyLiveFeed {
 	f := newFlyLiveFeed(root)
 	f.logger = logger
 	f.publish(false)
@@ -224,7 +224,12 @@ func (f *flyLiveFeed) refresh() {
 	if info.Size()-f.offset > flyLiveReadLimit {
 		f.offset = info.Size() - flyLiveReadLimit
 		f.pending = nil
-		f.skipPartial = f.offset > 0
+		var preceding [1]byte
+		if _, err := file.ReadAt(preceding[:], f.offset-1); err != nil {
+			f.markUnavailable(err)
+			return
+		}
+		f.skipPartial = preceding[0] != '\n'
 	}
 	data := make([]byte, min(flyLiveReadLimit, max(0, info.Size()-f.offset)))
 	n, err := file.ReadAt(data, f.offset)

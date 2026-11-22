@@ -23,11 +23,14 @@ services:
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
       TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:-}
       TELEGRAM_ALLOWED_CHAT_IDS: ${TELEGRAM_ALLOWED_CHAT_IDS:-}
-      POSTGRES_DSN: postgres://hackathonkit:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@postgres:5432/hackathonkit?sslmode=disable
+      POSTGRES_DSN: "host=postgres port=5432 sslmode=disable"
+      PGUSER: ${POSTGRES_USER:-hackathonkit}
+      PGDATABASE: ${POSTGRES_DB:-hackathonkit}
+      PGPASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
       MINIO_ENDPOINT: minio:9000
       MINIO_ACCESS_KEY: ${MINIO_ROOT_USER:-hackathonkit}
       MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD:?set MINIO_ROOT_PASSWORD in .env}
-      MINIO_BUCKET: hackathonkit
+      MINIO_BUCKET: ${MINIO_BUCKET:-hackathonkit}
     # data/logs/evals are shared read-write with demo-api by design: the MCP
     # writes artifacts/calls, the demo dashboard writes plan approvals.
     volumes:
@@ -50,7 +53,10 @@ services:
       HACKATHONKIT_DEMO_PORT: "8787"
       HACKATHONKIT_DEMO_HOST: 0.0.0.0
       HACKATHONKIT_DEMO_TOKEN: ${HACKATHONKIT_DEMO_TOKEN:?set HACKATHONKIT_DEMO_TOKEN in .env}
-      POSTGRES_DSN: postgres://hackathonkit:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@postgres:5432/hackathonkit?sslmode=disable
+      POSTGRES_DSN: "host=postgres port=5432 sslmode=disable"
+      PGUSER: ${POSTGRES_USER:-hackathonkit}
+      PGDATABASE: ${POSTGRES_DB:-hackathonkit}
+      PGPASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
     ports:
       - "127.0.0.1:8787:8787"
     volumes:
@@ -64,34 +70,28 @@ services:
       context: .
       dockerfile: Dockerfile
       target: quality
+      args:
+        HACKATHONKIT_UID: ${HACKATHONKIT_UID:-1000}
+        HACKATHONKIT_GID: ${HACKATHONKIT_GID:-1000}
     profiles: ["quality"]
-    # Runs as root by default: it writes evals/quality/ evidence through a host
-    # bind mount of unknown ownership and is CI-only tooling. The Go build cache
-    # volume below is mounted at /root for the same reason.
-    #
-    # To keep host-tree ownership clean, run as the host user and point the Go
-    # caches at world-writable locations:
-    #   docker compose run --rm \
-    #     --user "$(id -u):$(id -g)" \
-    #     -e GOCACHE=/tmp/go-build -e GOMODCACHE=/tmp/go-mod \
-    #     quality
+    user: "${HACKATHONKIT_UID:-1000}:${HACKATHONKIT_GID:-1000}"
     working_dir: /workspace
     environment:
       HACKATHONKIT_REPO_ROOT: /workspace
     volumes:
       - ./:/workspace
-      - go-mod-cache:/go/pkg/mod
-      - go-build-cache:/root/.cache/go-build
+      - quality-mod-cache:/home/hackathonkit/go-mod
+      - quality-build-cache:/home/hackathonkit/go-build
 
   postgres:
     image: postgres:16.15-alpine3.24
     environment:
-      POSTGRES_USER: hackathonkit
+      POSTGRES_USER: ${POSTGRES_USER:-hackathonkit}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
-      POSTGRES_DB: hackathonkit
+      POSTGRES_DB: ${POSTGRES_DB:-hackathonkit}
     restart: unless-stopped
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U hackathonkit -d hackathonkit"]
+      test: ["CMD-SHELL", 'pg_isready -U "$$POSTGRES_USER" -d "$$POSTGRES_DB"']
       interval: 5s
       timeout: 3s
       retries: 12
@@ -121,9 +121,8 @@ services:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER:-hackathonkit}
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?set MINIO_ROOT_PASSWORD in .env}
     healthcheck:
-      # Probe the S3 API itself; mirror scripts/docker-check.sh's curl/wget
-      # fallback so a missing helper cannot pin the service as unhealthy.
-      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:9000/minio/health/live >/dev/null 2>&1 || wget -q -O- http://127.0.0.1:9000/minio/health/live >/dev/null 2>&1 || exit 1"]
+      # The pinned release ships /usr/bin/curl in its minimal runtime image.
+      test: ["CMD", "/usr/bin/curl", "-fsS", "-o", "/dev/null", "http://127.0.0.1:9000/minio/health/live"]
       interval: 5s
       timeout: 3s
       retries: 12
@@ -137,5 +136,5 @@ services:
 volumes:
   pgdata:
   miniodata:
-  go-mod-cache:
-  go-build-cache:
+  quality-mod-cache:
+  quality-build-cache:

@@ -471,3 +471,22 @@ func TestMBCategoryScores(t *testing.T) {
 		t.Fatal("mb scores with a broken brain must fail")
 	}
 }
+
+func TestTwoRoutersPreservePersistedDopamine(t *testing.T) {
+	path := saveTestBrain(t, NewMBrain(16, 0.25, []string{"timeseries"}, 1))
+	ctx := context.Background()
+	routers := []*Router{NewRouter(config.RoutingSettings{}).WithBrain(path).WithEmbeddings(fakeEmbedder{}, "", "fake"), NewRouter(config.RoutingSettings{}).WithBrain(path).WithEmbeddings(fakeEmbedder{}, "", "fake")}
+	for _, r := range routers {
+		if r.loadBrain() == nil {
+			t.Fatal("no brain")
+		}
+	}
+	for _, r := range routers {
+		if !r.applyDopamine(ctx, FeedbackEvent{Task: "analyze telemetry", Chosen: []string{"timeseries.analyze"}, Source: "accepted"}) {
+			t.Fatal("update failed")
+		}
+	}
+	if n := readBrain(path).Dopamine.PAM; n != 2 {
+		t.Fatalf("lost update: %d", n)
+	}
+}

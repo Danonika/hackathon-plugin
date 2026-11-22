@@ -28,7 +28,7 @@ check() {
 # Fake repository layout with a local binary and a fake docker CLI.
 REPO="$TMP/repo"
 mkdir -p "$REPO/scripts" "$REPO/bin" "$TMP/bin"
-cp "$ROOT/scripts/smoke.sh" "$REPO/scripts/smoke.sh"
+cp "$ROOT/scripts/smoke.sh" "$ROOT/scripts/bounded.sh" "$REPO/scripts/"
 printf 'services: {}\n' > "$REPO/docker-compose.yml"
 
 write_responder() {
@@ -53,20 +53,14 @@ EOF
   chmod +x "$path"
 }
 
-# Derive the expected request count from smoke.sh instead of hard-coding it.
-# `grep -c` exits 1 on no match and would abort the whole suite under `set -e`,
-# so derive it non-fatally and assert it explicitly.
-EXPECTED_STDIN=$(grep -c '^{"jsonrpc":"2.0","id":' "$ROOT/scripts/smoke.sh" 2>/dev/null || true)
-if [ -z "$EXPECTED_STDIN" ] || [ "$EXPECTED_STDIN" -lt 1 ]; then
-  echo "[smoke-test] could not derive the request count from scripts/smoke.sh" >&2
-  exit 1
-fi
+# The MCP smoke contract sends initialize, tools/list and system.context.
+EXPECTED_STDIN=3
 
 write_responder "$REPO/bin/hackathonkit-mcp" binary
 write_responder "$TMP/bin/docker" docker
 
 run_smoke() {
-  HACKATHONKIT_SMOKE_DOCKER="$TMP/bin/docker" MARKER="$TMP/marker" PATH="$TMP/bin:$PATH" sh "$REPO/scripts/smoke.sh" "$@"
+  HACKATHONKIT_SMOKE_SKIP_STALE= HACKATHONKIT_SMOKE_DOCKER="$TMP/bin/docker" MARKER="$TMP/marker" PATH="$TMP/bin:$PATH" sh "$REPO/scripts/smoke.sh" "$@"
 }
 
 # --compose forces Docker even though bin/hackathonkit-mcp exists.
@@ -76,7 +70,7 @@ if run_smoke --compose >/dev/null 2>&1; then
 else
   check "--compose exits 0" 0 "non-zero exit"
 fi
-check "--compose used docker with the compose args" "$(grep -q "run --rm -T hackathonkit-mcp stdin=$EXPECTED_STDIN" "$TMP/marker" 2>/dev/null && echo 1 || echo 0)" "$(cat "$TMP/marker" 2>/dev/null)"
+check "--compose used docker with the compose args" "$(grep -Fqx "docker compose -f $REPO/docker-compose.yml run --rm -T hackathonkit-mcp stdin=$EXPECTED_STDIN" "$TMP/marker" 2>/dev/null && echo 1 || echo 0)" "$(cat "$TMP/marker" 2>/dev/null)"
 check "--compose skipped the local binary" "$(grep -q '^binary ' "$TMP/marker" 2>/dev/null && echo 0 || echo 1)"
 
 # --binary uses the local binary and never Docker.
@@ -100,7 +94,7 @@ check "--auto prefers the local binary" "$(grep -q '^binary ' "$TMP/marker" 2>/d
 check "--auto skips docker" "$(grep -q '^docker ' "$TMP/marker" 2>/dev/null && echo 0 || echo 1)"
 
 # --auto detects a stale local binary (a newer .go source) and uses compose.
-mkdir -p "$REPO/cmd" "$REPO/internal"
+mkdir -p "$REPO/cmd"
 # Force a guaranteed ordering regardless of filesystem timestamp granularity:
 # backdate the binary so the freshly written source is unambiguously newer.
 touch -t 200001010000 "$REPO/bin/hackathonkit-mcp"
@@ -127,7 +121,8 @@ rm -f "$TMP/marker"
 if HACKATHONKIT_SMOKE_DOCKER="hackathonkit-no-such-docker" MARKER="$TMP/marker" PATH="/usr/bin:/bin" sh "$REPO/scripts/smoke.sh" --auto >/dev/null 2>&1; then
   check "--auto without any runtime fails with exit 1" 0 "expected non-zero exit"
 else
-  check "--auto without any runtime fails with exit 1" 1
+  status=$?
+  check "--auto without any runtime fails with exit 1" "$([ "$status" = 1 ] && echo 1)" "exit=$status"
 fi
 
 # --binary without a local binary fails with a clear status.

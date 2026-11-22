@@ -106,6 +106,7 @@
     </div>
   </div>
 </div>
+<script src="/fly-static/demo-token.js"></script>
 <script>
 async function j(url, opts) {
   const r = await fetch(url, opts);
@@ -113,14 +114,7 @@ async function j(url, opts) {
   return r.json();
 }
 
-let TOKEN = sessionStorage.getItem('hackathonkitToken') || '';
-
-function tokenHeader() {
-  const field = document.getElementById('token');
-  TOKEN = (field && field.value.trim()) || TOKEN;
-  if (TOKEN) sessionStorage.setItem('hackathonkitToken', TOKEN);
-  return TOKEN ? { 'X-HackathonKit-Token': TOKEN } : {};
-}
+const tokenHeader = bindDemoToken(document.getElementById('token'));
 
 async function setMode(mode) {
   const headers = Object.assign({ 'Content-Type': 'application/json' }, tokenHeader());
@@ -188,7 +182,7 @@ function renderFly(events, feedback) {
     '<div class="rec" data-cap="' + esc(r.capability) + '">' + esc(r.capability) + ' — ' + Math.round(r.score * 100) + '%</div>').join('');
 
   const byTrace = (feedback || []).filter(f => ev.trace_id && f.trace_id === ev.trace_id);
-  const matches = (feedback || []).filter(f => f.task === ev.task);
+  const matches = (feedback || []).filter(f => (!ev.trace_id || !f.trace_id) && f.task === ev.task);
   const fb = byTrace.length ? byTrace[byTrace.length - 1] : (matches.length ? matches[matches.length - 1] : null);
   if (fb) {
     const chosen = fb.chosen || [];

@@ -38,8 +38,10 @@ func (f *fakeMeta) RecordFlyPrediction(context.Context, metadata.FlyPrediction) 
 func (f *fakeMeta) RecordEvalRun(context.Context, metadata.EvalRun) error { return nil }
 func (f *fakeMeta) Close()                                                {}
 
-func testHandler(root string, mgr *config.Manager, meta metadata.Recorder, token string) http.Handler {
-	return newHandler(root, mgr, meta, token, log.New(io.Discard, "", 0))
+func testHandler(t *testing.T, root string, mgr *config.Manager, meta metadata.Recorder, token string) http.Handler {
+	h := newHandler(root, mgr, meta, token, log.New(io.Discard, "", 0))
+	t.Cleanup(h.close)
+	return h
 }
 
 func doRequest(t *testing.T, h http.Handler, method, target, body string, headers map[string]string) *httptest.ResponseRecorder {
@@ -79,7 +81,7 @@ func writeTestFile(t *testing.T, path, content string) {
 
 func TestStaticPages(t *testing.T) {
 	root := t.TempDir()
-	h := testHandler(root, config.NewManager(root), metadata.Disabled{}, "s3cret")
+	h := testHandler(t, root, config.NewManager(root), metadata.Disabled{}, "s3cret")
 
 	for _, path := range []string{"/", "/fly-viz", "/control", "/plan"} {
 		rec := doRequest(t, h, http.MethodGet, path, "", nil)
@@ -111,7 +113,7 @@ func TestStaticPages(t *testing.T) {
 
 func TestHealthz(t *testing.T) {
 	root := t.TempDir()
-	h := testHandler(root, config.NewManager(root), metadata.Disabled{}, "")
+	h := testHandler(t, root, config.NewManager(root), metadata.Disabled{}, "")
 	rec := doRequest(t, h, http.MethodGet, "/healthz", "", nil)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d", rec.Code)
@@ -126,7 +128,7 @@ func TestRoutingEndpoint(t *testing.T) {
 	root := t.TempDir()
 	mgr := config.NewManager(root)
 	meta := &fakeMeta{}
-	h := testHandler(root, mgr, meta, "s3cret")
+	h := testHandler(t, root, mgr, meta, "s3cret")
 
 	rec := doRequest(t, h, http.MethodGet, "/routing", "", nil)
 	if rec.Code != http.StatusOK {
@@ -154,7 +156,7 @@ func TestRoutingEndpoint(t *testing.T) {
 
 	rec = doRequest(t, h, http.MethodPost, "/routing", `{"mode":"fly"}`, map[string]string{
 		"X-HackathonKit-Token": "s3cret",
-		"Origin":           "http://localhost:8787",
+		"Origin":               "http://localhost:8787",
 	})
 	if rec.Code != http.StatusOK {
 		t.Fatalf("valid toggle = %d: %s", rec.Code, rec.Body.String())
@@ -182,7 +184,7 @@ func TestRoutingEndpoint(t *testing.T) {
 
 func TestControlEndpointsWithoutDatabase(t *testing.T) {
 	root := t.TempDir()
-	h := testHandler(root, config.NewManager(root), metadata.Disabled{}, "")
+	h := testHandler(t, root, config.NewManager(root), metadata.Disabled{}, "")
 
 	if rec := doRequest(t, h, http.MethodGet, "/control/api/sessions", "", nil); rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("sessions without db = %d, want 503", rec.Code)
@@ -215,7 +217,7 @@ func TestControlEndpointsWithDatabase(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	h := testHandler(root, config.NewManager(root), metadata.Disabled{}, "")
+	h := testHandler(t, root, config.NewManager(root), metadata.Disabled{}, "")
 
 	rec := doRequest(t, h, http.MethodGet, "/control/api/sessions", "", nil)
 	if rec.Code != http.StatusOK {
@@ -252,7 +254,7 @@ func TestControlEndpointsWithDatabase(t *testing.T) {
 func TestPlanEndpoints(t *testing.T) {
 	root := t.TempDir()
 	mgr := config.NewManager(root)
-	h := testHandler(root, mgr, metadata.Disabled{}, "s3cret")
+	h := testHandler(t, root, mgr, metadata.Disabled{}, "s3cret")
 
 	if rec := doRequest(t, h, http.MethodGet, "/plan/api/latest", "", nil); rec.Code != http.StatusOK {
 		t.Fatalf("latest without plan = %d", rec.Code)
@@ -337,7 +339,7 @@ func TestPlanEndpoints(t *testing.T) {
 
 func TestPlanDecisionApprovalWriteFailure(t *testing.T) {
 	root := t.TempDir()
-	h := testHandler(root, config.NewManager(root), metadata.Disabled{}, "s3cret")
+	h := testHandler(t, root, config.NewManager(root), metadata.Disabled{}, "s3cret")
 	if err := plans.Save(root, plans.Plan{Slug: "broken-plan", Stages: []plans.Stage{{ID: "S0", Status: "todo"}}}); err != nil {
 		t.Fatal(err)
 	}
@@ -354,7 +356,7 @@ func TestPlanDecisionApprovalWriteFailure(t *testing.T) {
 func TestInputsAndArtifacts(t *testing.T) {
 	root := t.TempDir()
 	mgr := config.NewManager(root)
-	h := testHandler(root, mgr, metadata.Disabled{}, "")
+	h := testHandler(t, root, mgr, metadata.Disabled{}, "")
 
 	rec := doRequest(t, h, http.MethodGet, "/inputs", "", nil)
 	if rec.Code != http.StatusOK {
@@ -429,7 +431,7 @@ func TestInputsPermissionError(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = os.Chmod(dir, 0o755) })
-	h := testHandler(root, config.NewManager(root), metadata.Disabled{}, "")
+	h := testHandler(t, root, config.NewManager(root), metadata.Disabled{}, "")
 	rec := doRequest(t, h, http.MethodGet, "/inputs", "", nil)
 	if rec.Code != http.StatusInternalServerError {
 		t.Fatalf("unreadable inputs = %d, want 500", rec.Code)
@@ -441,7 +443,7 @@ func TestLogTailEndpoints(t *testing.T) {
 	writeTestFile(t, filepath.Join(root, "logs", "mcp-calls.jsonl"), "{\"n\":1}\n{\"n\":2}\n{\"n\":3}\n")
 	writeTestFile(t, filepath.Join(root, "logs", "fly-feedback.jsonl"), "{\"ok\":true}\n")
 	writeTestFile(t, filepath.Join(root, "logs", "fly-neuron-events.jsonl"), "{\"neuron\":\"x\"}\n")
-	h := testHandler(root, config.NewManager(root), metadata.Disabled{}, "")
+	h := testHandler(t, root, config.NewManager(root), metadata.Disabled{}, "")
 
 	rec := doRequest(t, h, http.MethodGet, "/calls?limit=2", "", nil)
 	calls := decodeBody[struct {
@@ -505,7 +507,7 @@ func TestTailAndQueryLimitHelpers(t *testing.T) {
 func TestMetrics(t *testing.T) {
 	root := t.TempDir()
 	mgr := config.NewManager(root)
-	h := testHandler(root, mgr, metadata.Disabled{}, "")
+	h := testHandler(t, root, mgr, metadata.Disabled{}, "")
 	if _, err := mgr.SetRoutingMode("fly"); err != nil {
 		t.Fatal(err)
 	}
@@ -520,7 +522,7 @@ func TestMetrics(t *testing.T) {
 
 func TestFlyModelEndpoints(t *testing.T) {
 	root := t.TempDir()
-	h := testHandler(root, config.NewManager(root), metadata.Disabled{}, "")
+	h := testHandler(t, root, config.NewManager(root), metadata.Disabled{}, "")
 
 	rec := doRequest(t, h, http.MethodGet, "/fly-model-list", "", nil)
 	if files := decodeBody[struct {
@@ -557,7 +559,7 @@ func TestFlyModelEndpoints(t *testing.T) {
 
 func TestWithCORS(t *testing.T) {
 	root := t.TempDir()
-	h := testHandler(root, config.NewManager(root), metadata.Disabled{}, "")
+	h := testHandler(t, root, config.NewManager(root), metadata.Disabled{}, "")
 
 	// A different loopback port must not receive ACAO: reflecting it would let a
 	// page on any local port read token-bearing responses such as /fly-viz.
@@ -655,7 +657,7 @@ func TestApprovalHelpers(t *testing.T) {
 }
 func TestPlanDecisionRevisionGuard(t *testing.T) {
 	root := t.TempDir()
-	h := testHandler(root, config.NewManager(root), metadata.Disabled{}, "s3cret")
+	h := testHandler(t, root, config.NewManager(root), metadata.Disabled{}, "s3cret")
 	if err := plans.Save(root, plans.Plan{Slug: "rev-plan", Stages: plans.DefaultStages, Revision: 3}); err != nil {
 		t.Fatal(err)
 	}
@@ -681,7 +683,7 @@ func TestPlanDecisionRevisionGuard(t *testing.T) {
 
 func TestMutationWithoutTokenRequiresOrigin(t *testing.T) {
 	root := t.TempDir()
-	h := testHandler(root, config.NewManager(root), metadata.Disabled{}, "")
+	h := testHandler(t, root, config.NewManager(root), metadata.Disabled{}, "")
 	if err := plans.Save(root, plans.Plan{Slug: "origin-plan", Stages: plans.DefaultStages, Revision: 1}); err != nil {
 		t.Fatal(err)
 	}

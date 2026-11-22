@@ -96,7 +96,7 @@ func (c *Client) doJSON(ctx context.Context, path string, payload any, out any) 
 		return fmt.Errorf("openai %s: response exceeds 8MB", path)
 	}
 	if resp.StatusCode >= 300 {
-		return fmt.Errorf("openai %s: status %d: %s", path, resp.StatusCode, truncate(string(data), 400))
+		return fmt.Errorf("openai %s: status %d", path, resp.StatusCode)
 	}
 	if out == nil {
 		return nil
@@ -250,8 +250,12 @@ func (c *Client) Transcribe(ctx context.Context, path string, language string) (
 	if err != nil {
 		return "", err
 	}
-	if _, err := io.Copy(part, f); err != nil {
+	n, err := io.Copy(part, io.LimitReader(f, maxAudioBytes+1))
+	if err != nil {
 		return "", err
+	}
+	if n > maxAudioBytes {
+		return "", fmt.Errorf("audio file exceeds %d bytes", maxAudioBytes)
 	}
 	if err := w.Close(); err != nil {
 		return "", err
@@ -277,7 +281,7 @@ func (c *Client) Transcribe(ctx context.Context, path string, language string) (
 		return "", fmt.Errorf("openai transcribe: response exceeds 32MB")
 	}
 	if resp.StatusCode >= 300 {
-		return "", fmt.Errorf("openai transcribe: status %d: %s", resp.StatusCode, truncate(string(data), 400))
+		return "", fmt.Errorf("openai transcribe: status %d", resp.StatusCode)
 	}
 	var out struct {
 		Text string `json:"text"`
@@ -327,12 +331,4 @@ func (c *Client) ClassifyTask(ctx context.Context, task string, categories []str
 		return nil, fmt.Errorf("llm classifier returned no known categories")
 	}
 	return out, nil
-}
-
-func truncate(s string, n int) string {
-	runes := []rune(s)
-	if len(runes) <= n {
-		return s
-	}
-	return string(runes[:n]) + "..."
 }

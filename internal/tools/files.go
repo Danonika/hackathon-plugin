@@ -53,14 +53,22 @@ func registerFiles(reg *mcp.Registry, d Deps) {
 			warnings := []string{}
 			switch ext {
 			case "csv", "tsv":
+				if st.Size() == 0 {
+					data["rows"] = 0
+					data["columns"] = 0
+					data["headers"] = []string{}
+					data["has_timestamp"] = false
+					warnings = append(warnings, "empty table")
+					break
+				}
 				if st.Size() > maxTextInspectBytes {
 					warnings = append(warnings, fmt.Sprintf("table is %d bytes; skipping full parse (limit %d)", st.Size(), maxTextInspectBytes))
 					break
 				}
-				t, warns, terr := readAnyTable(full, "")
+				t, warns, terr := readAnyTable(ctx, full, "")
 				warnings = append(warnings, warns...)
 				if terr != nil {
-					warnings = append(warnings, terr.Error())
+					return mcp.Partial(trace(ctx), data, append(warnings, terr.Error())...), nil
 				} else {
 					hasTS := false
 					for _, h := range t.Headers {
@@ -78,10 +86,10 @@ func registerFiles(reg *mcp.Registry, d Deps) {
 					warnings = append(warnings, fmt.Sprintf("workbook is %d bytes; skipping full parse (limit %d)", st.Size(), maxTextInspectBytes))
 					break
 				}
-				sheets, warns, terr := readXLSXSheets(full)
+				sheets, warns, terr := readXLSXSheets(ctx, full)
 				warnings = append(warnings, warns...)
 				if terr != nil {
-					warnings = append(warnings, terr.Error())
+					return mcp.Partial(trace(ctx), data, append(warnings, terr.Error())...), nil
 				} else {
 					names := make([]string, 0, len(sheets))
 					for _, s := range sheets {

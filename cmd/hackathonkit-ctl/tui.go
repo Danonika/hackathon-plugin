@@ -12,7 +12,7 @@ import (
 	"hackathonkit.local/agentkit/internal/control"
 )
 
-type refreshMsg struct{}
+type refreshMsg struct{ gen int }
 
 // loadedMsg carries query results back to the update loop.
 type loadedMsg struct {
@@ -108,11 +108,11 @@ func (m *tuiModel) applyLoaded(msg loadedMsg) {
 }
 
 func (m tuiModel) Init() tea.Cmd {
-	return tea.Batch(tickCmd(), loadCmd(m.store, m.selected, m.gen))
+	return loadCmd(m.store, m.selected, m.gen)
 }
 
-func tickCmd() tea.Cmd {
-	return tea.Tick(2*time.Second, func(time.Time) tea.Msg { return refreshMsg{} })
+func tickCmd(gen int) tea.Cmd {
+	return tea.Tick(2*time.Second, func(time.Time) tea.Msg { return refreshMsg{gen: gen} })
 }
 
 func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -141,10 +141,17 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 	case loadedMsg:
+		if msg.gen != m.gen {
+			return m, nil
+		}
 		m.applyLoaded(msg)
+		return m, tickCmd(m.gen)
 	case refreshMsg:
+		if msg.gen != m.gen {
+			return m, nil
+		}
 		m.gen++
-		return m, tea.Batch(tickCmd(), loadCmd(m.store, m.selected, m.gen))
+		return m, loadCmd(m.store, m.selected, m.gen)
 	}
 	return m, nil
 }
@@ -201,9 +208,15 @@ func (m tuiModel) View() string {
 
 	var left strings.Builder
 	left.WriteString(dimStyle.Render("SESSIONS") + "\n")
-	for i, sess := range m.sessions {
+	first, last := 0, len(m.sessions)
+	if m.height > 0 {
+		rows := max(1, m.height-5)
+		first = max(0, min(m.selected-rows+1, last-rows))
+		last = min(last, first+rows)
+	}
+	for i, sess := range m.sessions[first:last] {
 		line := fmt.Sprintf("%-20s %-7s risk %-5.1f %s", truncate(sess.ID, 20), sess.Status, sess.RiskScore, sess.UpdatedAt.Format("15:04"))
-		if i == m.selected {
+		if first+i == m.selected {
 			left.WriteString(selectedStyle.Render("> "+line) + "\n")
 			continue
 		}
@@ -258,9 +271,12 @@ func (m tuiModel) View() string {
 	body := lipgloss.NewStyle().Width(leftWidth).Render(left.String())
 	if rightWidth > 0 {
 		body = lipgloss.JoinHorizontal(lipgloss.Top,
-			lipgloss.NewStyle().Width(leftWidth).Render(left.String()),
+			body,
 			lipgloss.NewStyle().Width(rightWidth).Render(right.String()),
 		)
+	}
+	if m.height > 0 {
+		body = lipgloss.NewStyle().MaxHeight(max(1, m.height-lipgloss.Height(b.String())-1)).Render(body)
 	}
 	b.WriteString(body)
 	b.WriteString("\n" + dimStyle.Render(m.status))

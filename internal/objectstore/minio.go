@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math"
 	"os"
 	"strings"
 
@@ -24,10 +25,14 @@ type Settings struct {
 // useSSLEnv accepts the common boolean spellings instead of only "true".
 func useSSLEnv() bool {
 	switch strings.ToLower(strings.TrimSpace(os.Getenv("MINIO_USE_SSL"))) {
+	case "", "0", "false", "f", "no", "n", "off":
+		return false
 	case "1", "true", "t", "yes", "y", "on":
 		return true
+	default:
+		log.Print("objectstore: invalid MINIO_USE_SSL; requiring TLS")
+		return true
 	}
-	return false
 }
 
 func SettingsFromEnv() Settings {
@@ -135,7 +140,10 @@ func (c *Client) GetCapped(ctx context.Context, name string, limit int64) ([]byt
 		return nil, err
 	}
 	defer obj.Close()
-	return io.ReadAll(io.LimitReader(obj, limit+1))
+	if limit < math.MaxInt64 {
+		limit++
+	}
+	return io.ReadAll(io.LimitReader(obj, limit))
 }
 
 const maxObjectBytes = 64 << 20

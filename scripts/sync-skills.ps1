@@ -1,3 +1,4 @@
+param([ValidateSet("core", "full")][string]$InstallProfile)
 $ErrorActionPreference = "Stop"
 
 function Fail([string]$Message) {
@@ -34,13 +35,15 @@ function Get-TreeManifest([string]$Path) {
   @($items | Sort-Object)
 }
 
-if (-not $PSCommandPath) {
+if (-not $PSCommandPath -or $MyInvocation.InvocationName -eq '.') {
   Fail "[sync-skills] PSCommandPath is empty; run this script as a file, not dot-sourced"
 }
 $root = Split-Path -Parent (Split-Path -Parent $PSCommandPath)
 if (-not $root -or -not (Test-Path -LiteralPath (Join-Path $root "docker-compose.yml"))) {
   Fail "[sync-skills] refusing: '$root' does not look like the hackathonkit repository root"
 }
+. (Join-Path $PSScriptRoot "skill-profile.ps1")
+if (-not $InstallProfile) { $InstallProfile = Get-InstalledSkillProfile $root }
 $src = Join-Path (Join-Path $root "plugins") (Join-Path "hackathonkit" "skills")
 $dst = Join-Path (Join-Path $root ".agents") "skills"
 
@@ -50,106 +53,33 @@ if (-not (Test-Path -LiteralPath $src)) {
 
 # Serialize concurrent runs (e.g. sync-harness.ps1 plus a manual invocation):
 # both mutate the shared $dst during the swap.
-$lock = "$dst.lock"
-# The lock lives under $dst's parent (".agents"), which may not exist on a fresh
-# checkout; create it once up front so the acquire loop is not defeated by a
-# missing parent.
-$lockParent = Split-Path -Parent $lock
-if (-not (Test-Path -LiteralPath $lockParent)) {
-  New-Item -ItemType Directory -Force -Path $lockParent | Out-Null
-}
-$locked = $false
-# Owner token written inside the lock; cleanup only removes a lock this run owns.
-$lockToken = "$PID-$([System.Guid]::NewGuid().ToString('N'))"
-for ($i = 0; $i -lt 100; $i++) {
-  try {
-    New-Item -ItemType Directory -Path $lock -ErrorAction Stop | Out-Null
-    Set-Content -LiteralPath (Join-Path $lock "pid") -Value $PID -ErrorAction SilentlyContinue
-    Set-Content -LiteralPath (Join-Path $lock "owner") -Value $lockToken -ErrorAction SilentlyContinue
-    $locked = $true
-    break
-  } catch {
-    if (Test-Path -LiteralPath $lock) {
-      $holder = $null
-      $pidFile = Join-Path $lock "pid"
-      if (Test-Path -LiteralPath $pidFile) {
-        try {
-          $holder = Get-Content -LiteralPath $pidFile -Force -ErrorAction Stop | Select-Object -First 1
-        } catch { $holder = $null }
-      }
-      $stale = $false
-      $holderPid = 0
-      if ($holder -and [int]::TryParse(("$holder").Trim(), [ref]$holderPid) -and $holderPid -gt 0) {
-        # Only evict when the owning process is gone; a slow-but-live copy must
-        # not have its lock stolen. An unparseable pid falls through to the age
-        # check rather than throwing. A dead pid later recycled by an unrelated
-        # process can leave the lock pinned, in which case the age check applies
-        # only when the lock also looks abandoned.
-        if (-not (Get-Process -Id $holderPid -ErrorAction SilentlyContinue)) {
-          try {
-            $agePid = (Get-Date) - (Get-Item -LiteralPath $lock -Force -ErrorAction Stop).LastWriteTime
-            if ($agePid.TotalSeconds -gt 60) { $stale = $true }
-          } catch { $stale = $true }
-        }
-      } else {
-        # No usable pid: only evict when the lock is old enough to be abandoned.
-        # Guard the stat so a vanished lock cannot throw out of the catch.
-        try {
-          $age = (Get-Date) - (Get-Item -LiteralPath $lock -Force -ErrorAction Stop).LastWriteTime
-          if ($age.TotalSeconds -gt 60) { $stale = $true }
-        } catch { $stale = $false }
-      }
-      if ($stale) {
-        $stalePath = "$lock.stale.$PID"
-        try {
-          Move-Item -LiteralPath $lock -Destination $stalePath -Force -ErrorAction Stop
-          # The stale lock was renamed atomically: only the winner proceeds.
-          Remove-Item -LiteralPath $stalePath -Recurse -Force -ErrorAction SilentlyContinue
-        } catch {
-          Write-Verbose "[sync-skills] could not evict the stale lock: $($_.Exception.Message)"
-        }
-        # Avoid a tight spin when eviction keeps failing.
-        Start-Sleep -Milliseconds 200
-        continue
-      }
-    }
-    Start-Sleep -Milliseconds 200
-  }
-}
-if (-not $locked) { Fail "[sync-skills] could not acquire the mirror lock at $lock" }
-
-# Recover from a previously interrupted swap before touching $dst: if the live
-# mirror is missing but an old copy survives, restore it.
-if (-not (Test-Path -LiteralPath $dst)) {
-  $recover = Get-ChildItem -LiteralPath (Split-Path -Parent $dst) -Directory -Force -ErrorAction SilentlyContinue |
-    Where-Object { $_.Name -like "$(Split-Path -Leaf $dst).old.*" } |
-    Sort-Object LastWriteTime -Descending | Select-Object -First 1
-  if ($recover) {
-    Write-Host "[sync-skills] restoring $dst from interrupted swap $($recover.FullName)"
-    Move-Item -LiteralPath $recover.FullName -Destination $dst -Force
-  }
-}
-# Sweep orphaned temp/stale-swap directories left by crashed runs, but never
-# remove artifacts that a live process still owns: the embedded PID is checked.
-function Remove-IfOrphaned([System.IO.DirectoryInfo]$Dir) {
-  $m = [regex]::Match($Dir.Name, '\.(?:tmp|old|lock\.stale)\.(\d+)$')
-  if (-not $m.Success) { return }
-  $owner = 0
-  if ([int]::TryParse($m.Groups[1].Value, [ref]$owner) -and $owner -gt 0) {
-    if (Get-Process -Id $owner -ErrorAction SilentlyContinue) { return }
-  }
-  Remove-Item -LiteralPath $Dir.FullName -Recurse -Force -ErrorAction SilentlyContinue
-}
-Get-ChildItem -LiteralPath (Split-Path -Parent $dst) -Directory -Force -ErrorAction SilentlyContinue |
-  Where-Object { $_.Name -like "$(Split-Path -Leaf $dst).tmp.*" -or $_.Name -like "$(Split-Path -Leaf $dst).old.*" -or $_.Name -like "$(Split-Path -Leaf $dst).lock.stale.*" } |
-  ForEach-Object { Remove-IfOrphaned $_ }
-
-# Build the mirror in a temporary directory and swap it in, so consumers never
-# observe a missing or half-populated mirror when the copy fails.
-$tmp = "$dst.tmp.$PID"
-if (Test-Path -LiteralPath $tmp) { Remove-Item -LiteralPath $tmp -Recurse -Force }
-New-Item -ItemType Directory -Force -Path $tmp | Out-Null
+. (Join-Path $PSScriptRoot "file-lock.ps1")
+$lockHandle = Enter-MirrorLock $root "agents-skills.lock"
+$tmp = $null
 try {
+  [void][IO.Directory]::CreateDirectory((Split-Path -Parent $dst))
+  # Recover from a previously interrupted swap before touching $dst: if the live
+  # mirror is missing but an old copy survives, restore it.
+  if (-not (Test-Path -LiteralPath $dst)) {
+    $recover = Get-ChildItem -LiteralPath (Split-Path -Parent $dst) -Directory -Force -ErrorAction SilentlyContinue |
+      Where-Object { $_.Name -like "$(Split-Path -Leaf $dst).old.*" } |
+      Sort-Object LastWriteTime -Descending | Select-Object -First 1
+    if ($recover) {
+      Write-Host "[sync-skills] restoring $dst from interrupted swap $($recover.FullName)"
+      Move-Item -LiteralPath $recover.FullName -Destination $dst -Force
+    }
+  }
+  # All new sh and PowerShell writers hold this kernel lock from before staging.
+  # Discard staging/backup directories abandoned by previous owners after restoring.
+  Get-ChildItem -LiteralPath (Split-Path -Parent $dst) -Directory -Force |
+    Where-Object { $_.Name -match '^skills[.](tmp|old)[.]([0-9]+|[a-fA-F0-9]{32})$' -and -not ($_.Attributes -band [IO.FileAttributes]::ReparsePoint) } |
+    ForEach-Object { Remove-Item -LiteralPath $_.FullName -Recurse -Force }
+
+  # Build the mirror in a temporary directory and swap it in, so consumers never
+  # observe a missing or half-populated mirror when the copy fails.
+  $tmp = "$dst.tmp.$PID"
+  if (Test-Path -LiteralPath $tmp) { Remove-Item -LiteralPath $tmp -Recurse -Force }
+  New-Item -ItemType Directory -Force -Path $tmp | Out-Null
   Copy-NoReparse $src $tmp
   # Compare the full relative file set (path + hash), not just top-level names.
   if (Compare-Object -ReferenceObject (Get-TreeManifest $src) -DifferenceObject (Get-TreeManifest $tmp)) {
@@ -165,9 +95,10 @@ try {
   if ($srcCount -ne $dstCount) {
     Fail "[sync-skills] mirror mismatch: source $srcCount, copied $dstCount"
   }
-  $count = $dstCount
+  Select-StagedSkillProfile $tmp $InstallProfile
+  $count = @(Get-ChildItem -LiteralPath $tmp -Directory -Force).Count
   # Move the live mirror aside before the swap so a failure can restore it.
-  $old = "$dst.old.$PID"
+  $old = "$dst.old.$([Guid]::NewGuid().ToString('N'))"
   if (Test-Path -LiteralPath $dst) { Move-Item -LiteralPath $dst -Destination $old -Force }
   try {
     Move-Item -LiteralPath $tmp -Destination $dst -Force
@@ -180,16 +111,8 @@ try {
     Remove-Item -LiteralPath $old -Recurse -Force -ErrorAction SilentlyContinue
   }
 } finally {
-  if (Test-Path -LiteralPath $tmp) { Remove-Item -LiteralPath $tmp -Recurse -Force -ErrorAction SilentlyContinue }
-  # Remove the lock only if this run still owns it: a stale-reclaimed lock may
-  # now belong to another process.
-  if (Test-Path -LiteralPath $lock) {
-    $ownerFile = Join-Path $lock "owner"
-    $owner = Get-Content -LiteralPath $ownerFile -ErrorAction SilentlyContinue | Select-Object -First 1
-    if ($owner -eq $lockToken) {
-      Remove-Item -LiteralPath $lock -Recurse -Force -ErrorAction SilentlyContinue
-    }
-  }
+  if ($tmp -and (Test-Path -LiteralPath $tmp)) { Remove-Item -LiteralPath $tmp -Recurse -Force -ErrorAction SilentlyContinue }
+  $lockHandle.Dispose()
 }
 Write-Host "[sync-skills] mirrored $count of $srcCount skills to .agents/skills"
 exit 0

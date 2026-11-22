@@ -3,6 +3,7 @@
 package plans
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"hash/fnv"
@@ -10,8 +11,10 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+	"unicode"
 
 	"hackathonkit.local/agentkit/internal/atomicfile"
+	"hackathonkit.local/agentkit/internal/filelock"
 )
 
 type Stage struct {
@@ -66,6 +69,16 @@ func Path(root, slug string) string {
 	return filepath.Join(Dir(root), Slug(slug)+".json")
 }
 
+// WithLock serializes a read-modify-write on the normalized plan file across processes.
+func WithLock(ctx context.Context, root, slug string, fn func() error) error {
+	unlock, err := filelock.AcquireContext(ctx, Path(root, slug)+".lock", 5*time.Second)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	return fn()
+}
+
 // Slug normalizes a plan name into a safe file stem.
 func Slug(value string) string {
 	value = strings.ToLower(strings.TrimSpace(value))
@@ -73,7 +86,7 @@ func Slug(value string) string {
 	lastDash := false
 	for _, r := range value {
 		switch {
-		case r >= 'a' && r <= 'z', r >= '0' && r <= '9', r >= 'а' && r <= 'я', r == 'ё':
+		case unicode.IsLetter(r), unicode.IsDigit(r):
 			b.WriteRune(r)
 			lastDash = false
 		default:
@@ -139,7 +152,9 @@ func LatestErr(root string) (Plan, bool, error) {
 	var bestTime time.Time
 	var firstErr error
 	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
+		// The dashboard stores each decision beside its plan as <slug>.approval.json.
+		name := entry.Name()
+		if entry.IsDir() || !strings.HasSuffix(name, ".json") || strings.HasSuffix(name, ".approval.json") {
 			continue
 		}
 		info, infoErr := entry.Info()

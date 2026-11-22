@@ -6,18 +6,20 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"math"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 
-	"hackathonkit.local/agentkit/internal/mcp"
 	"gopkg.in/yaml.v3"
+	"hackathonkit.local/agentkit/internal/mcp"
 )
 
 const (
 	toolTokenWarn     = 500
+	allToolsTokenWarn = 8000
 	skillLinesWarn    = 400
 	manifestTokenWarn = 4000
 	descriptionWarn   = 500
@@ -80,10 +82,11 @@ func registerContextBudget(reg *mcp.Registry, d Deps) {
 				"items":                     items,
 				"recommendations":           recommendations,
 				"limits": map[string]any{
-					"tool_tokens_warn":     toolTokenWarn,
-					"skill_lines_warn":     skillLinesWarn,
-					"manifest_tokens_warn": manifestTokenWarn,
-					"description_chars":    descriptionWarn,
+					"tool_tokens_warn":      toolTokenWarn,
+					"all_tools_tokens_warn": allToolsTokenWarn,
+					"skill_lines_warn":      skillLinesWarn,
+					"manifest_tokens_warn":  manifestTokenWarn,
+					"description_chars":     descriptionWarn,
 				},
 				"estimate": "tokens ~= bytes / 4",
 			}
@@ -144,17 +147,7 @@ func skillContextItems(ctx context.Context, root string) ([]contextItem, error) 
 			items = append(items, contextItem{Kind: "skill", Name: path, Flag: "walk failed: " + err.Error()})
 			return nil
 		}
-		if entry.IsDir() {
-			return nil
-		}
-		info, statErr := entry.Info()
-		if statErr != nil {
-			items = append(items, contextItem{Kind: "skill", Name: path, Flag: "stat failed: " + statErr.Error()})
-			return nil
-		}
-		data, readErr := os.ReadFile(path)
-		if readErr != nil {
-			items = append(items, contextItem{Kind: "skill", Name: path, Flag: "read failed: " + readErr.Error()})
+		if !entry.Type().IsRegular() {
 			return nil
 		}
 		rel, relErr := filepath.Rel(base, path)
@@ -172,19 +165,44 @@ func skillContextItems(ctx context.Context, root string) ([]contextItem, error) 
 		case strings.Contains(name, "/templates/"):
 			kind = "template"
 		}
-		item := contextItem{
-			Kind:   kind,
-			Name:   name,
-			Bytes:  int(info.Size()),
-			Lines:  bytes.Count(data, []byte("\n")) + 1,
-			Tokens: estimateTokens(int(info.Size())),
+		f, err := os.Open(path)
+		if err != nil {
+			items = append(items, contextItem{Kind: kind, Name: name, Flag: "read failed: " + err.Error()})
+			return nil
 		}
-		if kind == "skill" {
+		item := contextItem{Kind: kind, Name: name, Lines: 1}
+		// Only frontmatter needs parsing. Keep a bounded prefix and stream all line counts.
+		const maxPrefix = 64 << 10
+		var prefix bytes.Buffer
+		var buf [32 << 10]byte
+		for {
+			if err := ctx.Err(); err != nil {
+				f.Close()
+				return err
+			}
+			n, err := f.Read(buf[:])
+			item.Bytes += n
+			item.Lines += bytes.Count(buf[:n], []byte("\n"))
+			if kind == "skill" && prefix.Len() < maxPrefix {
+				prefix.Write(buf[:min(n, maxPrefix-prefix.Len())])
+			}
+			if err != nil {
+				if err != io.EOF {
+					item.Flag = "read failed: " + err.Error()
+				}
+				break
+			}
+		}
+		f.Close()
+		item.Tokens = estimateTokens(item.Bytes)
+		if kind == "skill" && item.Flag == "" {
 			flags := []string{}
 			if item.Lines > skillLinesWarn {
 				flags = append(flags, fmt.Sprintf("SKILL.md > %d lines", skillLinesWarn))
 			}
-			if desc := frontmatterDescription(string(data)); len(desc) > descriptionWarn {
+			if desc, err := parseFrontmatterDescription(prefix.String()); err != nil {
+				flags = append(flags, "invalid skill frontmatter: "+err.Error())
+			} else if len(desc) > descriptionWarn {
 				flags = append(flags, fmt.Sprintf("description > %d chars", descriptionWarn))
 			}
 			item.Flag = strings.Join(flags, "; ")
@@ -261,7 +279,7 @@ func contextRecommendations(items []contextItem, byKind map[string]int) ([]conte
 			Suggestion: suggestion,
 		})
 	}
-	if byKind["tool"] > 8000 {
+	if byKind["tool"] > allToolsTokenWarn {
 		out = append(out, contextRecommendation{
 			Item:       "tools",
 			Reason:     fmt.Sprintf("tool schemas cost ~%d tokens", byKind["tool"]),
@@ -283,10 +301,10 @@ func estimateTokens(bytes int) int {
 	return int(math.Ceil(float64(bytes) / 4.0))
 }
 
-func frontmatterDescription(text string) string {
+func parseFrontmatterDescription(text string) (string, error) {
 	block, ok := frontmatterBlock(text)
 	if !ok {
-		return ""
+		return "", fmt.Errorf("missing or unterminated frontmatter")
 	}
 	// A real YAML parser handles block scalars, quoted values and inline
 	// comments without hand-rolled edge cases.
@@ -294,9 +312,9 @@ func frontmatterDescription(text string) string {
 		Description string `yaml:"description"`
 	}
 	if err := yaml.Unmarshal([]byte(block), &meta); err != nil {
-		return ""
+		return "", err
 	}
-	return strings.TrimSpace(meta.Description)
+	return strings.TrimSpace(meta.Description), nil
 }
 
 // frontmatterBlock returns the text between the leading "---" fence and the

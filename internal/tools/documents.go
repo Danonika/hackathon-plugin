@@ -12,9 +12,10 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+	"unicode/utf8"
 
-	"hackathonkit.local/agentkit/internal/mcp"
 	"github.com/ledongthuc/pdf"
+	"hackathonkit.local/agentkit/internal/mcp"
 )
 
 // errDocxTruncated reports that word/document.xml hit the size cap; callers
@@ -95,7 +96,7 @@ func extractText(path string) (string, []string, error) {
 		}
 		return text, nil, err
 	case "xlsx":
-		sheets, warnings, err := readXLSXSheets(path)
+		sheets, warnings, err := readXLSXSheets(context.Background(), path)
 		if err != nil {
 			return "", warnings, err
 		}
@@ -262,10 +263,11 @@ func registerDocuments(reg *mcp.Registry, d Deps) {
 			if werr != nil {
 				return mcp.Fail(trace(ctx), werr.Error()), nil
 			}
+			chars := utf8.RuneCountInString(text)
 			metaBytes, merr := json.Marshal(map[string]any{
 				"source":       path,
 				"artifact_id":  artifact,
-				"chars":        len([]rune(text)),
+				"chars":        chars,
 				"extracted_at": time.Now().UTC().Format(time.RFC3339),
 			})
 			if merr != nil {
@@ -280,7 +282,7 @@ func registerDocuments(reg *mcp.Registry, d Deps) {
 			}
 			env := mcp.OK(trace(ctx), map[string]any{
 				"artifact_id": artifact,
-				"chars":       len([]rune(text)),
+				"chars":       chars,
 				"preview":     snippet(text, 400),
 			}).WithSources(mcp.Source{ArtifactID: artifact, Block: "full-text"})
 			if len(warnings) > 0 {

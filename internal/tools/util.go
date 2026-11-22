@@ -190,7 +190,7 @@ func slugify(s string) string {
 	}
 	runes := []rune(out)
 	if len(runes) > 60 {
-		out = string(runes[:60])
+		out = strings.TrimRight(string(runes[:60]), "-")
 	}
 	return out
 }

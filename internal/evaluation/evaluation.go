@@ -800,7 +800,7 @@ func entrySHAs(entries []RankEntry) []string {
 
 // compareEntries returns -1/0/1 and the tie-break level that decided the order.
 func compareEntries(a, b RankEntry) (int, string) {
-	if math.Abs(a.MeanTotal-b.MeanTotal) > epsilon {
+	if math.RoundToEven(a.MeanTotal/epsilon) != math.RoundToEven(b.MeanTotal/epsilon) {
 		if a.MeanTotal > b.MeanTotal {
 			return -1, ""
 		}
@@ -808,7 +808,7 @@ func compareEntries(a, b RankEntry) (int, string) {
 	}
 	for _, key := range tieBreakOrder {
 		av, bv := a.CriterionMeans[key], b.CriterionMeans[key]
-		if math.Abs(av-bv) > epsilon {
+		if math.RoundToEven(av/epsilon) != math.RoundToEven(bv/epsilon) {
 			if av > bv {
 				return -1, key
 			}

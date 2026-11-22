@@ -252,10 +252,10 @@ func mergeNumeric(dst *File, src filePatch) {
 			log.Printf("config: ignoring non-positive max_text_chars %d (keeping %d)", v, dst.Tools.MaxTextChars)
 		}
 	}
-	if src.Routing.FlyThreshold != nil {
+	if src.Routing.FlyThreshold != nil && *src.Routing.FlyThreshold >= 0 && *src.Routing.FlyThreshold <= 1 {
 		dst.Routing.FlyThreshold = *src.Routing.FlyThreshold
 	}
-	if src.Routing.TopK != nil {
+	if src.Routing.TopK != nil && *src.Routing.TopK >= 0 {
 		dst.Routing.TopK = *src.Routing.TopK
 	}
 	if src.Learning.Enabled != nil {
@@ -459,6 +459,8 @@ func (m *Manager) Evaluation() EvaluationSettings {
 		} else {
 			log.Printf("config: cannot parse %s: %v (using defaults)", path, uerr)
 		}
+	} else if !os.IsNotExist(readErr) {
+		log.Printf("config: cannot read %s: %v (using cached settings or defaults)", path, readErr)
 	}
 	if m.evaluationInit {
 		return m.evaluationCache

@@ -582,3 +582,86 @@ func TestSessionEndIsNotResurrected(t *testing.T) {
 		t.Fatalf("replayed start resurrected the session: %s", sess.Status)
 	}
 }
+
+func TestPartialUpsertRetainsRiskAndCorruptDateIsReported(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	if err := s.UpsertSession(ctx, Session{ID: "s", Status: "active", RiskScore: 27, RiskReasons: []string{"errors"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.UpsertSession(ctx, Session{ID: "s", Task: "new"}); err != nil {
+		t.Fatal(err)
+	}
+	row, err := s.Session(ctx, "s")
+	if err != nil || row.Status != "active" || row.RiskScore != 27 || len(row.RiskReasons) != 1 {
+		t.Fatalf("%+v %v", row, err)
+	}
+	if _, err := s.db.Exec("UPDATE sessions SET created_at='invalid' WHERE id='s'"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Session(ctx, "s"); err == nil {
+		t.Fatal("malformed timestamp accepted")
+	}
+}
+
+func TestLegacyTimestampOrderingOnReadOnlyAndMigration(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state?#%.db")
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	for _, ts := range []string{"2026-01-01T00:00:00Z", "2026-01-01T00:00:00.1Z"} {
+		if _, err := s.db.Exec("INSERT INTO events(session_id,ts,type,tool,status,duration_ms,payload) VALUES('',?,'x','','',0,'{}')", ts); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := s.db.Exec("PRAGMA user_version=0"); err != nil {
+		t.Fatal(err)
+	}
+	s.Close()
+	check := func(s *Store) {
+		t.Helper()
+		defer s.Close()
+		start := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+		events, err := s.EventsBetween(ctx, start, start.Add(50*time.Millisecond), 10)
+		if err != nil || len(events) != 1 || !events[0].TS.Equal(start) {
+			t.Fatalf("events=%+v err=%v", events, err)
+		}
+	}
+	read, err := OpenReadOnly(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	check(read)
+	migrated, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	check(migrated)
+}
+
+func TestShortStreamAppendAndReplacement(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "log.jsonl")
+	write := func(text string) {
+		t.Helper()
+		if err := os.WriteFile(path, []byte(text), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	first := "{\"session_id\":\"abc\"}\n"
+	second := "{\"session_id\":\"def\"}\n"
+	for i, body := range []string{first, first + second, second + first} {
+		write(body)
+		n, _, rot, err := s.ingestJSONL(ctx, "short", path, s.handleSessionRecord)
+		want := 1
+		if i == 2 {
+			want = 2
+		}
+		if err != nil || n != want || rot != (i == 2) {
+			t.Fatalf("step %d n=%d rot=%t err=%v", i, n, rot, err)
+		}
+	}
+}

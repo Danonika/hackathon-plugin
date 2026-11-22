@@ -54,12 +54,13 @@ type summary struct {
 }
 
 type report struct {
-	Determinism string      `json:"determinism,omitempty"`
-	SHA         string      `json:"sha"`
-	GeneratedAt time.Time   `json:"generated_at"`
-	Suite       string      `json:"suite"`
-	Summary     summary     `json:"summary"`
-	Rows        []rowResult `json:"rows"`
+	EmbeddingDegraded bool        `json:"embedding_degraded"`
+	Determinism       string      `json:"determinism,omitempty"`
+	SHA               string      `json:"sha"`
+	GeneratedAt       time.Time   `json:"generated_at"`
+	Suite             string      `json:"suite"`
+	Summary           summary     `json:"summary"`
+	Rows              []rowResult `json:"rows"`
 }
 
 func main() {
@@ -132,7 +133,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		embeddingDegraded = true
 		primaryErr = "no primary embedder configured"
 	}
-	if embeddingDegraded || !strings.Contains(warmup.Encoder, "embedding") {
+	embeddingDegraded = embeddingDegraded || !strings.Contains(warmup.Encoder, "embedding")
+	if embeddingDegraded {
 		fmt.Fprintf(stderr, "fly-bench: warning: embedding path did not engage (encoder=%q, primary error=%q); semantic signal may be degraded\n", warmup.Encoder, primaryErr)
 	}
 
@@ -171,7 +173,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 			BaselineRecall:  recall(row.Expected, baselineRes.Recommendations, topK),
 			FlyRecall:       recall(row.Expected, flyRes.Recommendations, topK),
 			Agreement:       len(baselineRes.Recommendations) > 0 && len(flyRes.Recommendations) > 0 && top1(baselineRes.Recommendations) == top1(flyRes.Recommendations),
-			Deterministic:   len(flyRes.Recommendations) > 0 && sameOrder(flyRes.Recommendations, again.Recommendations),
+			Deterministic:   sameOrder(flyRes.Recommendations, again.Recommendations),
 			BaselineLatency: baselineLatency,
 			FlyLatency:      flyLatency,
 			FlyEncoder:      flyRes.Encoder,
@@ -186,23 +188,32 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 
+	baselineEngaged := 0
 	engaged := 0
 	for _, r := range results {
+		if r.BaselineTop1 != "" {
+			baselineEngaged++
+		}
 		if r.FlyTop1 != "" {
 			engaged++
 		}
+	}
+	if baselineEngaged == 0 {
+		fmt.Fprintln(stderr, "error: baseline produced no recommendations; refusing to publish A/B evidence")
+		return 1
 	}
 	if engaged == 0 {
 		fmt.Fprintln(stderr, "error: the Fly pipeline produced no recommendations; refusing to publish A/B evidence")
 		return 1
 	}
 	rep := report{
-		SHA:         quality.GitSHA(root),
-		GeneratedAt: time.Now().UTC(),
-		Suite:       *suite,
-		Summary:     summarize(results, topK),
-		Determinism: "warm router, full ranked order and scores compared across repeats (caches primed before the loop)",
-		Rows:        results,
+		EmbeddingDegraded: embeddingDegraded,
+		SHA:               quality.GitSHA(root),
+		GeneratedAt:       time.Now().UTC(),
+		Suite:             *suite,
+		Summary:           summarize(results, topK),
+		Determinism:       "warm router, full ranked order and scores compared across repeats (caches primed before the loop)",
+		Rows:              results,
 	}
 	path, err := save(root, rep)
 	if err != nil {

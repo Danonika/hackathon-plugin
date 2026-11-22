@@ -109,17 +109,35 @@ check "single-quote value is quoted" "$(grep -q "^SQ=\"a'b\"$" "$TMP/sq.env" && 
 (umask 022 && printf 'line1\nline2\n' | sh "$HELPER" "$TMP/multi.env" MULTI) || { echo "[env-set-test] helper failed for multi.env" >&2; exit 1; }
 check "embedded newline is escaped" "$(grep -q '^MULTI="line1\\nline2"$' "$TMP/multi.env" && echo 1 || echo 0)" "got: $(cat "$TMP/multi.env")"
 
+# The dotenv format keeps the interior newline as literal backslash-n on a single line.
+if ( . "$TMP/multi.env" && [ "$MULTI" = 'line1\nline2' ] ); then
+  check "sourced multiline encoding" 1
+else
+  check "sourced multiline encoding" 0
+fi
+
 # Backslashes trigger quoting and are escaped so a sourced .env yields the
 # original value ("p\q\r").
 require_helper sh "$HELPER" "$TMP/escape.env" B 'p\q\r'
-check "backslash value is escaped" "$(grep -q '^B="p\\\\q\\\\r"$' "$TMP/escape.env" && echo 1 || echo 0)" "got: $(cat "$TMP/escape.env")"
+if ( . "$TMP/escape.env" && [ "$B" = 'p\q\r' ] ); then
+  check "backslashes round-trip when sourced" 1
+else
+  check "backslashes round-trip when sourced" 0
+fi
 
-# Command-substitution and backtick payloads must be emitted inert: sourcing the
+# Backtick characters in ordinary shell text must round-trip literally.
+require_helper sh "$HELPER" "$TMP/backtick.env" LABEL 'a`b'
+if ( . "$TMP/backtick.env" && [ "$LABEL" = 'a`b' ] ); then
+  check "literal backtick round-trips" 1
+else
+  check "literal backtick round-trips" 0
+fi
+# Command-substitution text must be emitted inert: sourcing the
 # file must not execute them.
 INJECT_MARKER="$TMP/inject-marker"
 rm -f "$INJECT_MARKER"
 require_helper sh "$HELPER" "$TMP/inject.env" EVIL "\$(touch $INJECT_MARKER)"
-( set -a; . "$TMP/inject.env"; set +a; printf '%s\n' "$EVIL" > "$TMP/evil-value" )
+( set -a; . "$TMP/inject.env"; set +a; printf '%s\n' "$EVIL" > "$TMP/evil-value" ) || check "source literal dollar" 0
 check "dollar substitution is not executed" "$([ -f "$INJECT_MARKER" ] && echo 0 || echo 1)" "got: $(cat "$TMP/inject.env")"
 check "dollar value round-trips" "$([ "$(cat "$TMP/evil-value")" = "\$(touch $INJECT_MARKER)" ] && echo 1 || echo 0)" "got: $(cat "$TMP/evil-value")"
 rm -f "$INJECT_MARKER"
@@ -135,7 +153,7 @@ require_helper sh "$HELPER" "$TMP/meta.env" M4 'redir>out'
 require_helper sh "$HELPER" "$TMP/meta.env" M5 'glob*?[]'
 require_helper sh "$HELPER" "$TMP/meta.env" M6 'subshell(){}'
 require_helper sh "$HELPER" "$TMP/meta.env" M7 'tilde~and!bang'
-( set -a; . "$TMP/meta.env"; set +a; printf '%s\n' "$M1|$M2|$M3|$M4|$M5|$M6|$M7" > "$TMP/meta-values" )
+( set -a; . "$TMP/meta.env"; set +a; printf '%s\n' "$M1|$M2|$M3|$M4|$M5|$M6|$M7" > "$TMP/meta-values" ) || check "source quoted values" 0
 check "metacharacters are quoted" "$(grep -q '^M3="pipe|sh"$' "$TMP/meta.env" && echo 1 || echo 0)" "got: $(cat "$TMP/meta.env")"
 check "semicolon payload not executed" "$([ -f "$MARKER" ] && echo 0 || echo 1)" "got: $(cat "$TMP/meta.env")"
 check "metachar values round-trip" "$([ "$(cat "$TMP/meta-values")" = "semi;touch $MARKER|and&&and|pipe|sh|redir>out|glob*?[]|subshell(){}|tilde~and!bang" ] && echo 1 || echo 0)" "got: $(cat "$TMP/meta-values")"
@@ -158,49 +176,19 @@ else
   check "invalid key rejected" 1
 fi
 
-# Lock ownership: a live peer lock is preserved; a dead-pid lock is reclaimed.
-LOCKDIR="$TMP/lock.env"
-printf 'A=1\n' > "$LOCKDIR"
-mkdir "$LOCKDIR.lock"
-printf '%s' "$$" > "$LOCKDIR.lock/pid"
-if sh "$HELPER" "$LOCKDIR" A 2 >/dev/null 2>&1; then
-  check "live lock blocks a second writer" 0 "expected non-zero exit"
-else
-  check "live lock blocks a second writer" 1
-fi
-check "live lock preserved" "$([ -d "$LOCKDIR.lock" ] && echo 1)" "peer lock was deleted"
-rm -rf "$LOCKDIR.lock"
-mkdir "$LOCKDIR.lock"
-printf '%s' "999999" > "$LOCKDIR.lock/pid"
-if sh "$HELPER" "$LOCKDIR" A 3 >/dev/null 2>&1; then
-  check "dead-pid lock reclaimed" "$(grep -q '^A=3$' "$LOCKDIR" && echo 1)" "got: $(cat "$LOCKDIR")"
-else
-  check "dead-pid lock reclaimed" 0 "writer aborted"
-fi
-check "reclaimed lock cleaned up" "$([ ! -d "$LOCKDIR.lock" ] && echo 1)" "lock left behind"
-
-
-# Release path: if a peer replaces our lock's owner token while we hold it, our
-# cleanup must not delete the peer's lock. We snapshot the lock dir, swap the
-# token, and restore afterwards so the writer's cleanup runs against it.
-LOCKDIR2="$TMP/release.env"
-printf 'A=1\n' > "$LOCKDIR2"
-require_helper sh "$HELPER" "$LOCKDIR2" B 1
-check "writer released its own lock" "$([ ! -d "$LOCKDIR2.lock" ] && echo 1)" "lock left behind"
-# Simulate the race directly: a foreign-owned lock directory is not removed by a
-# cleanup that only owns a different token (exercised via the helper's own
-# cleanup binding by re-creating the lock with a foreign owner).
-mkdir "$LOCKDIR2.lock"
-printf '%s' "foreign-owner" > "$LOCKDIR2.lock/owner"
-printf '%s' "$$" > "$LOCKDIR2.lock/pid"
-# A fresh writer must reclaim this only if stale; a live pid means it aborts.
-if sh "$HELPER" "$LOCKDIR2" B 2 >/dev/null 2>&1; then
-  check "foreign live lock blocks writer" 0 "expected non-zero exit"
-else
-  check "foreign live lock blocks writer" 1
-fi
-check "foreign lock preserved" "$([ -d "$LOCKDIR2.lock" ] && echo 1)" "someone else's lock was deleted"
-rm -rf "$LOCKDIR2.lock"
+# Writers adding different keys must retain each other's changes, including
+# when they race on the first creation of the file.
+pids=""
+for i in 1 2 3 4 5 6 7 8; do
+  sh "$HELPER" "$TMP/concurrent.env" "KEY_$i" "$i" &
+  pids="$pids $!"
+done
+for pid in $pids; do
+  wait "$pid" || check "concurrent writer completed" 0
+done
+for i in 1 2 3 4 5 6 7 8; do
+  check "concurrent key $i retained" "$(grep -Fqx "KEY_$i=$i" "$TMP/concurrent.env" && echo 1)"
+done
 
 if [ "$FAIL" -ne 0 ]; then
   echo "[env-set-test] $FAIL assertion(s) failed"

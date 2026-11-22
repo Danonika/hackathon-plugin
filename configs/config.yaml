@@ -1,5 +1,5 @@
 openai:
-  chat_model: deepseek-v4-flash
+  chat_model: gpt-4o-mini
   vision_model: gpt-4o-mini
   transcribe_model: whisper-1
   embedding_model: text-embedding-3-small

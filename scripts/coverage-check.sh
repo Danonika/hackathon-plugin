@@ -1,11 +1,14 @@
 #!/usr/bin/env sh
 # Run the Go test suite with coverage and enforce a minimum total.
 # Threshold: HACKATHONKIT_COVERAGE_TARGET (default 80 percent).
+# Exit 0 on meeting target, 1 on test/coverage failure, 2 on invalid input.
 set -e
+LC_ALL=C
+export LC_ALL
 ROOT="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
 TARGET="${HACKATHONKIT_COVERAGE_TARGET:-80}"
 case "$TARGET" in
-  ''|*[!0-9.]*|*.*.*)
+  ''|.|*[!0-9.]*|*.*.*)
     echo "[coverage] HACKATHONKIT_COVERAGE_TARGET must be a number with at most one dot, got '$TARGET'" >&2
     exit 2
     ;;
@@ -66,7 +69,7 @@ if [ -z "$TOTAL" ]; then
   exit 1
 fi
 case "$TOTAL" in
-  ''|*[!0-9.]*|*.*.*)
+  ''|.|*[!0-9.]*|*.*.*)
     echo "[coverage] malformed coverage total: '$TOTAL'" >&2
     exit 1
     ;;

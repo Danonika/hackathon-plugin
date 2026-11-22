@@ -37,18 +37,26 @@ case "$ACTION" in
         continue
       fi
       if [ -f "$dest" ] && ! cmp -s "$f" "$dest"; then
-        if cp -p "$dest" "$dest.bak" 2>/dev/null; then
-          echo "[prompts] warning: backing up locally modified prompt $dest to $dest.bak before overwriting" >&2
-        else
-          echo "[prompts] warning: overwriting locally modified prompt $dest (backup failed)" >&2
+        backup=$(mktemp "$dest.bak.XXXXXX")
+        if ! cp -p "$dest" "$backup"; then
+          rm -f "$backup"
+          skipped=$((skipped + 1))
+          continue
         fi
+        echo "[prompts] backed up locally modified $dest to $backup" >&2
       fi
-      cp "$f" "$dest"
+      stage=$(mktemp "$DEST_DIR/.prompt.XXXXXX")
+      if ! cp "$f" "$stage" || ! mv -f "$stage" "$dest"; then
+        rm -f "$stage"
+        skipped=$((skipped + 1))
+        continue
+      fi
       n=$((n + 1))
     done
     echo "[prompts] installed $n prompt(s) to $DEST_DIR"
     if [ "$skipped" -gt 0 ]; then
-      echo "[prompts] skipped $skipped non-regular destination(s)" >&2
+      echo "[prompts] skipped $skipped destination(s)" >&2
+      exit 1
     fi
     ;;
   remove)

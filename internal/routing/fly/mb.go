@@ -3,12 +3,15 @@ package fly
 import (
 	"context"
 	"encoding/json"
+	"log"
 	"math"
 	"os"
 	"path/filepath"
 	"sort"
 	"sync"
 	"time"
+
+	"hackathonkit.local/agentkit/internal/filelock"
 )
 
 const (
@@ -57,7 +60,14 @@ var (
 )
 
 func (r *Router) WithBrain(path string) *Router {
-	r.brainPath = path
+	brainSaveMu.Lock()
+	defer brainSaveMu.Unlock()
+	brainMu.Lock()
+	defer brainMu.Unlock()
+	if r.brainPath != path {
+		r.brain = nil
+		r.brainPath = path
+	}
 	return r
 }
 
@@ -75,21 +85,33 @@ func (r *Router) loadBrain() *MBrain {
 	}
 	// Read and parse outside the lock: a slow disk must not serialize every
 	// Router in the process.
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil
-	}
-	var brain MBrain
-	if json.Unmarshal(data, &brain) != nil || brain.KC == 0 || len(brain.Readout) == 0 {
+	loaded := readBrain(path)
+	if loaded == nil {
 		return nil
 	}
 	brainMu.Lock()
-	if r.brain == nil {
-		r.brain = &brain
+	if r.brain == nil && path == r.brainPath {
+		r.brain = loaded
 	}
 	cached := r.brain
 	brainMu.Unlock()
 	return cached
+}
+
+func readBrain(path string) *MBrain {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			log.Printf("fly: cannot read brain file: %v", err)
+		}
+		return nil
+	}
+	var brain MBrain
+	if json.Unmarshal(data, &brain) != nil || brain.KC == 0 || len(brain.Readout) == 0 {
+		log.Printf("fly: invalid brain file %s", path)
+		return nil
+	}
+	return &brain
 }
 
 // clone deep-copies the brain so an update can be saved before it is published.
@@ -147,11 +169,14 @@ func writeBrainFile(path string, brain *MBrain) error {
 }
 
 func (r *Router) saveBrain(brain *MBrain) error {
-	if r.brainPath == "" {
+	brainMu.Lock()
+	path := r.brainPath
+	brainMu.Unlock()
+	if path == "" {
 		return nil
 	}
 	brain.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
-	return writeBrainFile(r.brainPath, brain)
+	return writeBrainFile(path, brain)
 }
 
 func (r *Router) Dopamine() DopamineStats {
@@ -295,7 +320,18 @@ func (r *Router) applyDopamine(ctx context.Context, ev FeedbackEvent) bool {
 	// blocked behind the disk write.
 	brainSaveMu.Lock()
 	defer brainSaveMu.Unlock()
-	base := r.loadBrain()
+	brainMu.Lock()
+	path := r.brainPath
+	base := r.brain
+	brainMu.Unlock()
+	if path != "" {
+		release, err := filelock.AcquireContext(ctx, path+".lock", 5*time.Second)
+		if err != nil {
+			return false
+		}
+		defer release()
+		base = readBrain(path)
+	}
 	if base == nil {
 		return false
 	}
@@ -362,7 +398,7 @@ func (r *Router) applyDopamine(ctx context.Context, ev FeedbackEvent) bool {
 // changed (false when the category is unknown to this brain).
 func (b *MBrain) adjust(category string, code []float64, eta float64) bool {
 	weights, ok := b.Readout[category]
-	if !ok || len(weights) < len(code) {
+	if !ok || len(weights) != len(code) {
 		return false
 	}
 	changed := false
@@ -457,7 +493,7 @@ func NewMBrain(kc int, sparsity float64, categories []string, seed int64) *MBrai
 		MBON:       MBMBONCount,
 		Sparsity:   sparsity,
 		Seed:       seed,
-		Categories: categories,
+		Categories: append([]string(nil), categories...),
 		Readout:    map[string][]float64{},
 		Bias:       map[string]float64{},
 		Source:     "FlyWire v783 structure via lixiang1076/fly-brain (KC 4133, MBON 96, PAM 307, PPL1 24)",

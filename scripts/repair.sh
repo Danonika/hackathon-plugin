@@ -8,60 +8,22 @@ echo "[repair] repository root: $ROOT"
 # Serialize concurrent repairs: two runs can race on the temp binaries and the
 # install-state write. Note that replacing a binary in place while an MCP/demo
 # process is running causes version skew until that process is restarted.
-LOCK="$ROOT/.repair.lock"
-# Reclaim a stale lock with an atomic rename-aside + identity re-check, not a
-# bare `rm -rf`: two runs that both judged the same lock stale would otherwise
-# have the slower one delete the faster one's freshly created live lock.
-if [ -d "$LOCK" ]; then
-  HOLDER=$(cat "$LOCK/pid" 2>/dev/null || true)
-  STALE=0
-  if [ -n "$HOLDER" ]; then
-    kill -0 "$HOLDER" 2>/dev/null || STALE=1
-  else
-    # A missing/empty pid means the previous run died between mkdir and the pid
-    # write; only reclaim after a grace period so a live mkdir-then-write
-    # window is not stolen.
-    now=$(date +%s 2>/dev/null || echo 0)
-    mtime=$(stat -c %Y "$LOCK" 2>/dev/null || stat -f %m "$LOCK" 2>/dev/null || echo "$now")
-    [ $((now - mtime)) -ge 30 ] && STALE=1
-  fi
-  if [ "$STALE" = "1" ]; then
-    ASIDE="$LOCK.stale.$$"
-    if mv "$LOCK" "$ASIDE" 2>/dev/null; then
-      NOW_HOLDER=$(cat "$ASIDE/pid" 2>/dev/null || true)
-      if [ "$NOW_HOLDER" = "$HOLDER" ]; then
-        rm -rf "$ASIDE"
-      elif [ ! -e "$LOCK" ]; then
-        mv "$ASIDE" "$LOCK" 2>/dev/null || true
-      fi
-    fi
-  fi
-fi
-if ! mkdir "$LOCK" 2>/dev/null; then
-  echo "[repair] another repair run holds $LOCK; aborting" >&2
-  exit 1
-fi
-printf '%s' "$$" > "$LOCK/pid" 2>/dev/null || true
-release_repair_lock() { rm -rf "$LOCK"; }
-trap release_repair_lock EXIT
+mkdir -p "$ROOT/data/locks"
+. "$ROOT/scripts/file-lock.sh"
+acquire_file_lock "$ROOT/data/locks/repair.lock"
+build_stage=""
+trap '[ -z "$build_stage" ] || rm -rf "$build_stage"' EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
-sh "$ROOT/scripts/sync-harness.sh"
+. "$ROOT/scripts/skill-profile.sh"
+PROFILE=$(installed_skill_profile "$ROOT")
+sh "$ROOT/scripts/sync-harness.sh" "$PROFILE"
 sh "$ROOT/scripts/gen-mcp-manifest.sh" "$ROOT"
 sh "$ROOT/scripts/gen-codex-config.sh" "$ROOT"
-sh "$ROOT/scripts/install-prompts.sh" install || echo "[repair] warning: could not install the Codex command prompts" >&2
+sh "$ROOT/scripts/install-prompts.sh" install
 mkdir -p "$ROOT/logs" "$ROOT/evals" "$ROOT/data/artifacts" "$ROOT/data/index" "$ROOT/data/control" "$ROOT/data/judge-bundles"
 
-PROFILE="full"
-if [ -f "$ROOT/configs/install-state.json" ]; then
-  DETECTED=$(sed -n 's/^[[:space:]]*"profile": *"\([^"]*\)".*/\1/p' "$ROOT/configs/install-state.json" | head -n 1)
-  case "$DETECTED" in
-    core|full) PROFILE="$DETECTED" ;;
-    "") echo "[repair] warning: could not read the profile; using 'full'" >&2 ;;
-    *) echo "[repair] warning: unknown profile '$DETECTED' in install-state; using 'full'" >&2 ;;
-  esac
-fi
 RUNTIME="binary"
 # Only probe docker when the probe can be bounded; an unbounded `docker info`
 # can hang the repair on hosts without `timeout` (e.g. macOS).
@@ -81,24 +43,37 @@ elif command -v docker >/dev/null 2>&1 && command -v timeout >/dev/null 2>&1; th
   fi
 fi
 
+# Bring older complete binary installations up to the launcher's private-write
+# policy even when all three executables already exist and no rebuild is needed.
+. "$ROOT/scripts/private-write.sh"
+if [ "$RUNTIME" = binary ] && [ -e "$ROOT/bin" ]; then
+  [ -d "$ROOT/bin" ] && [ ! -L "$ROOT/bin" ] || { echo "[repair] refusing non-directory or linked bin/" >&2; exit 1; }
+  private_write "$ROOT/bin"
+  for name in hackathonkit-mcp hackathonkit-demo-api hackathonkit-ctl; do
+    binary="$ROOT/bin/$name"
+    [ ! -L "$binary" ] || { echo "[repair] refusing linked binary: $name" >&2; exit 1; }
+    if [ -f "$binary" ]; then private_write "$binary"; fi
+  done
+fi
+
 if { [ ! -x "$ROOT/bin/hackathonkit-mcp" ] || [ ! -x "$ROOT/bin/hackathonkit-demo-api" ] || [ ! -x "$ROOT/bin/hackathonkit-ctl" ]; } && [ "$RUNTIME" = "binary" ]; then
   if command -v go >/dev/null 2>&1; then
     mkdir -p "$ROOT/bin"
-    MCP_TMP=$(mktemp "$ROOT/bin/hackathonkit-mcp.tmp.XXXXXX")
-    DEMO_TMP=$(mktemp "$ROOT/bin/hackathonkit-demo-api.tmp.XXXXXX")
-    CTL_TMP=$(mktemp "$ROOT/bin/hackathonkit-ctl.tmp.XXXXXX")
-    cleanup_bin() { rm -f "$MCP_TMP" "$DEMO_TMP" "$CTL_TMP"; }
+    private_write "$ROOT/bin"
+    build_stage=$(mktemp -d "$ROOT/bin/.repair.XXXXXX")
+    MCP_TMP="$build_stage/hackathonkit-mcp"
+    DEMO_TMP="$build_stage/hackathonkit-demo-api"
+    CTL_TMP="$build_stage/hackathonkit-ctl"
     (
       cd "$ROOT"
-      go build -o "$MCP_TMP" ./cmd/hackathonkit-mcp &&
-        go build -o "$DEMO_TMP" ./cmd/demo-api &&
-        go build -o "$CTL_TMP" ./cmd/hackathonkit-ctl
+      go build -trimpath -buildvcs=false -o "$MCP_TMP" ./cmd/hackathonkit-mcp &&
+        go build -trimpath -buildvcs=false -o "$DEMO_TMP" ./cmd/demo-api &&
+        go build -trimpath -buildvcs=false -o "$CTL_TMP" ./cmd/hackathonkit-ctl
     ) || {
-      cleanup_bin
       echo "[repair] go build failed" >&2
       exit 1
     }
-    # mktemp creates 0600 files and `go build -o <existing file>` keeps that
+    # mktemp creates 0600 files and `go build -trimpath -buildvcs=false -o <existing file>` keeps that
     # mode, so an explicit chmod is required before the binaries are usable.
     chmod 0755 "$MCP_TMP" "$DEMO_TMP" "$CTL_TMP"
     mv "$MCP_TMP" "$ROOT/bin/hackathonkit-mcp"

@@ -17,8 +17,11 @@ type seriesPoint struct {
 	Raw string
 }
 
-func loadSeries(t *table, timeColumn, valueColumn string) ([]seriesPoint, string, string, int, error) {
-	profiles := profileColumns(t, nil)
+func loadSeries(ctx context.Context, t *table, timeColumn, valueColumn string) ([]seriesPoint, string, string, int, error) {
+	profiles, _, err := profileColumnsIndexed(ctx, t, nil)
+	if err != nil {
+		return nil, "", "", 0, err
+	}
 	timeIdx := -1
 	valueIdx := -1
 	if timeColumn != "" {
@@ -132,7 +135,7 @@ func registerTimeSeries(reg *mcp.Registry, d Deps) {
 			if fail != nil {
 				return *fail, nil
 			}
-			points, timeCol, valueCol, skipped, err := loadSeries(t, argString(args, "time_column"), argString(args, "value_column"))
+			points, timeCol, valueCol, skipped, err := loadSeries(ctx, t, argString(args, "time_column"), argString(args, "value_column"))
 			if err != nil {
 				return mcp.Fail(trace(ctx), err.Error()), nil
 			}
@@ -195,7 +198,7 @@ func registerTimeSeries(reg *mcp.Registry, d Deps) {
 			if fail != nil {
 				return *fail, nil
 			}
-			points, timeCol, valueCol, skipped, err := loadSeries(t, argString(args, "time_column"), argString(args, "value_column"))
+			points, timeCol, valueCol, skipped, err := loadSeries(ctx, t, argString(args, "time_column"), argString(args, "value_column"))
 			if err != nil {
 				return mcp.Fail(trace(ctx), err.Error()), nil
 			}
@@ -258,34 +261,37 @@ func registerTimeSeries(reg *mcp.Registry, d Deps) {
 					warnings = append(warnings, fmt.Sprintf("threshold %v must be positive; using 3.0", threshold))
 					threshold = 3.0
 				}
-				// Rolling sums keep the window statistics O(1) per point instead
-				// of recomputing mean/stddev over the whole window each time.
-				var sum, sumSq float64
+				// Track centered deviations. Periodically rebuild from the current
+				// window to bound drift from repeated removals (amortized O(1)).
+				var center, sum, sumSq float64
 				for i := 1; i < len(points); i++ {
-					v := points[i-1].V
-					sum += v
-					sumSq += v * v
-					if drop := i - 1 - window; drop >= 0 {
-						dv := points[drop].V
-						sum -= dv
-						sumSq -= dv * dv
-					}
-					start := i - window
-					if start < 0 {
-						start = 0
-					}
+					start := max(0, i-window)
 					n := i - start
+					if i == 1 || i%window == 0 {
+						center = points[start].V
+						sum, sumSq = 0, 0
+						for _, point := range points[start:i] {
+							delta := point.V - center
+							sum += delta
+							sumSq += delta * delta
+						}
+					} else {
+						delta := points[i-1].V - center
+						sum += delta
+						sumSq += delta * delta
+						if start > 0 {
+							drop := points[start-1].V - center
+							sum -= drop
+							sumSq -= drop * drop
+						}
+					}
 					if n < 3 {
 						continue
 					}
-					m := sum / float64(n)
-					variance := (sumSq - sum*sum/float64(n)) / float64(n-1)
-					if variance < 0 {
-						// Catastrophic cancellation in the incrementally
-						// maintained sums can yield a tiny negative variance.
-						// Recompute with a numerically stable two-pass pass
-						// instead of clamping to zero, which would misclassify
-						// a non-constant window as constant.
+					m := center + sum/float64(n)
+					residual := sumSq - sum*sum/float64(n)
+					variance := residual / float64(n-1)
+					if residual < 1e-12*sumSq || residual < 0 {
 						m, variance = windowMeanVariance(points[start:i])
 					}
 					s := math.Sqrt(variance)
@@ -339,9 +345,11 @@ func registerTimeSeries(reg *mcp.Registry, d Deps) {
 				"anomalies_returned": len(anomalies),
 				"anomalies":          anomalies,
 			})
+			sources := make([]mcp.Source, 0, len(anomalies))
 			for _, a := range anomalies {
-				env = env.WithSources(mcp.Source{Timestamp: a.Timestamp, Column: valueCol})
+				sources = append(sources, mcp.Source{Timestamp: a.Timestamp, Column: valueCol})
 			}
+			env = env.WithSources(sources...)
 			if len(warnings) > 0 {
 				env = env.WithWarnings(warnings...)
 			}

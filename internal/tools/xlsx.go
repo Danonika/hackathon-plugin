@@ -2,6 +2,7 @@ package tools
 
 import (
 	"archive/zip"
+	"context"
 	"encoding/xml"
 	"fmt"
 	"io"
@@ -23,7 +24,7 @@ type xlsxSheetRef struct {
 	Path string
 }
 
-func readXLSXTable(path string, sheetName string) (*table, []string, error) {
+func readXLSXTable(ctx context.Context, path string, sheetName string) (*table, []string, error) {
 	zr, err := zip.OpenReader(path)
 	if err != nil {
 		return nil, nil, err
@@ -66,21 +67,21 @@ func readXLSXTable(path string, sheetName string) (*table, []string, error) {
 	}
 	var shared []string
 	if sf := zipFind(zr, "xl/sharedStrings.xml"); sf != nil {
-		shared, err = readSharedStrings(sf)
+		shared, err = readSharedStrings(ctx, sf)
 		if err != nil {
 			warnings = append(warnings, "xlsx: failed to read sharedStrings.xml: "+err.Error())
 		}
 	}
 	styles, styleWarnings := readXLSXStyles(zr)
 	warnings = append(warnings, styleWarnings...)
-	rows, err := readSheetRows(f, shared, styles, &xlsxBudget{})
+	rows, err := readSheetRows(ctx, f, shared, styles, &xlsxBudget{})
 	if err != nil {
 		return nil, warnings, err
 	}
 	return rowsToTable(rows), warnings, nil
 }
 
-func readXLSXSheets(path string) ([]xlsxSheet, []string, error) {
+func readXLSXSheets(ctx context.Context, path string) ([]xlsxSheet, []string, error) {
 	zr, err := zip.OpenReader(path)
 	if err != nil {
 		return nil, nil, err
@@ -90,7 +91,7 @@ func readXLSXSheets(path string) ([]xlsxSheet, []string, error) {
 	warnings := []string{}
 	var shared []string
 	if f := zipFind(zr, "xl/sharedStrings.xml"); f != nil {
-		shared, err = readSharedStrings(f)
+		shared, err = readSharedStrings(ctx, f)
 		if err != nil {
 			warnings = append(warnings, "xlsx: failed to read sharedStrings.xml: "+err.Error())
 		}
@@ -122,7 +123,7 @@ func readXLSXSheets(path string) ([]xlsxSheet, []string, error) {
 			warnings = append(warnings, fmt.Sprintf("xlsx: sheet %s file %s is missing", ref.Name, ref.Path))
 			continue
 		}
-		rows, err := readSheetRows(f, shared, styles, budget)
+		rows, err := readSheetRows(ctx, f, shared, styles, budget)
 		if err != nil {
 			warnings = append(warnings, fmt.Sprintf("xlsx: sheet %s failed: %v", ref.Name, err))
 			if budget.cells > maxXLSXCells || budget.rows > maxXLSXRows {
@@ -267,13 +268,13 @@ func normalizeTarget(target string) string {
 	return cleaned
 }
 
-func readSharedStrings(f *zip.File) ([]string, error) {
+func readSharedStrings(ctx context.Context, f *zip.File) ([]string, error) {
 	rc, err := f.Open()
 	if err != nil {
 		return nil, err
 	}
 	defer rc.Close()
-	dec := xml.NewDecoder(&maxBytesReader{r: rc, remaining: maxXLSXSharedBytes})
+	dec := xml.NewDecoder(&maxBytesReader{r: contextReader{ctx, rc}, remaining: maxXLSXSharedBytes})
 	var out []string
 	var cur strings.Builder
 	inSI, inT := false, false
@@ -291,6 +292,10 @@ func readSharedStrings(f *zip.File) ([]string, error) {
 		switch t := tok.(type) {
 		case xml.StartElement:
 			switch t.Name.Local {
+			case "rPh":
+				if err := dec.Skip(); err != nil {
+					return nil, err
+				}
 			case "si":
 				inSI = true
 				cur.Reset()
@@ -348,14 +353,14 @@ func budgetOrNew(b *xlsxBudget) *xlsxBudget {
 	return b
 }
 
-func readSheetRows(f *zip.File, shared []string, styles xlsxStyles, budget *xlsxBudget) ([][]string, error) {
+func readSheetRows(ctx context.Context, f *zip.File, shared []string, styles xlsxStyles, budget *xlsxBudget) ([][]string, error) {
 	budget = budgetOrNew(budget)
 	rc, err := f.Open()
 	if err != nil {
 		return nil, err
 	}
 	defer rc.Close()
-	dec := xml.NewDecoder(&maxBytesReader{r: rc, remaining: maxXLSXSheetBytes})
+	dec := xml.NewDecoder(&maxBytesReader{r: contextReader{ctx, rc}, remaining: maxXLSXSheetBytes})
 	var rows [][]string
 	var curRow []string
 	var curVal strings.Builder
@@ -399,8 +404,10 @@ func readSheetRows(f *zip.File, shared []string, styles xlsxStyles, budget *xlsx
 				if inRow {
 					inT = true
 				}
-			case "is":
-				inT = true
+			case "rPh":
+				if err := dec.Skip(); err != nil {
+					return nil, err
+				}
 			}
 		case xml.CharData:
 			if inV || inT {
@@ -466,6 +473,9 @@ func colFromRef(ref string) int {
 	for _, r := range ref {
 		if r >= 'A' && r <= 'Z' {
 			col = col*26 + int(r-'A'+1)
+			if col > maxXLSXCols {
+				return maxXLSXCols
+			}
 			continue
 		}
 		break
@@ -750,7 +760,7 @@ func formatExcelTime(serial float64) string {
 // formatExcelElapsed renders an elapsed-time serial as total hours:minutes:seconds,
 // so durations such as [h]:mm:ss keep values >= 24h.
 func formatExcelElapsed(serial float64) string {
-	total := int(math.Round(serial * 86400))
+	total := int64(math.Round(serial * 86400))
 	neg := total < 0
 	if neg {
 		total = -total

@@ -26,7 +26,13 @@ func registerTelegram(reg *mcp.Registry, d Deps) {
 				return mcp.Fail(trace(ctx), "telegram client unavailable"), nil
 			}
 			parseMode := argString(args, "parse_mode")
-			if parseMode != "" && !strings.EqualFold(parseMode, "HTML") && !strings.EqualFold(parseMode, "MarkdownV2") {
+			switch strings.ToLower(parseMode) {
+			case "":
+			case "html":
+				parseMode = "HTML"
+			case "markdownv2":
+				parseMode = "MarkdownV2"
+			default:
 				return mcp.Fail(trace(ctx), "parse_mode must be HTML or MarkdownV2"), nil
 			}
 			result, err := d.Telegram.SendMessage(ctx, argString(args, "text"), telegram.SendOptions{
@@ -43,17 +49,17 @@ func registerTelegram(reg *mcp.Registry, d Deps) {
 					}, err.Error()), nil
 				}
 				recordTelegramError(d)
-				// MessageID is only set after a chunk is delivered, so it is the
-				// reliable "something was sent" signal (Chunks counts planned
-				// chunks even when the first send fails).
-				if result.MessageID != 0 {
+				if result.Chunks > 0 {
+					if d.Metrics != nil {
+						d.Metrics.Inc("telegram_sends_total")
+					}
 					return mcp.Partial(trace(ctx), map[string]any{
 						"error":      err.Error(),
 						"message_id": result.MessageID,
 						"chat_id":    result.ChatID,
 						"chunks":     result.Chunks,
 						"hint":       "some chunks may already be delivered; verify before retrying",
-					}, "telegram send partially failed: "+err.Error()), nil
+					}, "telegram send partially failed: "+err.Error()).WithMetrics(map[string]any{"chunks": result.Chunks}), nil
 				}
 				return mcp.Fail(trace(ctx), err.Error()), nil
 			}
@@ -198,9 +204,6 @@ func parseBotCommands(args map[string]any) ([]telegram.BotCommand, error) {
 			return nil, fmt.Errorf("every command needs a command and a description")
 		}
 		commands = append(commands, telegram.BotCommand{Command: command, Description: description})
-	}
-	if len(commands) == 0 {
-		return nil, fmt.Errorf("no valid commands provided")
 	}
 	return commands, nil
 }

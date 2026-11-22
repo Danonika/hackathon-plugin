@@ -13,6 +13,7 @@ import (
 	"hackathonkit.local/agentkit/internal/learning"
 	"hackathonkit.local/agentkit/internal/plans"
 	"hackathonkit.local/agentkit/internal/resources"
+	"hackathonkit.local/agentkit/internal/tools"
 )
 
 func mcpTestRoot(t *testing.T) string {
@@ -347,7 +348,7 @@ func TestRedactBackendError(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := redactBackendError(fmt.Errorf("%s", tc.input))
+			got := tools.RedactBackendError(fmt.Errorf("%s", tc.input))
 			if got != tc.want {
 				t.Fatalf("redactBackendError(%q) = %q, want %q", tc.input, got, tc.want)
 			}
@@ -355,5 +356,16 @@ func TestRedactBackendError(t *testing.T) {
 				t.Fatalf("secret leaked in %q", got)
 			}
 		})
+	}
+}
+
+func TestResourcesSetAcceptsQuotedComma(t *testing.T) {
+	root := t.TempDir()
+	if err := applyResourcesSet(root, `"note=offline, GPU",codex_pro=true`); err != nil {
+		t.Fatal(err)
+	}
+	profile, _, err := resources.Load(root)
+	if err != nil || profile.Note != "offline, GPU" || !profile.CodexPro {
+		t.Fatalf("profile=%+v err=%v", profile, err)
 	}
 }

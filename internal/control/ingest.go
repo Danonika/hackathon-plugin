@@ -14,6 +14,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"hackathonkit.local/agentkit/internal/filelock"
 )
 
 // maxIngestBytes bounds one ingest cycle's read so an unbounded backlog or a
@@ -37,6 +39,25 @@ type IngestResult struct {
 // such a replay can produce a duplicate row.
 func (s *Store) Ingest(ctx context.Context, root string) (IngestResult, error) {
 	res := IngestResult{}
+	// The CLI, daemon and TUI can replay the same store concurrently. Hold the
+	// per-database lock across reading cursors, applying records and scoring.
+	switch {
+	case s.memoryIngest != nil:
+		select {
+		case s.memoryIngest <- struct{}{}:
+			defer func() { <-s.memoryIngest }()
+		case <-ctx.Done():
+			return res, ctx.Err()
+		}
+	case s.ingestLockPath != "":
+		unlock, err := filelock.AcquireContext(ctx, s.ingestLockPath, time.Minute)
+		if err != nil {
+			return res, err
+		}
+		defer unlock()
+	default:
+		return res, errors.New("control: ingestion requires a writable store")
+	}
 	jsonl := []struct {
 		name   string
 		path   string
@@ -110,19 +131,53 @@ func (s *Store) ingestJSONL(ctx context.Context, name, path string, handle func(
 	}
 	// A recreated file that regrows past the old offset is indistinguishable
 	// from append-only growth by size alone, so also compare a head fingerprint.
-	fingerprint, hasFP, ferr := fileFingerprint(f, info.Size())
-	if ferr != nil {
-		return 0, 0, false, ferr
+	// The comparison must cover exactly the prefix recorded last cycle.
+	stored, set, err := s.CursorSet(ctx, name+":head")
+	if err != nil {
+		return 0, 0, false, err
 	}
-	if !rotated && hasFP {
-		stored, set, cerr := s.CursorSet(ctx, name+":head")
-		if cerr != nil {
-			return 0, 0, false, cerr
-		}
-		if set && stored != fingerprint {
-			offset = 0
+	prefix, err := s.Cursor(ctx, name+":head_bytes")
+	if err != nil {
+		return 0, 0, false, err
+	}
+	if prefix <= 0 || prefix > 256 {
+		prefix = 256
+	} // legacy fingerprints always covered 256 bytes
+	if !rotated && set {
+		if prefix > info.Size() {
 			rotated = true
+		} else {
+			previous, _, err := fileFingerprint(f, prefix)
+			if err != nil {
+				return 0, 0, false, err
+			}
+			rotated = stored != previous
 		}
+		if rotated {
+			offset = 0
+		}
+	}
+	window := min(info.Size(), int64(256))
+	fingerprint, hasFP, err := fileFingerprint(f, window)
+	if err != nil {
+		return 0, 0, false, err
+	}
+	saveHead := func() error {
+		if !hasFP {
+			return nil
+		}
+		tx, err := s.db.BeginTx(ctx, nil)
+		if err != nil {
+			return err
+		}
+		defer tx.Rollback()
+		if err = setCursor(ctx, tx, name+":head_bytes", window); err != nil {
+			return err
+		}
+		if err = setCursor(ctx, tx, name+":head", fingerprint); err != nil {
+			return err
+		}
+		return tx.Commit()
 	}
 	if rotated {
 		// Reset the persisted offset so a truncated or recreated file is
@@ -146,12 +201,7 @@ func (s *Store) ingestJSONL(ctx context.Context, name, path string, handle func(
 		return 0, 0, false, err
 	}
 	if len(data) == 0 {
-		if hasFP {
-			if err := s.SetCursor(ctx, name+":head", fingerprint); err != nil {
-				return 0, 0, rotated, err
-			}
-		}
-		return 0, 0, rotated, nil
+		return 0, 0, rotated, saveHead()
 	}
 	count := 0
 	skipped := 0
@@ -171,7 +221,7 @@ func (s *Store) ingestJSONL(ctx context.Context, name, path string, handle func(
 			// whole window so the post-loop flush persists the skip and the
 			// stream cannot wedge. Otherwise it is a trailing partial line from
 			// a concurrent writer, so retry next cycle.
-			if len(data) >= maxIngestBytes {
+			if consumed == 0 && len(data) >= maxIngestBytes {
 				consumed = len(data)
 				lastGood = consumed
 				skipped++
@@ -181,6 +231,7 @@ func (s *Store) ingestJSONL(ctx context.Context, name, path string, handle func(
 		line := data[consumed : consumed+nl]
 		consumed += nl + 1
 		if len(bytes.TrimSpace(line)) == 0 {
+			lastGood = consumed
 			continue
 		}
 		var record map[string]any
@@ -218,23 +269,15 @@ func (s *Store) ingestJSONL(ctx context.Context, name, path string, handle func(
 	if err := flush(lastGood); err != nil {
 		return count, skipped, rotated, err
 	}
-	if hasFP {
-		if err := s.SetCursor(ctx, name+":head", fingerprint); err != nil {
-			return count, skipped, rotated, err
-		}
-	}
-	return count, skipped, rotated, nil
+	return count, skipped, rotated, saveHead()
 }
 
-// fileFingerprint hashes a fixed first-byte window so a truncate-and-regrow
-// rotation is distinguishable from append-only growth. Files smaller than the
-// window are skipped: their head would change as they grow.
+// fileFingerprint hashes the chosen bounded prefix, without disturbing the read offset.
 func fileFingerprint(f *os.File, size int64) (int64, bool, error) {
-	const headBytes = 256
-	if size < headBytes {
+	if size <= 0 {
 		return 0, false, nil
 	}
-	head := make([]byte, headBytes)
+	head := make([]byte, min(size, int64(256)))
 	if _, err := f.ReadAt(head, 0); err != nil {
 		return 0, false, err
 	}
@@ -341,16 +384,6 @@ func (s *Store) ingestDecisions(ctx context.Context, root string) (int, int, err
 			continue
 		}
 		hash := int64(contentHash(data))
-		hashCursor := cursor + ":hash"
-		prevHash, cursorErr := s.Cursor(ctx, hashCursor)
-		if cursorErr != nil {
-			return files, events, cursorErr
-		}
-		if prevHash != 0 && prevHash == hash {
-			// Already ingested this exact content; a rewrite with identical
-			// bytes must not create a second event.
-			continue
-		}
 		var payload map[string]any
 		if err := json.Unmarshal(data, &payload); err != nil {
 			continue // partially written; retry next cycle
@@ -359,18 +392,22 @@ func (s *Store) ingestDecisions(ctx context.Context, root string) (int, int, err
 		if tsErr != nil {
 			continue // malformed timestamp; retry next cycle
 		}
-		if err := s.AppendEvent(ctx, Event{
-			TS:      ts,
-			Type:    "eval_decision",
-			Payload: payload,
-		}); err != nil {
+		// Earlier eval.compare versions persisted a Comparison without ts.
+		// Their judge/technical filenames carry the original UTC timestamp.
+		legacyFilenameTime := false
+		if ts.IsZero() {
+			mode, stamp, _ := strings.Cut(strings.TrimSuffix(filepath.Base(path), ".json"), "-")
+			if mode == "technical" || mode == "judge" {
+				ts, _ = time.Parse("20060102-150405", stamp)
+				legacyFilenameTime = !ts.IsZero()
+			}
+		}
+		inserted, err := s.recordDecision(ctx, cursor, hash, int64(len(data)), Event{TS: ts, Type: "eval_decision", Payload: payload}, legacyFilenameTime)
+		if err != nil {
 			return files, events, err
 		}
-		if err := s.SetCursor(ctx, cursor, int64(len(data))); err != nil {
-			return files, events, err
-		}
-		if err := s.SetCursor(ctx, hashCursor, hash); err != nil {
-			return files, events, err
+		if !inserted {
+			continue
 		}
 		files++
 		events++
@@ -412,9 +449,13 @@ var errMalformedRecord = errors.New("malformed record")
 // (callers substitute the ingest time); a present-but-unparseable ts is an
 // error so a corrupt record is surfaced instead of being silently stamped.
 func recordTime(rec map[string]any) (time.Time, error) {
-	raw := stringField(rec, "ts")
-	if raw == "" {
+	value, present := rec["ts"]
+	if !present {
 		return time.Time{}, nil
+	}
+	raw, ok := value.(string)
+	if !ok {
+		return time.Time{}, fmt.Errorf("%w: ts must be a timestamp string", errMalformedRecord)
 	}
 	ts, ok := parseTimeOK(raw)
 	if !ok {

@@ -1,7 +1,7 @@
 #!/usr/bin/env sh
 # Write configs/install-state.json. Usage: write-install-state.sh <root> <profile> <runtime>
 set -e
-ROOT="$1"
+ROOT=$(CDPATH= cd -- "${1:?missing repository root}" && pwd -P) || exit 1
 PROFILE="${2:-full}"
 RUNTIME="${3:-unknown}"
 if [ -z "$ROOT" ] || [ "$ROOT" = "/" ] || [ ! -f "$ROOT/docker-compose.yml" ] || [ ! -f "$ROOT/go.mod" ]; then
@@ -16,11 +16,11 @@ case "$RUNTIME" in
   binary|docker|unknown) ;;
   *) echo "[install-state] invalid runtime: $RUNTIME (expected binary, docker or unknown)" >&2; exit 1 ;;
 esac
-ROOT="$(CDPATH= cd -- "$ROOT" && pwd)" || { echo "[install-state] cannot resolve $ROOT" >&2; exit 1; }
 mkdir -p "$ROOT/configs"
 
 json_escape() {
-  printf '%s' "$1" | tr -d '\r\n' | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g'
+  case "$1" in *[[:cntrl:]]*) echo "[install-state] invalid control character" >&2; return 1 ;; esac
+  printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g'
 }
 
 PLUGIN_JSON="$ROOT/plugins/hackathonkit/.codex-plugin/plugin.json"
@@ -28,8 +28,8 @@ VERSION=""
 if [ -f "$PLUGIN_JSON" ] && command -v python3 >/dev/null 2>&1; then
   VERSION=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("version",""))' "$PLUGIN_JSON" 2>/dev/null || true)
 fi
-if [ -z "$VERSION" ]; then
-  VERSION=$(sed -n 's/^[[:space:]]*"version": *"\([^"]*\)".*/\1/p' "$PLUGIN_JSON" 2>/dev/null | head -n 1)
+if [ -z "$VERSION" ] && [ -f "$PLUGIN_JSON" ] && command -v node >/dev/null 2>&1; then
+  VERSION=$(node -e 'const v=require(process.argv[1]).version; if(typeof v==="string")console.log(v)' "$PLUGIN_JSON" 2>/dev/null || true)
 fi
 if [ -z "$VERSION" ]; then
   echo "[install-state] warning: cannot read a version from $PLUGIN_JSON" >&2
@@ -75,7 +75,7 @@ STAMP=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 VERSION_JSON=$(json_escape "$VERSION")
 PROFILE_JSON=$(json_escape "$PROFILE")
 RUNTIME_JSON=$(json_escape "$RUNTIME")
-TMP_STATE=$(mktemp "$ROOT/configs/install-state.json.tmp.XXXXXX")
+TMP_STATE=$(mktemp "$ROOT/configs/install-state.json.tmp.XXXXXX") || { echo "[install-state] cannot stage install-state.json" >&2; exit 1; }
 cleanup_state() { rm -f "$TMP_STATE"; }
 trap cleanup_state EXIT
 trap 'cleanup_state; exit 130' INT

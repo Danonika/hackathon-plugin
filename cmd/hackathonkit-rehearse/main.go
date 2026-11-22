@@ -112,7 +112,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	if entries, err := listArtifacts(checkout); err == nil {
 		rep.Artifacts = entries
 	} else {
-		rep.Notes = append(rep.Notes, "artifact walk failed: "+err.Error())
+		rep.Steps = append(rep.Steps, stepResult{Name: "artifact inventory", OK: false, Error: err.Error()})
 	}
 	rep.Notes = append(rep.Notes, "clean checkout at "+rep.SHA+"; Docker, OpenAI and Telegram are not required")
 
@@ -154,7 +154,7 @@ func buildMCP(checkout string) (string, error) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "go", "build", "-buildvcs=false", "-o", binary, "./cmd/hackathonkit-mcp")
+	cmd := exec.CommandContext(ctx, "go", "build", "-trimpath", "-buildvcs=false", "-o", binary, "./cmd/hackathonkit-mcp")
 	cmd.Dir = checkout
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return "", fmt.Errorf("go build: %v: %s", err, lastLines(string(out), 5))
@@ -355,7 +355,7 @@ func (c *mcpClient) request(method string, params map[string]any) (json.RawMessa
 				}()
 				continue
 			}
-			if string(probe.ID) != "null" && string(probe.ID) != strconv.Itoa(c.nextID) {
+			if string(probe.ID) != strconv.Itoa(c.nextID) {
 				// Notification or a stale reply: keep reading for our id.
 				ch = make(chan readResult, 1)
 				go func() {

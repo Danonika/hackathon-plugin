@@ -106,7 +106,7 @@ func TestXLSXAllSheets(t *testing.T) {
 		{Name: "Telemetry", Rows: [][]string{{"ts", "value"}, {"2026-01-01 00:00:00", "10"}}},
 		{Name: "Summary", Rows: [][]string{{"metric", "mean"}, {"value", "10"}}},
 	})
-	sheets, warnings, err := readXLSXSheets(path)
+	sheets, warnings, err := readXLSXSheets(t.Context(), path)
 	if err != nil {
 		t.Fatalf("readXLSXSheets: %v (warnings %v)", err, warnings)
 	}
@@ -126,14 +126,14 @@ func TestXLSXSheetSelection(t *testing.T) {
 		{Name: "First", Rows: [][]string{{"a"}, {"1"}}},
 		{Name: "Second", Rows: [][]string{{"b"}, {"2"}}},
 	})
-	tbl, _, err := readXLSXTable(path, "Second")
+	tbl, _, err := readXLSXTable(t.Context(), path, "Second")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if tbl.Headers[0] != "b" {
 		t.Fatalf("expected sheet Second, got header %q", tbl.Headers[0])
 	}
-	if _, _, err := readXLSXTable(path, "Missing"); err == nil {
+	if _, _, err := readXLSXTable(t.Context(), path, "Missing"); err == nil {
 		t.Fatal("expected error for a missing sheet")
 	}
 }

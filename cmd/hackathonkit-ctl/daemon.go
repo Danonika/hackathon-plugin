@@ -20,7 +20,9 @@ import (
 	"syscall"
 	"time"
 
+	"hackathonkit.local/agentkit/internal/atomicfile"
 	"hackathonkit.local/agentkit/internal/control"
+	"hackathonkit.local/agentkit/internal/filelock"
 )
 
 const (
@@ -95,7 +97,20 @@ func daemonStart(root string) error {
 func daemonStop(root string) error {
 	pid, alive := readPID(root)
 	if !alive {
-		_ = os.Remove(pidPath(root))
+		if _, err := os.Stat(pidPath(root)); err == nil {
+			unlock, err := filelock.Acquire(pidPath(root)+".guard", time.Second)
+			if err != nil {
+				return err
+			}
+			_, running := readPID(root)
+			if !running {
+				_ = os.Remove(pidPath(root))
+			}
+			unlock()
+			if running {
+				return fmt.Errorf("daemon identity changed before stop")
+			}
+		}
 		fmt.Println("daemon is not running")
 		return nil
 	}
@@ -103,7 +118,28 @@ func daemonStop(root string) error {
 	if err != nil {
 		return err
 	}
-	if err := terminateProcess(process); err != nil {
+	defer process.Release()
+	// FindProcess pins the process object on Linux and Windows. Verify the
+	// record again after opening that handle, before sending any signal.
+	if current, ours := readPID(root); !ours || current != pid {
+		return fmt.Errorf("daemon identity changed before stop")
+	}
+	switch err := process.WithHandle(func(uintptr) {}); {
+	case err == nil:
+		if err := terminateProcess(process); err != nil {
+			return err
+		}
+	case errors.Is(err, os.ErrNoHandle):
+		// A raw PID may be recycled between identity verification and signal
+		// delivery. Have this exact daemon instance stop itself on its next tick.
+		current, _, birth, err := readPIDFile(root)
+		if err != nil || current != pid || birth == "" {
+			return fmt.Errorf("cannot verify daemon instance for cooperative stop")
+		}
+		if err := atomicfile.Write(pidPath(root)+".stop", []byte(fmt.Sprintf("%d %s", pid, birth)), atomicfile.ModeState); err != nil {
+			return err
+		}
+	default:
 		return err
 	}
 	deadline := time.Now().Add(5 * time.Second)
@@ -140,13 +176,19 @@ func daemonForeground(root string) error {
 	// Record the pid and the executable path so a recycled pid can be told
 	// apart from our daemon without relying on /proc. Claim the file atomically
 	// so two concurrent `daemon start` runs cannot both believe they own it.
+	birth := processBirth(os.Getpid())
 	self, _ := os.Executable()
-	if err := claimPIDFile(root, []byte(mine+"\n"+self+"\n")); err != nil {
+	if err := claimPIDFile(root, []byte(mine+"\n"+self+"\n"+birth+"\n")); err != nil {
 		return err
 	}
 	defer func() {
+		unlock, err := filelock.Acquire(pidPath(root)+".guard", time.Second)
+		if err != nil {
+			return
+		}
+		defer unlock()
 		// Only remove the pid file when it is still ours.
-		if pid, _, err := readPIDFile(root); err == nil && pid == os.Getpid() {
+		if pid, _, _, err := readPIDFile(root); err == nil && pid == os.Getpid() {
 			os.Remove(pidPath(root))
 		}
 	}()
@@ -172,6 +214,11 @@ func daemonForeground(root string) error {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
+				if requested, err := os.ReadFile(pidPath(root) + ".stop"); err == nil && birth != "" && string(requested) == mine+" "+birth {
+					_ = os.Remove(pidPath(root) + ".stop")
+					stop()
+					return
+				}
 				if _, err := store.Ingest(ctx, root); err != nil {
 					fmt.Fprintln(os.Stderr, "ingest:", err)
 				}
@@ -191,7 +238,8 @@ func daemonForeground(root string) error {
 	var handlerWG sync.WaitGroup
 	base := controlHandler(store, token)
 	server := &http.Server{
-		Addr: addr,
+		Addr:        addr,
+		BaseContext: func(net.Listener) context.Context { return ctx },
 		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			handlerWG.Add(1)
 			defer handlerWG.Done()
@@ -207,7 +255,9 @@ func daemonForeground(root string) error {
 		<-ctx.Done()
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer cancel()
-		_ = server.Shutdown(shutdownCtx)
+		if err := server.Shutdown(shutdownCtx); err != nil {
+			_ = server.Close()
+		}
 	}()
 	fmt.Printf("control daemon listening on http://%s (pid %d)\n", addr, os.Getpid())
 	err = server.ListenAndServe()
@@ -215,34 +265,32 @@ func daemonForeground(root string) error {
 		// Wait for Shutdown to return, then for in-flight handlers to finish
 		// (bounded) before the deferred store.Close() runs.
 		<-shutdownDone
-		handlersDone := make(chan struct{})
-		go func() { handlerWG.Wait(); close(handlersDone) }()
-		select {
-		case <-handlersDone:
-		case <-time.After(2 * time.Second):
-			fmt.Fprintln(os.Stderr, "daemon: timed out waiting for in-flight handlers to finish")
-		}
+		handlerWG.Wait()
 		return nil
 	}
 	return err
 }
 
 // readPIDFile parses the pid file (pid on line 1, executable path on line 2).
-func readPIDFile(root string) (int, string, error) {
+func readPIDFile(root string) (int, string, string, error) {
 	data, err := os.ReadFile(pidPath(root))
 	if err != nil {
-		return 0, "", err
+		return 0, "", "", err
 	}
 	lines := strings.Split(strings.ReplaceAll(string(data), "\r\n", "\n"), "\n")
 	pid, err := strconv.Atoi(strings.TrimSpace(lines[0]))
 	if err != nil || pid <= 0 {
-		return 0, "", fmt.Errorf("daemon: malformed pid file %s", pidPath(root))
+		return 0, "", "", fmt.Errorf("daemon: malformed pid file %s", pidPath(root))
 	}
 	exe := ""
 	if len(lines) > 1 {
 		exe = strings.TrimSpace(lines[1])
 	}
-	return pid, exe, nil
+	var birth string
+	if len(lines) > 2 {
+		birth = strings.TrimSpace(lines[2])
+	}
+	return pid, exe, birth, nil
 }
 
 // claimPIDFile publishes the pid file atomically: the content is written to a
@@ -252,6 +300,11 @@ func readPIDFile(root string) (int, string, error) {
 func claimPIDFile(root string, content []byte) error {
 	path := pidPath(root)
 	dir := filepath.Dir(path)
+	unlock, err := filelock.Acquire(path+".guard", time.Second)
+	if err != nil {
+		return err
+	}
+	defer unlock()
 	for attempt := 0; attempt < 3; attempt++ {
 		tmp, err := os.CreateTemp(dir, "daemon.pid.*")
 		if err != nil {
@@ -291,24 +344,21 @@ func claimPIDFile(root string, content []byte) error {
 }
 
 func readPID(root string) (int, bool) {
-	pid, recordedExe, err := readPIDFile(root)
+	pid, recordedExe, birth, err := readPIDFile(root)
 	if err != nil {
 		return 0, false
 	}
 	if !processAlive(pid) {
 		return pid, false
 	}
-	// Prefer the recorded executable path: an exact match proves identity on
-	// every platform. Fall back to the /proc check only when no path was saved
-	// (older pid files) and /proc is available; an unverifiable daemon is
-	// reported as not-ours so `stop` never signals an unrelated process.
-	if recordedExe != "" {
-		if !processMatchesPath(pid, recordedExe) {
-			return pid, false
-		}
-		return pid, true
+	if recordedExe != "" && !processMatchesPath(pid, recordedExe) {
+		return pid, false
 	}
-	if !processLooksLikeDaemon(pid) {
+	if birth != "" {
+		return pid, birth == processBirth(pid)
+	}
+	// Legacy records lack a process birth identity; verify the daemon command.
+	if !processLooksLikeDaemon(pid, recordedExe) {
 		return pid, false
 	}
 	return pid, true
@@ -330,15 +380,13 @@ func samePath(a, b string) bool {
 	return ra == rb
 }
 
-// processLooksLikeDaemon verifies the process identity via /proc/<pid>/cmdline.
-// Without /proc the identity cannot be verified, so it reports false rather than
-// assuming ownership.
-func processLooksLikeDaemon(pid int) bool {
-	cmdline, err := os.ReadFile(filepath.Join("/proc", strconv.Itoa(pid), "cmdline"))
-	if err != nil {
+func legacyDaemonArgs(args []string, recorded string) bool {
+	if len(args) != 3 || args[1] != "daemon" || args[2] != "foreground" {
 		return false
 	}
-	return strings.Contains(strings.ReplaceAll(string(cmdline), "\x00", " "), "hackathonkit-ctl")
+	// A matching recorded executable was checked separately. For older PID-only
+	// records also require the expected executable name.
+	return recorded != "" || strings.TrimSuffix(filepath.Base(args[0]), ".exe") == "hackathonkit-ctl"
 }
 
 func controlHandler(store *control.Store, token string) http.Handler {

@@ -10,14 +10,16 @@ Durable state for resuming after `/compact` or in a new session. Read this and
 - Scan 3 (final verification, 421 findings): all 5 criticals + 29 highs fixed
   (v0.16.14); 134 mediums fixed (v0.16.15–v0.16.19). **Current backlog:
   93 S3 mediums + 160 S3 lows** (S3-M*/S3-L* in `docs/REVIEW-BACKLOG.md`).
-- Regenerate historical findings with `ocr scan`.
+- Run the historical scan again with `ocr scan` when raw findings are needed.
 - Every release passed: gofmt/build/vet, `go test ./...`, coverage ≥80%,
   quality gate 7/7, hooks + env-set + smoke tests, Windows cross-vet, and
   `go run ./cmd/hackathonkit-rehearse` (clean-checkout rehearsal) PASS 24/24.
 
 ## Verification environment
 
-Use the Go toolchain in `go.mod`. Provider tests use isolated environment variables.
+Run the Go checks with the toolchain specified by `go.mod`. Docker and Windows
+checks are also defined in [the CI workflow](../.github/workflows/ci.yml).
+Provider detection tests should run with isolated environment variables.
 
 ## Workflow that has been used per batch
 

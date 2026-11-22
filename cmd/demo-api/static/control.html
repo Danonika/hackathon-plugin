@@ -96,7 +96,7 @@ async function loadSessions() {
       if (!tr) {
         tr = document.createElement("tr");
         for (let i = 0; i < 5; i++) tr.appendChild(document.createElement("td"));
-        tr.addEventListener("click", () => { selected = s.id; highlightSelected(); loadSessions(); });
+        tr.addEventListener("click", () => { selected = s.id; highlightSelected(); loadDetail(selected); });
         tbody.appendChild(tr);
         sessionRows.set(s.id, tr);
       }
@@ -114,6 +114,9 @@ async function loadSessions() {
         sessionRows.delete(id);
         if (selected === id) {
           selected = null;
+          detailRequest?.controller.abort();
+          detailRequest = null;
+          document.getElementById("detail-title").textContent = "Session detail";
           document.getElementById("detail").textContent = "session no longer present";
         }
       }
@@ -131,18 +134,22 @@ async function loadSessions() {
   }
 }
 
-let detailLoading = false;
+let detailRequest = null;
 async function loadDetail(id) {
-  if (detailLoading) return;
-  detailLoading = true;
+  if (detailRequest?.id === id) return;
+  detailRequest?.controller.abort();
+  const controller = new AbortController();
+  detailRequest = { id, controller };
+  const timer = setTimeout(() => controller.abort(), 8000);
   try {
-    const res = await fetch("/control/api/session?id=" + encodeURIComponent(id));
+    const res = await fetch("/control/api/session?id=" + encodeURIComponent(id), { signal: controller.signal });
     let data = {};
     try {
       data = await res.json();
     } catch (_) {
       data = { error: res.statusText };
     }
+    if (selected !== id || detailRequest?.controller !== controller) return;
     if (!res.ok || !data.session) {
       document.getElementById("detail").textContent = data.error || res.statusText;
       return;
@@ -160,9 +167,12 @@ async function loadDetail(id) {
     }
     document.getElementById("detail").textContent = lines.join("\n") || "no events";
   } catch (err) {
-    document.getElementById("detail").textContent = "detail load failed: " + err.message;
+    if (selected === id && detailRequest?.controller === controller) {
+      document.getElementById("detail").textContent = "detail load failed: " + err.message;
+    }
   } finally {
-    detailLoading = false;
+    clearTimeout(timer);
+    if (detailRequest?.controller === controller) detailRequest = null;
   }
 }
 loadSessions();

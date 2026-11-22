@@ -32,13 +32,9 @@ jobs:
         run: node plugins/hackathonkit/scripts/hooks.test.js
       - name: shell regression tests
         run: |
-          sh scripts/env-set.test.sh
-          sh scripts/smoke.test.sh
-          sh scripts/verify-command.test.sh
-          sh scripts/set-version.test.sh
-          sh scripts/codex-config.test.sh
-          sh scripts/ocr-dedup.test.sh
-          sh scripts/redact.test.sh
+          for suite in scripts/*.test.sh plugins/hackathonkit/scripts/*.test.sh; do
+            sh "$suite" || exit 1
+          done
       - name: quality gate
         run: ./scripts/quality-gate.sh
       - name: clean-checkout rehearsal
@@ -82,12 +78,15 @@ jobs:
       - name: build windows binary
         run: |
           New-Item -ItemType Directory -Force -Path bin | Out-Null
-          go build -o bin/hackathonkit-mcp.exe ./cmd/hackathonkit-mcp
+          go build -trimpath -buildvcs=false -o bin/hackathonkit-mcp.exe ./cmd/hackathonkit-mcp
       - name: go tests
         run: go test ./...
       - name: hooks behavior (real .exe lookup)
         run: node plugins/hackathonkit/scripts/hooks.test.js
+      - name: native Node launcher with forwarded option
+        run: node plugins/hackathonkit/scripts/hackathonkit-mcp-launcher.js --list-tools
       - name: selftest and skill validator
         run: |
           ./bin/hackathonkit-mcp.exe --selftest
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           ./bin/hackathonkit-mcp.exe --validate-skills

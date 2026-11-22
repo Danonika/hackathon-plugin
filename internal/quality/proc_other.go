@@ -1,4 +1,4 @@
-//go:build plan9 || js || wasip1
+//go:build !unix && !windows
 
 package quality
 
@@ -9,8 +9,4 @@ import "os/exec"
 // directly.
 func configureProcessGroup(cmd *exec.Cmd) {}
 
-func killProcessGroup(cmd *exec.Cmd) {
-	if cmd.Process != nil {
-		_ = cmd.Process.Kill()
-	}
-}
+func ownGroup(cmd *exec.Cmd) (func(), func()) { return func() { _ = cmd.Process.Kill() }, func() {} }

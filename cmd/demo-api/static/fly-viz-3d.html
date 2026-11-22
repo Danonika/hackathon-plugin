@@ -32,6 +32,7 @@
   <div class="row"><span style="width:70px">Дофамин</span><div class="bar"><span id="dopa" style="width:0%;background:linear-gradient(90deg,#22c55e,#86efac)"></span></div><span id="dopa-val" class="muted">0</span></div>
   <div id="verdict" class="muted">ожидание решения Codex (routing.fly_feedback)…</div>
 </div>
+<script src="/fly-static/demo-poll.js"></script>
 <script type="importmap">
 { "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js" } }
 </script>
@@ -160,8 +161,8 @@ function setBrainGlow(color, intensity) {
 async function poll() {
   try {
     const [feedback, neurons] = await Promise.all([
-      fetch('/fly-feedback?limit=10').then(r => r.json()),
-      fetch('/fly-neuron-events?limit=20').then(r => r.json())
+      fetchSnapshotJSON('/fly-feedback?limit=10'),
+      fetchSnapshotJSON('/fly-neuron-events?limit=20')
     ]);
     const neuronEvents = neurons.events || [];
     const lastNeuron = neuronEvents[neuronEvents.length - 1];
@@ -182,14 +183,16 @@ async function poll() {
         target.set(3.4, 1.6, 3.4);
         sugar.visible = true;
         setBrainGlow(0x22c55e, 0.9);
-        $('verdict').innerHTML = '<span class="good">🍬 награда · PAM ' + (feedbackNeuron.pam ?? 0) + ' · муха ест сахар</span>';
+        $('verdict').className = 'good';
+        $('verdict').textContent = '🍬 награда · PAM ' + (feedbackNeuron.pam ?? 0) + ' · муха ест сахар';
       } else {
         state.dopamine = Math.max(0, state.dopamine - 10);
         state.hunger = Math.min(100, state.hunger + 25);
         state.mode = 'punish';
         target.set(-8.5, 2.2, 4.5);
         setBrainGlow(0xef4444, 0.9);
-        $('verdict').innerHTML = '<span class="bad">⚡ ошибка · PPL1 ' + (feedbackNeuron.ppl1 ?? 0) + ' · боль и голод</span>';
+        $('verdict').className = 'bad';
+        $('verdict').textContent = '⚡ ошибка · PPL1 ' + (feedbackNeuron.ppl1 ?? 0) + ' · боль и голод';
       }
       $('hunger').style.width = state.hunger + '%';
       $('hunger-val').textContent = Math.round(state.hunger) + '%';
@@ -200,7 +203,7 @@ async function poll() {
     $('status').textContent = 'offline: ' + e.message;
   }
 }
-poll(); setInterval(poll, 2500);
+pollSnapshots(poll, 2500);
 
 const clock = new THREE.Clock();
 function animate() {

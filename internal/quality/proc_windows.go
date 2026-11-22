@@ -10,14 +10,9 @@ import (
 	"strconv"
 	"syscall"
 	"time"
+
+	"golang.org/x/sys/windows"
 )
-
-// processQueryLimitedInformation is PROCESS_QUERY_LIMITED_INFORMATION, which
-// the standard syscall package does not export.
-const processQueryLimitedInformation = 0x1000
-
-// stillActive is STILL_ACTIVE, returned by GetExitCodeProcess for a live process.
-const stillActive = 259
 
 // configureProcessGroup starts each gate command in a new process group so the
 // whole tree can be terminated with taskkill /T.
@@ -25,38 +20,28 @@ func configureProcessGroup(cmd *exec.Cmd) {
 	cmd.SysProcAttr = &syscall.SysProcAttr{CreationFlags: syscall.CREATE_NEW_PROCESS_GROUP}
 }
 
-// processAlive reports whether pid is a live process. os.Process.Signal only
-// supports os.Kill on Windows, so liveness is probed via the Win32 API.
-func processAlive(pid int) bool {
-	if pid <= 0 {
-		return false
+func ownGroup(cmd *exec.Cmd) (kill func(), release func()) {
+	// Retain the precise Windows process object until cleanup is finished. A
+	// PID cannot be reused while its process object has an open handle.
+	var pinned windows.Handle
+	owner := windows.CurrentProcess()
+	err := cmd.Process.WithHandle(func(raw uintptr) {
+		_ = windows.DuplicateHandle(owner, windows.Handle(raw), owner, &pinned, 0, false, windows.DUPLICATE_SAME_ACCESS)
+	})
+	if err != nil || pinned == 0 {
+		return func() { _ = cmd.Process.Kill() }, func() {}
 	}
-	handle, err := syscall.OpenProcess(processQueryLimitedInformation, false, uint32(pid))
-	if err != nil {
-		// ERROR_ACCESS_DENIED means the process exists but cannot be queried;
-		// only a nonexistent pid is not alive. Other errors fail conservative,
-		// treating the process as dead rather than killing an unrelated one.
-		return err == syscall.ERROR_ACCESS_DENIED
-	}
-	defer syscall.CloseHandle(handle)
-	var code uint32
-	if err := syscall.GetExitCodeProcess(handle, &code); err != nil {
-		return false
-	}
-	return code == stillActive
+	return func() {
+		state, err := windows.WaitForSingleObject(pinned, 0)
+		if err == nil && state != windows.WAIT_OBJECT_0 {
+			killWindowsTree(cmd)
+		} else {
+			_ = cmd.Process.Kill()
+		}
+	}, func() { _ = windows.CloseHandle(pinned) }
 }
 
-func killProcessGroup(cmd *exec.Cmd) {
-	if cmd.Process == nil {
-		return
-	}
-	// taskkill /T terminates the process tree (test binaries, shell children),
-	// which WaitDelay alone does not reap. Probe liveness first: once Wait has
-	// reaped the child its PID can be recycled, so taskkill must not target an
-	// unrelated process that reused it. Fall back to the direct child.
-	if !processAlive(cmd.Process.Pid) {
-		return
-	}
+func killWindowsTree(cmd *exec.Cmd) {
 	// Resolve taskkill from the system directory instead of PATH (or the
 	// current directory, which Windows searches first) so a planted
 	// taskkill.exe cannot be executed. Without SystemRoot, do not fall back to a

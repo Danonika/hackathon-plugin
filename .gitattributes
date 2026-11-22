@@ -25,13 +25,12 @@
 *.ttf binary
 *.otf binary
 *.eot binary
-# 3D/mesh assets: treated as binary even though .obj/.stl/.gltf have text
-# variants, because the binary variants must never be line-ending-normalised
-# (silent corruption). They are demo assets, so losing text diffs is acceptable.
+# OBJ can also be a compiled object, and STL has a binary representation.
+# glTF JSON is text; GLB is its binary container.
 *.stl binary
 *.obj binary
 *.glb binary
-*.gltf binary
+*.gltf text eol=lf
 *.mp4 binary
 *.m4a binary
 *.mp3 binary
@@ -42,7 +41,9 @@
 *.exe binary
 *.dll binary
 *.so binary
+*.so.* binary
 *.dylib binary
+*.dylib.* binary
 *.a binary
 *.o binary
 *.jar binary
@@ -67,4 +68,5 @@
 *.vcxproj.filters text eol=crlf
 *.props text eol=crlf
 *.targets text eol=crlf
-*.reg text eol=crlf
+# Registry exports can contain UTF-16 data. Preserve their original bytes.
+*.reg -text

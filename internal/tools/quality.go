@@ -18,7 +18,7 @@ func registerQuality(reg *mcp.Registry, d Deps) {
 			if !ok {
 				warnings := []string{"no gate evidence found; run scripts/quality-gate.sh (or docker compose run --rm quality)"}
 				if evidenceErr != nil {
-					warnings = append(warnings, "evidence could not be read: "+evidenceErr.Error())
+					warnings = []string{"evidence could not be read: " + evidenceErr.Error()}
 				}
 				return mcp.Partial(trace(ctx), map[string]any{
 					"available": false,

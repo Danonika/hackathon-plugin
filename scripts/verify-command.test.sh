@@ -13,13 +13,10 @@ trap 'cleanup_vc_test; exit 143' TERM
 FAIL=0
 
 check() {
-  name="$1"
-  ok="$2"
-  detail="$3"
-  if [ "$ok" = "1" ]; then
-    echo "[ok]   $name"
+  if [ "$2" = "1" ]; then
+    echo "[ok]   $1"
   else
-    echo "[fail] $name${detail:+: $detail}"
+    echo "[fail] $1${3:+: $3}"
     FAIL=$((FAIL + 1))
   fi
 }
@@ -38,30 +35,29 @@ done
 for cmd in plan research build; do
   check "$cmd states the agent runs the tools" "$(grep -q 'do not ask the user' "$CMDS_DIR/$cmd.md" 2>/dev/null && echo 1 || echo 0)" "missing instruction in $cmd.md"
 done
+check "evaluate assigns execution to the agent" "$(grep -q 'The agent runs the evaluation tools' "$CMDS_DIR/evaluate.md" && echo 1)"
 check "verify runs the quality gate" "$(grep -q 'quality-gate.sh' "$CMDS_DIR/verify.md" 2>/dev/null && echo 1 || echo 0)"
 check "verify enforces coverage" "$(grep -q 'coverage' "$CMDS_DIR/verify.md" 2>/dev/null && echo 1 || echo 0)"
 check "verify documents --target" "$(grep -q -- '--target' "$CMDS_DIR/verify.md" 2>/dev/null && echo 1 || echo 0)"
 check "verify reports seven checks" "$(grep -q 'seven checks' "$CMDS_DIR/verify.md" 2>/dev/null && echo 1 || echo 0)"
 # /build runs the code-review pair in order: cp-expert-refactoring before system-design-expert.
 build_md="$CMDS_DIR/build.md"
-cp_pos=$(grep -bo 'cp-expert-refactoring' "$build_md" 2>/dev/null | head -1 | cut -d: -f1)
-sd_pos=$(grep -bo 'system-design-expert' "$build_md" 2>/dev/null | head -1 | cut -d: -f1)
-if [ -n "$cp_pos" ] && [ -n "$sd_pos" ] && [ "$cp_pos" -lt "$sd_pos" ]; then
-  check "build runs cp-expert-refactoring before system-design-expert" 1
+if awk '/^[0-9]+[.]/ { pair=($0 ~ /code review pair/) } pair { text=text " " $0 } END { a=index(text,"cp-expert-refactoring"); b=index(text,"system-design-expert"); exit !(a>0 && b>a) }' "$build_md"; then
+  check "build requires the ordered code review pair" 1
 else
-  check "build runs cp-expert-refactoring before system-design-expert" 0 "order wrong or missing (cp=$cp_pos sd=$sd_pos)"
+  check "build requires the ordered code review pair" 0
 fi
 
 # The Claude Code plugin manifest declares every command.
 if command -v python3 >/dev/null 2>&1; then
-  check "claude plugin declares all commands" "$(python3 - "$ROOT/.claude-plugin/plugin.json" <<'PY'
+  check "claude plugin declares all commands" "$(python3 - "$ROOT/.claude-plugin/plugin.json" $COMMANDS <<'PY'
 import json, sys
 try:
     data = json.load(open(sys.argv[1]))
 except Exception:
     print(0); raise SystemExit
 cmds = data.get("commands") or []
-want = ["plan", "research", "build", "evaluate", "verify"]
+want = sys.argv[2:]
 ok = all(any(f"commands/{w}.md" in str(c) for c in cmds) for w in want)
 print(1 if ok else 0)
 PY
@@ -75,7 +71,7 @@ else
 fi
 
 # sync-harness mirrors every command into the harness project command dirs.
-sh "$ROOT/scripts/sync-harness.sh" >/dev/null 2>&1 || true
+sh "$ROOT/scripts/sync-harness.sh" >/dev/null 2>&1 || check "harness sync succeeded" 0
 for cmd in $COMMANDS; do
   for mpath in "$ROOT/.opencode/commands/$cmd.md" "$ROOT/.claude/commands/$cmd.md"; do
     rel=${mpath#"$ROOT/"}
@@ -89,7 +85,7 @@ done
 
 # The Codex prompt installer places every command in $CODEX_HOME/prompts.
 check "setup installs the Codex prompts" "$(grep -q 'install-prompts.sh' "$ROOT/scripts/setup.sh" 2>/dev/null && echo 1 || echo 0)"
-CODEX_HOME="$TMPHOME" sh "$ROOT/scripts/install-prompts.sh" install >/dev/null 2>&1
+CODEX_HOME="$TMPHOME" sh "$ROOT/scripts/install-prompts.sh" install >/dev/null 2>&1 || check "prompt installer succeeded" 0
 missing=0
 for cmd in $COMMANDS; do
   [ -f "$TMPHOME/prompts/$cmd.md" ] || missing=$((missing + 1))
@@ -101,7 +97,7 @@ else
   check "prompt installer reports installed" 0 "status failed after install"
 fi
 printf '\ncustom edit\n' >> "$TMPHOME/prompts/verify.md"
-CODEX_HOME="$TMPHOME" sh "$ROOT/scripts/install-prompts.sh" remove >/dev/null 2>&1
+CODEX_HOME="$TMPHOME" sh "$ROOT/scripts/install-prompts.sh" remove >/dev/null 2>&1 || check "prompt removal succeeded" 0
 # Contract: `install-prompts.sh remove` deletes only prompts whose installed
 # content still matches the shipped source; a prompt the user modified is kept.
 # These assertions pin that behavior, so an installer change (e.g. removing the

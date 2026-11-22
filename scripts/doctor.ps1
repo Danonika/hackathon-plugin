@@ -8,10 +8,6 @@ function Test-TcpPort([string]$HostName, [int]$Port) {
     $client = New-Object System.Net.Sockets.TcpClient
     $async = $client.BeginConnect($HostName, $Port, $null, $null)
     if (-not $async.AsyncWaitHandle.WaitOne(1000)) {
-      # Complete the pending connect to observe its outcome, then return; the
-      # finally block releases the wait handle and closes the client exactly
-      # once (Close() does not reliably abort an in-flight connect).
-      try { $client.EndConnect($async) } catch { }
       return $false
     }
     $client.EndConnect($async)
@@ -61,7 +57,7 @@ if ($docker) {
   docker info *> $null
   $engine = ($LASTEXITCODE -eq 0)
 }
-Check "docker engine" $engine $(if ($engine) { "running" } else { "not running" })
+Check "docker engine" $engine $(if ($engine) { "running" } elseif ($docker) { "not running" } else { "docker CLI not found" })
 
 $binary = Test-Path -LiteralPath (Join-Path $root "bin\hackathonkit-mcp.exe")
 $image = $false
@@ -77,10 +73,16 @@ Check "mcp runtime" ($binary -or $image) $(if ($binary) { "local binary" } elsei
 # mirror check to fail instead.
 $script:hashErrors = 0
 $srcSkillsPath = Join-Path $root "plugins\hackathonkit\skills"
+. (Join-Path $PSScriptRoot "skill-profile.ps1")
+$installProfile = Get-InstalledSkillProfile $root
 $srcFiles = @()
 if (Test-Path -LiteralPath $srcSkillsPath) {
+  $excluded = @(Get-ChildItem -LiteralPath $srcSkillsPath -Directory -Force | Where-Object { -not (Test-SkillInProfile $_.FullName $installProfile) } | Select-Object -ExpandProperty Name)
   $srcFiles = @(Get-ChildItem -LiteralPath $srcSkillsPath -Recurse -File -Force |
-    Where-Object { -not ($_.Attributes -band [System.IO.FileAttributes]::ReparsePoint) } |
+    Where-Object {
+      $skill = $_.FullName.Substring($srcSkillsPath.Length).TrimStart('\','/').Split([IO.Path]::DirectorySeparatorChar)[0]
+      $skill -notin $excluded -and -not ($_.Attributes -band [IO.FileAttributes]::ReparsePoint)
+    } |
     ForEach-Object {
       $rel = $_.FullName.Substring($srcSkillsPath.Length).TrimStart('\', '/')
       try {
@@ -145,7 +147,7 @@ if (Test-Path -LiteralPath $statePath) {
     $stateVersion = "unreadable"
   }
 }
-Check "install state" ($stateVersion -ne "" -and $stateVersion -ne "unreadable") $(if ($stateVersion) { "version $stateVersion" } else { "missing configs/install-state.json; run scripts/setup.ps1" })
+Check "install state" ($stateVersion -ne "" -and $stateVersion -ne "unreadable") $(if ($stateVersion -and $stateVersion -ne "unreadable") { "version $stateVersion" } elseif ($stateVersion -eq "unreadable") { "could not parse configs/install-state.json" } else { "missing configs/install-state.json; run scripts/setup.ps1" })
 
 $telegramSet = $false
 if ($env:TELEGRAM_BOT_TOKEN) { $telegramSet = $true }

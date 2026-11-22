@@ -1,6 +1,6 @@
 ---
 name: skill-authoring
-description: "Use when adding or updating a Hackathon Agent Kit skill: read docs/SKILL-STANDARD.md, scaffold SKILL.md + agents/openai.yaml + references, meet the section and 120-250 line rules, run hackathonkit-mcp --validate-skills until clean, keep the plugin directory canonical, refresh mirrors with scripts/sync-harness.sh, bump the plugin version, re-run scripts/setup.sh, and check context cost with system.context_budget. Explicit-only: never invoke implicitly. Do not use for prompt tweaks or editing generated mirrors."
+description: "Use when adding or updating a skill in the Hackathon Agent Kit. Follow docs/SKILL-STANDARD.md, scaffold SKILL.md, agents/openai.yaml and references, validate with hackathonkit-mcp --validate-skills, then refresh mirrors, bump the version and rerun setup. Check context cost with system.context_budget. Explicit invocation only. Edit skills in the plugin source directory."
 metadata:
   version: "1.0.0"
   origin: hackathonkit

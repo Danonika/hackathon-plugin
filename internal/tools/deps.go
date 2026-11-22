@@ -2,6 +2,8 @@ package tools
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"math"
 	"strconv"
 	"strings"
@@ -59,7 +61,40 @@ func tool(name, description string, props map[string]any, required []string, han
 	if len(required) > 0 {
 		schema["required"] = required
 	}
-	return mcp.Tool{Name: name, Description: description, InputSchema: schema, Handler: handler}
+	return mcp.Tool{Name: name, Description: description, InputSchema: schema, Handler: func(ctx context.Context, args map[string]any) (any, error) {
+		// Option defaults apply to absent arguments. Reject malformed supplied
+		// values before a handler can silently drop entries or use a default.
+		for key, value := range args {
+			property, _ := props[key].(map[string]any)
+			switch property["type"] {
+			case "boolean":
+				if _, ok := value.(bool); !ok {
+					return mcp.Fail(trace(ctx), key+" must be a boolean"), nil
+				}
+			case "number":
+				if math.IsNaN(argFloat(args, key, math.NaN())) {
+					return mcp.Fail(trace(ctx), key+" must be a finite number"), nil
+				}
+			case "array":
+				items, _ := property["items"].(map[string]any)
+				if items["type"] != "string" {
+					continue
+				}
+				switch values := value.(type) {
+				case []string, string: // Accept the historical single-value shorthand.
+				case []any:
+					for i, v := range values {
+						if _, ok := v.(string); !ok {
+							return mcp.Fail(trace(ctx), fmt.Sprintf("%s[%d] must be a string", key, i)), nil
+						}
+					}
+				default:
+					return mcp.Fail(trace(ctx), key+" must be a string array"), nil
+				}
+			}
+		}
+		return handler(ctx, args)
+	}}
 }
 
 func strProp(desc string) map[string]any {
@@ -96,6 +131,12 @@ func argFloat(args map[string]any, key string, def float64) float64 {
 		value = v
 	case int:
 		value = float64(v)
+	case json.Number:
+		n, err := v.Float64()
+		if err != nil {
+			return def
+		}
+		value = n
 	case string:
 		parsed, err := strconv.ParseFloat(v, 64)
 		if err != nil {
@@ -112,17 +153,40 @@ func argFloat(args map[string]any, key string, def float64) float64 {
 }
 
 func argInt(args map[string]any, key string, def int) int {
-	value := argFloat(args, key, float64(def))
-	if math.IsNaN(value) || math.IsInf(value, 0) {
+	var value float64
+	switch v := args[key].(type) {
+	case int:
+		return v
+	case float64:
+		value = v
+	case json.Number:
+		return argIntString(v.String(), def)
+	case string:
+		return argIntString(v, def)
+	default:
 		return def
 	}
-	// Out-of-range values and fractions fall back to the default so callers can
-	// tell that the supplied value was not usable instead of getting a silently
-	// truncated integer.
-	if value > float64(math.MaxInt32) || value < float64(math.MinInt32) {
+	// The upper bound is exclusive. MaxInt rounds up when converted to
+	// float64 on 64-bit hosts, whereas powers of two are exact.
+	bound := math.Ldexp(1, strconv.IntSize-1)
+	if !(value >= -bound && value < bound) || value != math.Trunc(value) {
 		return def
 	}
-	if value != math.Trunc(value) {
+	return int(value)
+}
+
+func argIntString(s string, def int) int {
+	if n, err := strconv.Atoi(s); err == nil {
+		return n
+	}
+	// Preserve the accepted integral decimal and exponent forms without
+	// rounding an overflowing integer string back into range.
+	if !strings.ContainsAny(s, ".eE") {
+		return def
+	}
+	value, err := strconv.ParseFloat(s, 64)
+	bound := math.Ldexp(1, strconv.IntSize-1)
+	if err != nil || !(value >= -bound && value < bound) || value != math.Trunc(value) {
 		return def
 	}
 	return int(value)

@@ -38,13 +38,7 @@ if ! docker info >/dev/null 2>&1; then
   exit 2
 fi
 
-if [ ! -f .env ]; then
-  # Create .env private: it holds credentials, and a plain cp would inherit the
-  # example's 0644 mode (masked only by umask).
-  (umask 077 && cp .env.example .env)
-  chmod 600 .env 2>/dev/null || true
-  echo "[docker-check] created .env from .env.example (mode 0600)"
-fi
+sh "$ROOT/scripts/prepare-env.sh"
 
 # Containers run as HACKATHONKIT_UID:HACKATHONKIT_GID; align them with the current user
 # so bind-mounted data/, logs/, evals/ and configs/ stay writable. env-set.sh
@@ -104,7 +98,7 @@ docker compose up -d postgres redis minio
 
 echo "[docker-check] wait for postgres and minio"
 tries=0
-until docker compose exec -T postgres pg_isready -U hackathonkit -d hackathonkit >/dev/null 2>&1; do
+until docker compose exec -T postgres sh -c 'pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB"' >/dev/null 2>&1; do
   tries=$((tries + 1))
   if [ "$tries" -ge 30 ]; then
     echo "[docker-check] postgres did not become ready" >&2
@@ -135,9 +129,15 @@ if [ -z "$MINIO_PORT" ]; then
   printf '%s\n' "$MINIO_PORT_OUTPUT" >&2
   exit 1
 fi
-if command -v curl >/dev/null 2>&1; then
+if command -v curl >/dev/null 2>&1 || command -v wget >/dev/null 2>&1 || command -v python3 >/dev/null 2>&1; then
+  probe_minio() {
+    if command -v curl >/dev/null 2>&1; then curl --max-time 3 -fsS "$1"
+    elif command -v wget >/dev/null 2>&1; then wget -T 3 -q -O- "$1"
+    else python3 -c 'import sys, urllib.request; urllib.request.urlopen(sys.argv[1], timeout=3).close()' "$1"
+    fi
+  }
   tries=0
-  until curl -fsS "http://127.0.0.1:${MINIO_PORT}/minio/health/live" >/dev/null 2>&1; do
+  until probe_minio "http://127.0.0.1:${MINIO_PORT}/minio/health/live" >/dev/null 2>&1; do
     tries=$((tries + 1))
     if [ "$tries" -ge 30 ]; then
       echo "[docker-check] minio did not become ready" >&2

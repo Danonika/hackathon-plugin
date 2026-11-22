@@ -36,6 +36,7 @@ fi
 python3 - "$JSON_FILE" <<'PY'
 import json
 import os
+import shutil
 import stat
 import subprocess
 import sys
@@ -79,7 +80,7 @@ try:
     if stat.S_ISLNK(st.st_mode):
         print("[plugin-check] refusing to execute a symlinked plugin directory: %s" % source_raw, file=sys.stderr)
         sys.exit(1)
-    if st.st_mode & (stat.S_IWGRP | stat.S_IWOTH):
+    if st.st_uid not in (os.getuid(), 0) or st.st_mode & (stat.S_IWGRP | stat.S_IWOTH):
         print("[plugin-check] refusing to execute a group/world-writable plugin directory: %s" % source_raw, file=sys.stderr)
         sys.exit(1)
 except OSError as exc:
@@ -89,7 +90,7 @@ except OSError as exc:
 source = os.path.realpath(source_raw)
 
 mcp_path = os.path.join(source, ".mcp.json")
-if not os.path.isfile(mcp_path):
+if not os.path.isfile(mcp_path) or os.path.islink(mcp_path) or os.stat(mcp_path).st_uid not in (os.getuid(), 0) or os.stat(mcp_path).st_mode & 0o022:
     print("[plugin-check] .mcp.json is missing in the installed plugin; run scripts/setup.sh", file=sys.stderr)
     sys.exit(1)
 try:
@@ -126,17 +127,48 @@ command = server["command"]
 # plugin tree -- for relative and absolute commands alike. A relative command
 # resolves against the plugin (not the temp cwd), then both branches are
 # realpath-resolved and containment-checked.
+via_node = command == "node"
+if via_node:
+    if not args or not isinstance(args[0], str) or os.path.basename(args[0]) != "hackathonkit-mcp-launcher.js":
+        sys.exit("[plugin-check] expected the Hackathon Agent Kit Node launcher as first argument")
+    command, args = args[0], args[1:]
 candidate = os.path.join(source, command)
 real_command = os.path.realpath(candidate)
-if not (real_command == source or real_command.startswith(source + os.sep)):
+if not os.path.isfile(real_command) or (not via_node and not os.access(real_command, os.X_OK)):
+    sys.exit("[plugin-check] launcher is not a regular executable")
+if not real_command.startswith(source + os.sep):
     print("[plugin-check] refusing to execute a command outside the plugin tree: %s (resolved to %s)" % (command, real_command), file=sys.stderr)
     sys.exit(1)
+component = real_command
+while component != source:
+    info = os.stat(component)
+    if info.st_uid not in (os.getuid(), 0) or info.st_mode & 0o022:
+        sys.exit("[plugin-check] unsafe writable launcher or ancestor")
+    component = os.path.dirname(component)
 command = real_command
 cmd = [command] + [str(arg) for arg in args]
+if via_node:
+    node = shutil.which("node")
+    if not node:
+        sys.exit("[plugin-check] Node runtime not installed")
+    cmd.insert(0, node)
+# Apply the kit's runtime settings to this child only. A manifest must never
+# inject shell startup files, loader hooks or a new executable search path.
+settings = server.get("env", {})
+supported = {
+    "OPENAI_API_KEY", "OPENAI_BASE_URL", "OPENAI_TIMEOUT_SEC", "OPENAI_MODEL",
+    "NVIDIA_API_KEY", "NVIDIA_BASE_URL", "POSTGRES_DSN", "MINIO_ENDPOINT",
+    "MINIO_ACCESS_KEY", "MINIO_SECRET_KEY", "MINIO_BUCKET", "MINIO_USE_SSL",
+    "TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID", "TELEGRAM_ALLOWED_CHAT_IDS",
+    "TELEGRAM_API_BASE", "TELEGRAM_TIMEOUT_SEC", "HACKATHONKIT_BACKEND_TIMEOUT_SEC",
+}
+if not isinstance(settings, dict) or any(k not in supported or not isinstance(v, str) for k, v in settings.items()):
+    sys.exit("[plugin-check] unsupported manifest env setting or value")
+child_env = dict(os.environ, **settings)
 with tempfile.TemporaryDirectory(prefix="hackathonkit-plugin-check-") as tmp:
     try:
         proc = subprocess.run(cmd, input=requests, text=True, errors="replace",
-                              capture_output=True, cwd=tmp, timeout=120)
+                              capture_output=True, cwd=tmp, timeout=120, env=child_env)
     except subprocess.TimeoutExpired:
         print("[plugin-check] FAIL: MCP command timed out after 120s", file=sys.stderr)
         sys.exit(1)
@@ -184,7 +216,7 @@ for want in (1, 2, 3):
     obj = responses[want]
     # 'result' may legitimately be falsy (an empty object or false), so the
     # key must exist rather than be truthy.
-    if "result" not in obj:
+    if not isinstance(obj.get("result"), dict) or (want == 2 and not isinstance(obj["result"].get("tools"), list)):
         fail("[plugin-check] FAIL: response for id=%s has no result" % want)
     result = obj["result"]
     if isinstance(result, dict) and result.get("isError"):

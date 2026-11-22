@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/csv"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -13,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 
 	"hackathonkit.local/agentkit/internal/config"
 	"hackathonkit.local/agentkit/internal/learning"
@@ -31,147 +33,7 @@ import (
 	"hackathonkit.local/agentkit/internal/tools"
 )
 
-const version = "0.16.99"
-
-// redactBackendError strips credentials from driver/connection errors before
-// they are logged (DSNs can appear in Postgres and MinIO errors).
-func redactBackendError(err error) string {
-	if err == nil {
-		return ""
-	}
-	text := redactURLUserinfo(err.Error())
-	// Longest keys first so "secret key" is not consumed by "secret".
-	for _, key := range []string{
-		"secret_key", "secret key", "access_key", "access key",
-		"api_key", "api key", "apikey",
-		"password", "passwd", "secret", "token", "credential", "bearer",
-	} {
-		// Cover key=value, key: value and key value renderings.
-		text = redactMarkerValues(text, key+"=")
-		text = redactMarkerValues(text, key+":")
-		text = redactMarkerValues(text, key+" ")
-	}
-	return text
-}
-
-// redactURLUserinfo replaces the userinfo of any URL (scheme://user:pass@host)
-// with [redacted], leaving the rest of the authority intact. Errors that echo a
-// connection string verbatim (Postgres DSNs, MinIO endpoints) are the main way
-// embedded credentials leak into logs.
-func redactURLUserinfo(text string) string {
-	var b strings.Builder
-	i := 0
-	for {
-		idx := strings.Index(text[i:], "://")
-		if idx < 0 {
-			b.WriteString(text[i:])
-			break
-		}
-		idx += i
-		b.WriteString(text[i : idx+3])
-		rest := text[idx+3:]
-		end := len(rest)
-		for j := 0; j < len(rest); j++ {
-			switch rest[j] {
-			case '/', '?', '#', ' ', '\t', '\n', '\r', '"', '\'':
-				end = j
-			}
-			if end == j {
-				break
-			}
-		}
-		authority := rest[:end]
-		if at := strings.LastIndex(authority, "@"); at > 0 {
-			b.WriteString("[redacted]")
-			b.WriteString(authority[at:])
-		} else {
-			b.WriteString(authority)
-		}
-		i = idx + 3 + end
-	}
-	return b.String()
-}
-
-// redactMarkerValues replaces the value that follows every occurrence of
-// marker, handling quoted values (e.g. password="a b") so the whole secret is
-// removed rather than only up to the first space.
-func redactMarkerValues(text, marker string) string {
-	const replacement = "[redacted]"
-	searchFrom := 0
-	for {
-		idx := indexFold(text[searchFrom:], marker)
-		if idx < 0 {
-			break
-		}
-		idx += searchFrom
-		valueStart := idx + len(marker)
-		// The separator marker consumes one delimiter; skip any remaining
-		// whitespace so "key:  value" (double space) is redacted too.
-		for valueStart < len(text) && (text[valueStart] == ' ' || text[valueStart] == '\t') {
-			valueStart++
-		}
-		quote := byte(0)
-		if valueStart < len(text) && (text[valueStart] == '"' || text[valueStart] == '\'') {
-			quote = text[valueStart]
-			valueStart++
-		}
-		end := valueStart
-		if quote != 0 {
-			for end < len(text) && text[end] != quote {
-				end++
-			}
-		} else {
-			for end < len(text) && !isValueDelimiter(text[end]) {
-				end++
-			}
-		}
-		if end == valueStart {
-			// Empty value: nothing to redact; advance to avoid a loop.
-			searchFrom = idx + len(marker)
-			continue
-		}
-		text = text[:valueStart] + replacement + text[end:]
-		searchFrom = valueStart + len(replacement)
-	}
-	return text
-}
-
-func isValueDelimiter(c byte) bool {
-	switch c {
-	case ' ', '\t', '\n', '\r', '&', '"', '\'':
-		return true
-	}
-	return false
-}
-
-// indexFold is a byte-length-preserving case-insensitive substring search, so
-// offsets computed on the haystack remain valid for the original string.
-func indexFold(haystack, needle string) int {
-	if needle == "" {
-		return 0
-	}
-	limit := len(haystack) - len(needle)
-	for i := 0; i <= limit; i++ {
-		match := true
-		for j := 0; j < len(needle); j++ {
-			if lowerASCII(haystack[i+j]) != lowerASCII(needle[j]) {
-				match = false
-				break
-			}
-		}
-		if match {
-			return i
-		}
-	}
-	return -1
-}
-
-func lowerASCII(b byte) byte {
-	if b >= 'A' && b <= 'Z' {
-		return b + ('a' - 'A')
-	}
-	return b
-}
+const version = "0.17.0"
 
 func main() {
 	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
@@ -298,7 +160,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	if !*listTools && !*selftest {
 		if dsn := os.Getenv("POSTGRES_DSN"); dsn != "" {
 			if pg, err := metadata.OpenPostgres(context.Background(), dsn); err != nil {
-				observability.Log(logger, "warn", "metadata_disabled", map[string]any{"error": redactBackendError(err)})
+				observability.Log(logger, "warn", "metadata_disabled", map[string]any{"error": tools.RedactBackendError(err)})
 			} else {
 				meta = pg
 				observability.Log(logger, "info", "metadata_postgres_enabled", nil)
@@ -308,8 +170,11 @@ func run(args []string, stdout, stderr io.Writer) int {
 	var objects storage.ObjectStore
 	if !*listTools && !*selftest {
 		if settings := objectstore.SettingsFromEnv(); settings.Endpoint != "" {
-			if cli, err := objectstore.Open(context.Background(), settings); err != nil {
-				observability.Log(logger, "warn", "objectstore_disabled", map[string]any{"error": redactBackendError(err)})
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			cli, err := objectstore.Open(ctx, settings)
+			cancel()
+			if err != nil {
+				observability.Log(logger, "warn", "objectstore_disabled", map[string]any{"error": tools.RedactBackendError(err)})
 			} else {
 				objects = cli
 				observability.Log(logger, "info", "objectstore_minio_enabled", map[string]any{"bucket": settings.Bucket})
@@ -317,7 +182,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		}
 	}
 	store.Attach(meta, objects, func(err error) {
-		observability.Log(logger, "warn", "storage_backend_error", map[string]any{"error": redactBackendError(err)})
+		observability.Log(logger, "warn", "storage_backend_error", map[string]any{"error": tools.RedactBackendError(err)})
 	})
 	defer meta.Close()
 
@@ -373,7 +238,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 			observability.Log(logger, "info", "server_stop", map[string]any{"reason": "signal"})
 			return 0
 		}
-		observability.Log(logger, "error", "server_stop", map[string]any{"error": redactBackendError(err)})
+		observability.Log(logger, "error", "server_stop", map[string]any{"error": tools.RedactBackendError(err)})
 		return 1
 	}
 	return 0
@@ -426,46 +291,54 @@ func printSessionContext(root string, mgr *config.Manager, out, diag io.Writer) 
 // applyResourcesSet records k=v answers from the --resources-set flag. Only
 // provider booleans, track and note are accepted; secrets stay in .env.
 func applyResourcesSet(root, spec string) error {
-	profile, _, err := resources.Load(root)
-	if err != nil {
-		return err
-	}
 	changed := false
-	for _, pair := range strings.Split(spec, ",") {
-		pair = strings.TrimSpace(pair)
-		if pair == "" {
-			continue
-		}
-		key, value, ok := strings.Cut(pair, "=")
-		if !ok {
-			return fmt.Errorf("expected key=value, got %q", pair)
-		}
-		key = strings.ToLower(strings.TrimSpace(key))
-		value = strings.TrimSpace(value)
-		switch key {
-		case "track":
-			track, ok := resources.LookupTrack(value)
+	reader := csv.NewReader(strings.NewReader(spec))
+	reader.TrimLeadingSpace = true
+	reader.LazyQuotes = true
+	pairs, err := reader.Read()
+	if err != nil {
+		return fmt.Errorf("cannot parse resource answers: %w", err)
+	}
+	if _, err := reader.Read(); err != io.EOF {
+		return fmt.Errorf("expected one CSV record of resource answers")
+	}
+	return resources.Update(root, func(profile *resources.Profile) error {
+		for _, pair := range pairs {
+			pair = strings.TrimSpace(pair)
+			if pair == "" {
+				continue
+			}
+			key, value, ok := strings.Cut(pair, "=")
 			if !ok {
-				return fmt.Errorf("unknown track %q", value)
+				return fmt.Errorf("expected key=value, got %q", pair)
 			}
-			profile.Track = track.ID
-		case "note":
-			profile.Note = value
-		default:
-			parsed, err := strconv.ParseBool(value)
-			if err != nil {
-				return fmt.Errorf("provider %q expects true or false, got %q", key, value)
+			key = strings.ToLower(strings.TrimSpace(key))
+			value = strings.TrimSpace(value)
+			switch key {
+			case "track":
+				track, ok := resources.LookupTrack(value)
+				if !ok {
+					return fmt.Errorf("unknown track %q", value)
+				}
+				profile.Track = track.ID
+			case "note":
+				profile.Note = value
+			default:
+				parsed, err := strconv.ParseBool(value)
+				if err != nil {
+					return fmt.Errorf("provider %q expects true or false, got %q", key, value)
+				}
+				if err := resources.SetAnswer(profile, key, parsed); err != nil {
+					return err
+				}
 			}
-			if err := resources.SetAnswer(&profile, key, parsed); err != nil {
-				return err
-			}
+			changed = true
 		}
-		changed = true
-	}
-	if !changed {
-		return errors.New("no answers provided")
-	}
-	return resources.Save(root, profile)
+		if !changed {
+			return errors.New("no answers provided")
+		}
+		return nil
+	})
 }
 
 func printResources(root string, out io.Writer) error {

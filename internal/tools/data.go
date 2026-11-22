@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/csv"
 	"fmt"
+	"io"
 	"math"
 	"os"
 	"path/filepath"
@@ -18,27 +19,40 @@ type table struct {
 	Rows    [][]string
 }
 
-func readAnyTable(path string, sheet string) (*table, []string, error) {
+// contextReader checks cancellation between buffered reads during parsing.
+type contextReader struct {
+	ctx    context.Context
+	reader io.Reader
+}
+
+func (r contextReader) Read(p []byte) (int, error) {
+	if err := r.ctx.Err(); err != nil {
+		return 0, err
+	}
+	return r.reader.Read(p)
+}
+
+func readAnyTable(ctx context.Context, path string, sheet string) (*table, []string, error) {
 	ext := strings.ToLower(strings.TrimPrefix(filepath.Ext(path), "."))
 	switch ext {
 	case "xlsx":
-		return readXLSXTable(path, sheet)
+		return readXLSXTable(ctx, path, sheet)
 	case "xls":
 		return nil, nil, fmt.Errorf("legacy .xls (BIFF) tables are not supported; convert the file to .xlsx or .csv first")
 	case "tsv":
-		return readCSVTable(path, "\t")
+		return readCSVTable(ctx, path, "\t")
 	default:
-		return readCSVTable(path, "")
+		return readCSVTable(ctx, path, "")
 	}
 }
 
-func readCSVTable(path string, delimiter string) (*table, []string, error) {
+func readCSVTable(ctx context.Context, path string, delimiter string) (*table, []string, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, nil, err
 	}
 	defer f.Close()
-	r := csv.NewReader(f)
+	r := csv.NewReader(contextReader{ctx, f})
 	r.FieldsPerRecord = -1
 	r.LazyQuotes = true
 	if delimiter != "" {
@@ -62,6 +76,9 @@ func readCSVTable(path string, delimiter string) (*table, []string, error) {
 	warnings := []string{}
 	ragged := 0
 	for i, row := range rows {
+		if i%1024 == 0 && ctx.Err() != nil {
+			return nil, nil, ctx.Err()
+		}
 		if len(row) == len(headers) {
 			continue
 		}
@@ -75,7 +92,7 @@ func readCSVTable(path string, delimiter string) (*table, []string, error) {
 		}
 	}
 	if ragged > 0 {
-		warnings = append(warnings, fmt.Sprintf("%d row(s) do not match the header column count; short rows are padded with empty values", ragged))
+		warnings = append(warnings, fmt.Sprintf("%d row(s) do not match the header column count; short rows are padded with empty values and cells beyond the last header are ignored by column operations", ragged))
 	}
 	return &table{Headers: headers, Rows: rows}, warnings, nil
 }
@@ -121,23 +138,20 @@ type columnProfile struct {
 	Samples  []string `json:"samples,omitempty"`
 }
 
-func profileColumns(t *table, selected []string) []columnProfile {
-	profiles, _ := profileColumnsIndexed(t, selected)
-	return profiles
-}
-
 // profileColumnsIndexed profiles the selected columns and also returns the
 // resolved header index for each profile, so callers do not have to re-resolve
 // (and possibly re-resolve to a different column).
-func profileColumnsIndexed(t *table, selected []string) ([]columnProfile, []int) {
+func profileColumnsIndexed(ctx context.Context, t *table, selected []string) ([]columnProfile, []int, error) {
 	indices := []int{}
 	if len(selected) == 0 {
 		for i := range t.Headers {
 			indices = append(indices, i)
 		}
 	} else {
+		seen := make(map[int]bool)
 		for _, name := range selected {
-			if idx := t.columnIndex(name); idx >= 0 {
+			if idx := t.columnIndex(name); idx >= 0 && !seen[idx] {
+				seen[idx] = true
 				indices = append(indices, idx)
 			}
 		}
@@ -147,7 +161,10 @@ func profileColumnsIndexed(t *table, selected []string) ([]columnProfile, []int)
 		p := columnProfile{Name: strings.TrimSpace(t.Headers[idx])}
 		var numbers []float64
 		timeHits := 0
-		for _, row := range t.Rows {
+		for i, row := range t.Rows {
+			if i%1024 == 0 && ctx.Err() != nil {
+				return nil, nil, ctx.Err()
+			}
 			value := ""
 			if idx < len(row) {
 				value = strings.TrimSpace(row[idx])
@@ -188,7 +205,7 @@ func profileColumnsIndexed(t *table, selected []string) ([]columnProfile, []int)
 		}
 		out = append(out, p)
 	}
-	return out, indices
+	return out, indices, nil
 }
 
 const (
@@ -217,7 +234,7 @@ func (d Deps) loadTable(ctx context.Context, args map[string]any) (*table, []str
 		env := mcp.Fail(trace(ctx), fmt.Sprintf("table %s is %d bytes; exceeds the %d-byte limit", path, info.Size(), maxTableBytes))
 		return nil, nil, &env
 	}
-	t, warnings, err := readAnyTable(full, argString(args, "sheet"))
+	t, warnings, err := readAnyTable(ctx, full, argString(args, "sheet"))
 	if err != nil {
 		env := mcp.Fail(trace(ctx), err.Error())
 		return nil, nil, &env
@@ -271,7 +288,10 @@ func registerData(reg *mcp.Registry, d Deps) {
 				return *fail, nil
 			}
 			requested := argStringSlice(args, "columns")
-			profiles := profileColumns(t, requested)
+			profiles, _, err := profileColumnsIndexed(ctx, t, requested)
+			if err != nil {
+				return mcp.Fail(trace(ctx), err.Error()), nil
+			}
 			for _, name := range requested {
 				if t.columnIndex(name) < 0 {
 					warnings = append(warnings, "unknown column requested: "+name)
@@ -311,7 +331,7 @@ func registerData(reg *mcp.Registry, d Deps) {
 			}
 			rows := t.Rows
 			if where := argString(args, "where"); where != "" {
-				filtered, skipped, ferr := applyWhere(t, where)
+				filtered, skipped, ferr := applyWhere(ctx, t, where)
 				if ferr != nil {
 					return mcp.Fail(trace(ctx), ferr.Error()), nil
 				}
@@ -384,7 +404,10 @@ func registerData(reg *mcp.Registry, d Deps) {
 				return *fail, nil
 			}
 			requested := argStringSlice(args, "columns")
-			profiles, indices := profileColumnsIndexed(t, requested)
+			profiles, indices, err := profileColumnsIndexed(ctx, t, requested)
+			if err != nil {
+				return mcp.Fail(trace(ctx), err.Error()), nil
+			}
 			for _, name := range requested {
 				if t.columnIndex(name) < 0 {
 					warnings = append(warnings, "unknown column requested: "+name)
@@ -415,6 +438,9 @@ func registerData(reg *mcp.Registry, d Deps) {
 				idx := indices[i]
 				values := make([]float64, len(t.Rows))
 				for ri, row := range t.Rows {
+					if ri%1024 == 0 && ctx.Err() != nil {
+						return mcp.Fail(trace(ctx), ctx.Err().Error()), nil
+					}
 					if idx < len(row) {
 						if v, ok := parseNumber(row[idx]); ok {
 							values[ri] = v
@@ -452,6 +478,9 @@ func registerData(reg *mcp.Registry, d Deps) {
 				for j := i + 1; j < len(cols); j++ {
 					xs, ys = xs[:0], ys[:0]
 					for k := range cols[i].values {
+						if k%4096 == 0 && ctx.Err() != nil {
+							return mcp.Fail(trace(ctx), ctx.Err().Error()), nil
+						}
 						a, b := cols[i].values[k], cols[j].values[k]
 						if !math.IsNaN(a) && !math.IsNaN(b) {
 							xs = append(xs, a)
@@ -492,25 +521,38 @@ func registerData(reg *mcp.Registry, d Deps) {
 	))
 }
 
-func applyWhere(t *table, where string) ([][]string, int, error) {
-	fields := strings.Fields(where)
-	if len(fields) < 3 {
-		return nil, 0, fmt.Errorf("where must be \"column op value\", got %q", where)
+func applyWhere(ctx context.Context, t *table, where string) ([][]string, int, error) {
+	idx, op, value := -1, "", ""
+	// A standalone operator separates the header from the literal value.
+	// Prefer an exact header if a shorter prefix also names a column.
+	offset := 0
+	for word := range strings.FieldsSeq(where) {
+		start := offset + strings.Index(where[offset:], word)
+		offset = start + len(word)
+		switch word {
+		case "=", "==", "!=", ">", ">=", "<", "<=", "contains":
+		default:
+			continue
+		}
+		column := strings.TrimSpace(where[:start])
+		literal := strings.TrimSpace(where[offset:])
+		if column == "" || literal == "" {
+			continue
+		}
+		i := t.columnIndex(column)
+		if i >= 0 && (idx < 0 || strings.EqualFold(strings.TrimSpace(t.Headers[i]), column)) {
+			idx, op, value = i, word, literal
+		}
 	}
-	column, op := fields[0], fields[1]
-	value := strings.Join(fields[2:], " ")
-	idx := t.columnIndex(column)
 	if idx < 0 {
-		return nil, 0, fmt.Errorf("unknown column in where: %s", column)
-	}
-	switch op {
-	case "=", "==", "!=", ">", ">=", "<", "<=", "contains":
-	default:
-		return nil, 0, fmt.Errorf("unsupported operator %q", op)
+		return nil, 0, fmt.Errorf("where must specify a known column, operator and value: %q", where)
 	}
 	skippedNonNumeric := 0
 	out := [][]string{}
-	for _, row := range t.Rows {
+	for i, row := range t.Rows {
+		if i%1024 == 0 && ctx.Err() != nil {
+			return nil, 0, ctx.Err()
+		}
 		cell := ""
 		if idx < len(row) {
 			cell = row[idx]

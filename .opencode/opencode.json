@@ -7,14 +7,9 @@
     "hackathonkit": {
       "type": "local",
       "command": [
-        "docker",
-        "compose",
-        "-f",
-        "docker-compose.yml",
-        "run",
-        "--rm",
-        "-T",
-        "hackathonkit-mcp"
+        "node",
+        "-e",
+        "const cp = require('node:child_process'); const path = require('node:path'); delete process.env.GIT_DIR; delete process.env.GIT_WORK_TREE; const root = cp.execFileSync('git', ['rev-parse', '--show-toplevel'], {encoding:'utf8'}).trimEnd(); const fs = require('node:fs'); if (!/^module\\s+hackathonkit\\.local\\/agentkit\\s*$/m.test(fs.readFileSync(path.join(root,'go.mod'),'utf8'))) throw Error('Expected a Hackathon Agent Kit checkout'); require(path.join(root,'plugins/hackathonkit/scripts/hackathonkit-mcp-launcher.js'));"
       ],
       "enabled": true
     }

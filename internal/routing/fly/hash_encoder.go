@@ -32,12 +32,7 @@ func (h *HashEncoder) Embed(ctx context.Context, texts []string) ([][]float64, e
 			return nil, err
 		}
 		vector := make([]float64, h.Dims)
-		for i, token := range tokenizeFly(text) {
-			if i%1024 == 0 {
-				if err := ctx.Err(); err != nil {
-					return nil, err
-				}
-			}
+		err := walkFlyTokens(ctx, text, func(token string) {
 			hasher.Reset()
 			_, _ = hasher.Write([]byte(token))
 			value := hasher.Sum64()
@@ -47,6 +42,9 @@ func (h *HashEncoder) Embed(ctx context.Context, texts []string) ([][]float64, e
 				sign = -1
 			}
 			vector[index] += sign
+		})
+		if err != nil {
+			return nil, err
 		}
 		norm := 0.0
 		for _, v := range vector {
@@ -65,15 +63,26 @@ func (h *HashEncoder) Embed(ctx context.Context, texts []string) ([][]float64, e
 
 func tokenizeFly(text string) []string {
 	var out []string
+	_ = walkFlyTokens(context.Background(), text, func(t string) { out = append(out, t) })
+	return out
+}
+func walkFlyTokens(ctx context.Context, text string, emit func(string)) error {
 	var current strings.Builder
 	flush := func() {
 		s := current.String()
 		if utf8.RuneCountInString(s) >= 2 {
-			out = append(out, strings.ToLower(s))
+			emit(strings.ToLower(s))
 		}
 		current.Reset()
 	}
+	n := 0
 	for _, r := range text {
+		if n%1024 == 0 {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+		}
+		n++
 		if unicode.IsLetter(r) || unicode.IsDigit(r) {
 			current.WriteRune(r)
 			continue
@@ -81,7 +90,7 @@ func tokenizeFly(text string) []string {
 		flush()
 	}
 	flush()
-	return out
+	return ctx.Err()
 }
 
 type ChainEmbedder struct {
@@ -110,7 +119,7 @@ func (c *ChainEmbedder) Embed(ctx context.Context, texts []string) ([][]float64,
 		vectors, err := c.Fallback.Embed(ctx, texts)
 		if err != nil {
 			if primaryErr != nil {
-				return nil, fmt.Errorf("primary embedder failed: %w; fallback failed: %v", primaryErr, err)
+				return nil, fmt.Errorf("primary embedder failed: %w; fallback failed: %w", primaryErr, err)
 			}
 			return nil, err
 		}
@@ -119,7 +128,7 @@ func (c *ChainEmbedder) Embed(ctx context.Context, texts []string) ([][]float64,
 			// not be returned as success.
 			err := fmt.Errorf("fallback returned %d vectors for %d texts", len(vectors), len(texts))
 			if primaryErr != nil {
-				return nil, fmt.Errorf("primary embedder failed: %w; %v", primaryErr, err)
+				return nil, fmt.Errorf("primary embedder failed: %w; %w", primaryErr, err)
 			}
 			return nil, err
 		}

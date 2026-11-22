@@ -69,7 +69,9 @@ func run(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "fly-train: --model knn ignores --dataset (feedback memory rebuild)")
 	}
 	if *model == "knn" {
-		// --model knn ignores --dataset: rebuild feedback memory regardless.
+		if *evalPath != "" {
+			fmt.Fprintln(stderr, "fly-train: --model knn ignores --eval (feedback memory rebuild)")
+		}
 		if err := rebuildFromFeedback(root, cfg, embedder, stdout); err != nil {
 			fmt.Fprintln(stderr, "fly-train:", err)
 			return 1
@@ -175,7 +177,6 @@ func rebuildFromFeedback(root string, cfg config.File, embedder fly.Embedder, st
 	// hashTask(ev.Task) over the RAW task string (no lowercasing/trimming), so
 	// the pre-dedup key must be the raw task too. Lowercasing here would drop
 	// case/whitespace variants the router would keep.
-	seen := map[string]bool{}
 	// Must match the live router (cmd/hackathonkit-mcp, cmd/fly-bench): same chain
 	// embedder and the same "+hash512" model tag, otherwise the rebuilt vectors
 	// are treated as stale and contribute no knn signal.
@@ -188,7 +189,7 @@ func rebuildFromFeedback(root string, cfg config.File, embedder fly.Embedder, st
 		WithMemory(filepath.Join(root, "data", "index", "fly-memory.json"))
 	scanner := bufio.NewScanner(f)
 	scanner.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
-	count := 0
+	seen := map[string]bool{}
 	for scanner.Scan() {
 		var line struct {
 			Task   string   `json:"task"`
@@ -198,22 +199,18 @@ func rebuildFromFeedback(root string, cfg config.File, embedder fly.Embedder, st
 		if json.Unmarshal(scanner.Bytes(), &line) != nil || line.Task == "" || len(line.Chosen) == 0 {
 			continue
 		}
-		if seen[line.Task] {
-			continue
-		}
-		seen[line.Task] = true
 		if _, _, err := router.AddFeedback(context.Background(), fly.FeedbackEvent{
 			Task: line.Task, Chosen: line.Chosen, Source: line.Source,
 		}); err != nil {
 			return err
 		}
-		count++
+		seen[line.Task] = true
 	}
 	if err := scanner.Err(); err != nil {
 		return fmt.Errorf("reading %s: %w", feedbackPath, err)
 	}
 	fmt.Fprintf(stdout, "fly-train: processed %d feedback tasks, memory=%d, dopamine=%+v\n",
-		count, router.MemorySize(), router.Dopamine())
+		len(seen), router.MemorySize(), router.Dopamine())
 	return nil
 }
 

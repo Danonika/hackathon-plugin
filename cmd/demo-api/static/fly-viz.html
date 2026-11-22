@@ -54,6 +54,7 @@
   <div id="verdict" class="muted">ожидание решения Codex (routing.fly_feedback)…</div>
 </div>
 
+<script src="/fly-static/demo-poll.js"></script>
 <script>
 const state = { hunger: 40, dopamine: 0, lastTrace: null, lastFeedbackTs: null };
 const VFB_URL = 'https://v2.virtualflybrain.org/org.geppetto.frontend/geppetto?id=FBbt_00045048&i=VFB_00101567';
@@ -77,15 +78,17 @@ function applyFeedback(fb, activeKc) {
     state.dopamine = Math.min(100, state.dopamine + 22);
     state.hunger = Math.max(0, state.hunger - 18);
     $('bottom').className = 'panel flash';
-    $('verdict').innerHTML = '<span class="good">🍬 награда · PAM ' + (fb.pam ?? 0) + ' · муха получает сахар</span>';
+    $('verdict').className = 'good';
+    $('verdict').textContent = '🍬 награда · PAM ' + (fb.pam ?? 0) + ' · муха получает сахар';
   } else {
     state.dopamine = Math.max(0, state.dopamine - 10);
     state.hunger = Math.min(100, state.hunger + 25);
     $('bottom').className = 'panel flash-bad';
-    $('verdict').innerHTML = '<span class="bad">⚡ ошибка · PPL1 ' + (fb.ppl1 ?? 0) + ' · боль и голод</span>';
+    $('verdict').className = 'bad';
+    $('verdict').textContent = '⚡ ошибка · PPL1 ' + (fb.ppl1 ?? 0) + ' · боль и голод';
   }
   if (activeKc && activeKc.length) {
-    $('verdict').innerHTML += ' · активных KC: ' + activeKc.length;
+    $('verdict').textContent += ' · активных KC: ' + activeKc.length;
   }
   render();
 }
@@ -100,9 +103,9 @@ function render() {
 async function poll() {
   try {
     const [events, feedback, neurons] = await Promise.all([
-      fetch('/fly-events?limit=5').then(r => r.json()),
-      fetch('/fly-feedback?limit=10').then(r => r.json()),
-      fetch('/fly-neuron-events?limit=20').then(r => r.json())
+      fetchSnapshotJSON('/fly-events?limit=5'),
+      fetchSnapshotJSON('/fly-feedback?limit=10'),
+      fetchSnapshotJSON('/fly-neuron-events?limit=20')
     ]);
     const neuronEvents = neurons.events || [];
     const lastNeuron = neuronEvents[neuronEvents.length - 1];
@@ -130,8 +133,7 @@ async function poll() {
   }
 }
 render();
-poll();
-setInterval(poll, 2500);
+pollSnapshots(poll, 2500);
 </script>
 </body>
 </html>

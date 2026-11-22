@@ -6,17 +6,12 @@ import (
 	"errors"
 	"math"
 	"os"
-	"syscall"
+	"runtime"
+	"strconv"
+	"unsafe"
 
 	"golang.org/x/sys/windows"
 )
-
-// processQueryLimitedInformation is PROCESS_QUERY_LIMITED_INFORMATION, which
-// the standard syscall package does not export.
-const processQueryLimitedInformation = 0x1000
-
-// stillActive is STILL_ACTIVE, returned by GetExitCodeProcess for a live process.
-const stillActive = 259
 
 // validPID rejects values that cannot be represented as a Win32 process id, so
 // a corrupt pid file cannot be folded onto an unrelated live pid.
@@ -30,27 +25,29 @@ func processAlive(pid int) bool {
 	if !validPID(pid) {
 		return false
 	}
-	handle, err := syscall.OpenProcess(processQueryLimitedInformation, false, uint32(pid))
+	handle, err := windows.OpenProcess(windows.SYNCHRONIZE, false, uint32(pid))
 	if err != nil {
-		// Only a nonexistent pid (ERROR_INVALID_PARAMETER) is definitively dead.
-		// Any other failure (ACCESS_DENIED, or a transient/environmental error)
-		// fails closed and reports the process as alive, so a probe error cannot
-		// make a running daemon look stopped and get its pid file dropped.
-		// syscall.OpenProcess returns a syscall.Errno, while
-		// windows.ERROR_INVALID_PARAMETER is a distinct named type, so compare
-		// the numeric value instead of using errors.Is (which never matches).
-		if errno, ok := err.(syscall.Errno); ok && errno == syscall.Errno(windows.ERROR_INVALID_PARAMETER) {
-			return false
-		}
-		return true
+		return !errors.Is(err, windows.ERROR_INVALID_PARAMETER)
 	}
-	defer syscall.CloseHandle(handle)
-	var code uint32
-	if err := syscall.GetExitCodeProcess(handle, &code); err != nil {
-		// Fail closed on a query failure rather than assuming the process died.
-		return true
+	defer windows.CloseHandle(handle)
+	state, err := windows.WaitForSingleObject(handle, 0)
+	return err != nil || state != windows.WAIT_OBJECT_0
+}
+
+func processBirth(pid int) string {
+	if !validPID(pid) {
+		return ""
 	}
-	return code == stillActive
+	h, err := windows.OpenProcess(windows.PROCESS_QUERY_LIMITED_INFORMATION, false, uint32(pid))
+	if err != nil {
+		return ""
+	}
+	defer windows.CloseHandle(h)
+	var birth, exit, kernel, user windows.Filetime
+	if windows.GetProcessTimes(h, &birth, &exit, &kernel, &user) != nil {
+		return ""
+	}
+	return strconv.FormatUint(uint64(birth.HighDateTime)<<32|uint64(birth.LowDateTime), 10)
 }
 
 // terminateProcess stops the process. Windows has no SIGTERM, so this is a
@@ -90,4 +87,30 @@ func processMatchesPath(pid int, recorded string) bool {
 		}
 		return false
 	}
+}
+
+// Old PID files lack process creation times. Check the command's actual argv
+// before accepting a matching executable shared by several CLI subcommands.
+func processLooksLikeDaemon(pid int, recorded string) bool {
+	if !validPID(pid) {
+		return false
+	}
+	h, err := windows.OpenProcess(windows.PROCESS_QUERY_LIMITED_INFORMATION, false, uint32(pid))
+	if err != nil {
+		return false
+	}
+	defer windows.CloseHandle(h)
+	var size uint32
+	_ = windows.NtQueryInformationProcess(h, windows.ProcessCommandLineInformation, nil, 0, &size)
+	if size < uint32(unsafe.Sizeof(windows.NTUnicodeString{})) || size > 1<<17 {
+		return false
+	}
+	buffer := make([]byte, size)
+	ptr := unsafe.Pointer(&buffer[0])
+	if err := windows.NtQueryInformationProcess(h, windows.ProcessCommandLineInformation, ptr, size, &size); err != nil {
+		return false
+	}
+	args, err := windows.DecomposeCommandLine((*windows.NTUnicodeString)(ptr).String())
+	runtime.KeepAlive(buffer)
+	return err == nil && legacyDaemonArgs(args, recorded)
 }

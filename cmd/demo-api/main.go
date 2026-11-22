@@ -20,7 +20,6 @@ import (
 	"strings"
 	"sync"
 	"syscall"
-	"text/template"
 	"time"
 
 	"hackathonkit.local/agentkit/internal/atomicfile"
@@ -29,6 +28,7 @@ import (
 	"hackathonkit.local/agentkit/internal/metadata"
 	"hackathonkit.local/agentkit/internal/observability"
 	"hackathonkit.local/agentkit/internal/plans"
+	"hackathonkit.local/agentkit/internal/tools"
 )
 
 //go:embed static/*.html static/*.js
@@ -43,7 +43,7 @@ func main() {
 	var meta metadata.Recorder = metadata.Disabled{}
 	if dsn := os.Getenv("POSTGRES_DSN"); dsn != "" {
 		if pg, err := metadata.OpenPostgres(context.Background(), dsn); err != nil {
-			observability.Log(logger, "warn", "metadata_disabled", map[string]any{"error": err.Error()})
+			observability.Log(logger, "warn", "metadata_disabled", map[string]any{"error": tools.RedactBackendError(err)})
 		} else {
 			meta = pg
 		}
@@ -61,9 +61,11 @@ func main() {
 	token := os.Getenv("HACKATHONKIT_DEMO_TOKEN")
 
 	addr := net.JoinHostPort(host, port)
+	handler := newHandler(root, mgr, meta, token, logger)
+	defer handler.close()
 	server := &http.Server{
 		Addr:              addr,
-		Handler:           newHandler(root, mgr, meta, token, logger),
+		Handler:           handler,
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       30 * time.Second,
 		WriteTimeout:      60 * time.Second,
@@ -92,11 +94,17 @@ func main() {
 	}
 }
 
-func newHandler(root string, mgr *config.Manager, meta metadata.Recorder, token string, logger *log.Logger) http.Handler {
+type demoHandler struct {
+	http.Handler
+	close func()
+}
+
+func newHandler(root string, mgr *config.Manager, meta metadata.Recorder, token string, logger *log.Logger) *demoHandler {
 	// Serializes the read-compare-write of a plan decision.
 	var decisionMu sync.Mutex
 	mux := http.NewServeMux()
-	mux.Handle("/fly-live", newFlyLiveHandler(root, logger))
+	feed := newFlyLiveHandler(root, logger)
+	mux.Handle("/fly-live", feed)
 	mux.HandleFunc("/fly-static/", func(w http.ResponseWriter, r *http.Request) {
 		name := strings.TrimPrefix(r.URL.Path, "/fly-static/")
 		if strings.Contains(name, "/") || !strings.HasSuffix(name, ".js") {
@@ -227,9 +235,7 @@ func newHandler(root string, mgr *config.Manager, meta metadata.Recorder, token 
 			return
 		}
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		// The token is substituted into the page; JS-escape it so a value with
-		// quotes or markup cannot break out of the surrounding script.
-		_, _ = w.Write([]byte(strings.ReplaceAll(string(page), "__HACKATHONKIT_DEMO_TOKEN__", template.JSEscapeString(token))))
+		_, _ = w.Write(page)
 	})
 	mux.HandleFunc("/control", func(w http.ResponseWriter, r *http.Request) {
 		page, err := staticFS.ReadFile("static/control.html")
@@ -352,7 +358,7 @@ func newHandler(root string, mgr *config.Manager, meta metadata.Recorder, token 
 		// omits it (zero) or sends a negative value must not bypass the guard,
 		// otherwise a stale client could overwrite a decision taken against a
 		// newer revision.
-		if body.Revision != plan.Revision {
+		if body.Revision < 1 || body.Revision != plan.Revision {
 			writeJSON(w, http.StatusConflict, map[string]any{"error": "plan revision changed; reload before deciding", "revision": plan.Revision})
 			return
 		}
@@ -440,7 +446,7 @@ func newHandler(root string, mgr *config.Manager, meta metadata.Recorder, token 
 		fmt.Fprintf(w, "hackathonkit_routing_mode{mode=%q} 1\n", mgr.Routing().Mode)
 	})
 
-	return withCORS(mux)
+	return &demoHandler{Handler: withCORS(mux), close: feed.close}
 }
 
 type planApproval struct {

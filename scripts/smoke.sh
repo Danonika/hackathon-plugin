@@ -30,19 +30,10 @@ trap 'cleanup_smoke; exit 143' TERM
 # Bound the MCP invocation so a hanging server fails the smoke test instead of
 # stalling CI forever. Both bounds are configurable; a compose run may need to
 # pull an image and start containers, so it gets a larger default. When
-# `timeout` is absent (e.g. macOS) the warning makes the unbounded run visible.
+# GNU timeout is absent, the helper uses gtimeout or Python 3.
 SMOKE_TIMEOUT="${HACKATHONKIT_SMOKE_TIMEOUT:-60}"
 SMOKE_COMPOSE_TIMEOUT="${HACKATHONKIT_SMOKE_COMPOSE_TIMEOUT:-180}"
-run_with_timeout() {
-  _limit="$1"
-  shift
-  if command -v timeout >/dev/null 2>&1; then
-    timeout "$_limit" "$@"
-  else
-    echo "[smoke] warning: timeout(1) unavailable; running the MCP server without a time bound" >&2
-    "$@"
-  fi
-}
+. "$ROOT/scripts/bounded.sh"
 
 run_binary() {
   printf '%s\n' "$REQUESTS" | run_with_timeout "$SMOKE_TIMEOUT" "$ROOT/bin/hackathonkit-mcp" --repo-root "$ROOT" 2>"$ERR_FILE"
@@ -92,7 +83,7 @@ case "$TRANSPORT" in
         # binary stale.
         NEWEST=$(find "$ROOT" \
             \( -path "$ROOT/.git" -o -path "$ROOT/node_modules" -o -path "$ROOT/data" -o -path "$ROOT/evals" -o -path "$ROOT/plugins" -o -path "$ROOT/bin" -o -path "$ROOT/logs" -o -path "$ROOT/models" \) -prune -o \
-            \( -name '*.go' -o -name 'go.mod' -o -name 'go.sum' -o -name 'Makefile' -o -name '*.html' -o -name '*.js' -o -name '*.css' -o -name '*.sql' -o -name '*.tmpl' -o -name '*.tpl' \) -newer "$ROOT/bin/hackathonkit-mcp" -print 2>/dev/null | LC_ALL=C sort | head -n 1)
+            \( -path "$ROOT/cmd/*" -o -path "$ROOT/internal/*" -o -name '*.go' -o -name '*.s' -o -name '*.c' -o -name '*.h' -o -name '*.syso' -o -name 'go.work' -o -name 'go.work.sum' -o -name 'go.mod' -o -name 'go.sum' -o -name 'Makefile' -o -name '*.html' -o -name '*.js' -o -name '*.css' -o -name '*.sql' -o -name '*.tmpl' -o -name '*.tpl' \) -type f -newer "$ROOT/bin/hackathonkit-mcp" -print 2>/dev/null | LC_ALL=C sort | head -n 1)
       fi
       if [ -n "$NEWEST" ] && command -v "$DOCKER_BIN" >/dev/null 2>&1; then
         echo "[smoke] bin/hackathonkit-mcp is older than $NEWEST; using the compose runtime" >&2
@@ -146,7 +137,7 @@ if set(responses) != {1, 2, 3}:
     sys.exit(1)
 for rid in (1, 2, 3):
     obj = responses[rid]
-    if "error" in obj or "result" not in obj:
+    if "error" in obj or not isinstance(obj.get("result"), dict):
         sys.exit(1)
     result = obj["result"]
     if isinstance(result, dict) and result.get("isError"):
@@ -155,39 +146,21 @@ for rid in (1, 2, 3):
     echo "[smoke] MCP handshake FAILED: responses must be valid JSON-RPC results with ids 1,2,3" >&2
     exit 1
   fi
+elif command -v node >/dev/null 2>&1; then
+  printf '%s\n' "$OUT" | node -e '
+    const fs = require("fs")
+    const rows = fs.readFileSync(0, "utf8").trim().split(/\r?\n/).map(JSON.parse)
+    const ids = new Set(rows.map(row => row.id))
+    if (![1, 2, 3].every(id => ids.has(id)) ||
+        rows.some(row => row.error !== undefined || row.result == null || row.result.isError === true)) process.exit(1)
+  ' || { echo "[smoke] invalid JSON-RPC response" >&2; exit 1; }
+elif command -v jq >/dev/null 2>&1; then
+  printf '%s\n' "$OUT" | jq -se 'map(.id) | sort == [1,2,3]' >/dev/null &&
+    printf '%s\n' "$OUT" | jq -se 'all(.[]; (has("error")|not) and (.result|type)=="object" and .result.isError != true)' >/dev/null || {
+      echo "[smoke] invalid JSON-RPC response" >&2; exit 1;
+    }
 else
-  # Reject duplicate and missing integer ids: sorting without de-duplication
-  # would let three responses that are all id=1 pass as a valid handshake.
-  # Take only the first "id" per line (the top-level JSON-RPC id); a nested
-  # "id" inside a system.context result must not inflate the count.
-  GOT_IDS_RAW=$(printf '%s\n' "$OUT" | awk '
-    match($0, /"id"[[:space:]]*:[[:space:]]*[0-9]+/) {
-      s = substr($0, RSTART, RLENGTH)
-      sub(/.*[^0-9]/, "", s)
-      print s
-    }')
-  GOT_ID_COUNT=$(printf '%s\n' "$GOT_IDS_RAW" | grep -c . || true)
-  GOT_IDS=$(printf '%s\n' "$GOT_IDS_RAW" | sort | uniq | paste -sd, -)
-  if [ "$GOT_ID_COUNT" != "3" ] || [ "$GOT_IDS" != "1,2,3" ]; then
-    echo "[smoke] MCP handshake FAILED: expected exactly one response each for ids 1,2,3, got '$GOT_IDS' ($GOT_ID_COUNT integer id response(s))" >&2
-    exit 1
-  fi
-  if printf '%s\n' "$OUT" | grep -q '"error"'; then
-    echo "[smoke] MCP handshake FAILED: error response detected" >&2
-    exit 1
-  fi
-  if printf '%s\n' "$OUT" | grep -Eq '"isError"[[:space:]]*:[[:space:]]*true'; then
-    echo "[smoke] MCP handshake FAILED: tool call reported isError" >&2
-    exit 1
-  fi
-  if ! printf '%s\n' "$OUT" | grep -q '"result"'; then
-    echo "[smoke] MCP handshake FAILED: no result payload detected" >&2
-    exit 1
-  fi
-  JSON_LINES=$(printf '%s\n' "$OUT" | grep -c '"jsonrpc"' || true)
-  if [ "$JSON_LINES" != "3" ]; then
-    echo "[smoke] MCP handshake FAILED: stdout is not JSON-RPC only" >&2
-    exit 1
-  fi
+  echo "[smoke] Python, Node or jq is required to validate JSON-RPC responses" >&2
+  exit 2
 fi
 echo "[smoke] MCP handshake ok: initialize, tools/list, system.context (stdout is JSON-RPC only)"

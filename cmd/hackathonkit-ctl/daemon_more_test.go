@@ -18,7 +18,7 @@ func writePID(t *testing.T, root string, pid int, exe string) {
 	if err := os.MkdirAll(filepath.Dir(pidPath(root)), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(pidPath(root), []byte(strconv.Itoa(pid)+"\n"+exe+"\n"), 0o644); err != nil {
+	if err := os.WriteFile(pidPath(root), []byte(strconv.Itoa(pid)+"\n"+exe+"\n"+processBirth(pid)+"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 }

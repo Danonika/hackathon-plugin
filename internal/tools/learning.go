@@ -2,10 +2,26 @@ package tools
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
+	"io/fs"
 
 	"hackathonkit.local/agentkit/internal/learning"
 	"hackathonkit.local/agentkit/internal/mcp"
 )
+
+func learningError(err error) string {
+	var pathErr *fs.PathError
+	var syntaxErr *json.SyntaxError
+	var typeErr *json.UnmarshalTypeError
+	if errors.As(err, &pathErr) {
+		return "learning store: " + pathErr.Err.Error()
+	}
+	if errors.As(err, &syntaxErr) || errors.As(err, &typeErr) {
+		return "learning store contains invalid data"
+	}
+	return RedactBackendError(err)
+}
 
 func registerLearning(reg *mcp.Registry, d Deps) {
 	reg.Register(tool(
@@ -31,7 +47,7 @@ func registerLearning(reg *mcp.Registry, d Deps) {
 				Evidence: argStringSlice(args, "evidence"),
 			})
 			if err != nil {
-				return mcp.Fail(trace(ctx), err.Error()), nil
+				return mcp.Fail(trace(ctx), learningError(err)), nil
 			}
 			if d.Metrics != nil {
 				d.Metrics.Inc("learning_records_total")
@@ -49,7 +65,7 @@ func registerLearning(reg *mcp.Registry, d Deps) {
 			if result.EmbeddingError != "" {
 				// The record was still persisted; recall degrades to lexical
 				// matching without the vector.
-				env = env.WithWarnings("semantic embedding failed; recall will fall back to lexical matching: " + result.EmbeddingError)
+				env = env.WithWarnings("semantic embedding failed; recall will fall back to lexical matching: " + redactSensitiveText(result.EmbeddingError))
 			}
 			return env, nil
 		},
@@ -73,7 +89,7 @@ func registerLearning(reg *mcp.Registry, d Deps) {
 			minConfidence := argFloat(args, "min_confidence", settings.MinConfidence)
 			matches, err := d.Learning.Recall(ctx, argString(args, "query"), argInt(args, "limit", 5), minConfidence, argString(args, "scope"))
 			if err != nil {
-				return mcp.Fail(trace(ctx), err.Error()), nil
+				return mcp.Fail(trace(ctx), learningError(err)), nil
 			}
 			if d.Metrics != nil {
 				d.Metrics.Inc("learning_recalls_total")
@@ -110,7 +126,7 @@ func registerLearning(reg *mcp.Registry, d Deps) {
 			settings := d.Cfg.Config().Learning
 			item, promoted, err := d.Learning.Promote(argString(args, "id"), settings.PromoteAfter, settings.InjectMinConfidence)
 			if err != nil {
-				return mcp.Fail(trace(ctx), err.Error()), nil
+				return mcp.Fail(trace(ctx), learningError(err)), nil
 			}
 			reason := "promoted to global scope"
 			if !promoted {

@@ -61,10 +61,10 @@ func TestSmallMathAndTextHelpers(t *testing.T) {
 	if maxOf([]float64{5, 1, 9}) != 9 {
 		t.Fatal("maxOf must find the maximum")
 	}
-	if got := frontmatterDescription("---\nname: x\ndescription: \"demo skill\"\n---\n"); got != "demo skill" {
+	if got, err := parseFrontmatterDescription("---\nname: x\ndescription: \"demo skill\"\n---\n"); got != "demo skill" || err != nil {
 		t.Fatalf("frontmatterDescription = %q", got)
 	}
-	if got := frontmatterDescription("no frontmatter here"); got != "" {
+	if got, err := parseFrontmatterDescription("no frontmatter here"); got != "" || err == nil {
 		t.Fatalf("frontmatterDescription missing = %q", got)
 	}
 	recordTelegramError(Deps{})

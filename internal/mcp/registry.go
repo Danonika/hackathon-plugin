@@ -4,6 +4,7 @@ import (
 	"context"
 	"log"
 	"reflect"
+	"slices"
 	"sync"
 )
 
@@ -98,12 +99,21 @@ func cloneValue(v any) any {
 	case nil:
 		return nil
 	case map[string]any:
+		if value == nil {
+			return value
+		}
 		return cloneMap(value)
 	case []any:
+		if value == nil {
+			return value
+		}
 		return cloneSlice(value)
 	case []string:
-		return append([]string(nil), value...)
+		return slices.Clone(value)
 	case map[string]string:
+		if value == nil {
+			return value
+		}
 		copied := make(map[string]string, len(value))
 		for mk, mv := range value {
 			copied[mk] = mv

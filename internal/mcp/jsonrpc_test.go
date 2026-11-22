@@ -43,3 +43,34 @@ func TestResponseMarshalKeepsEmptyResult(t *testing.T) {
 		t.Fatalf("nil result must still be present: %s", got)
 	}
 }
+
+func TestRejectMalformedRequestsOnWire(t *testing.T) {
+	input := strings.Join([]string{
+		`{"jsonrpc":"1.0","method":"ping","id":1}`,
+		`{"jsonrpc":"2.0","method":42}`,
+		`{"jsonrpc":"2.0","method":"ping","id":{}}`,
+		`{"jsonrpc":"2.0","method":"ping"}`,
+		`{"jsonrpc":"2.0","method":"ping","id":2}`,
+	}, "\n")
+	var output strings.Builder
+	if err := NewServer(NewRegistry(), ServerOptions{}).ServeStreams(t.Context(), strings.NewReader(input), &output); err != nil {
+		t.Fatal(err)
+	}
+	decoder := json.NewDecoder(strings.NewReader(output.String()))
+	for _, id := range []string{"1", "null", "null"} {
+		var response Response
+		if err := decoder.Decode(&response); err != nil {
+			t.Fatal(err)
+		}
+		if response.Error == nil || response.Error.Code != CodeInvalidRequest || string(response.ID) != id {
+			t.Fatalf("unexpected invalid request response %+v", response)
+		}
+	}
+	var ping Response
+	if err := decoder.Decode(&ping); err != nil || string(ping.ID) != "2" || ping.Result == nil {
+		t.Fatalf("valid request after invalid frames: %+v, %v", ping, err)
+	}
+	if decoder.More() {
+		t.Fatal("unexpected notification response")
+	}
+}

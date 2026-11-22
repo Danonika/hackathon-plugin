@@ -55,6 +55,20 @@ check "suppressed status survives a re-scan" "$([ "$SUP" = "false-positive" ] &&
 OPEN2=$(python3 -c "import json;print(sum(1 for e in json.load(open('$WORK/base.json'))['findings'].values() if e['status']=='open'))")
 check "suppressed finding leaves the open count" "$([ "$OPEN2" = "2" ] && echo 1)" "got $OPEN2"
 
+# An untargeted triage must never suppress the entire baseline.
+if python3 "$DEDUP" --baseline "$WORK/base.json" --set fixed >/dev/null 2>&1; then
+  check "triage requires a target" 0
+fi
+if python3 "$DEDUP" --baseline "$WORK/base.json" --set fixed --match no-such-finding >/dev/null 2>&1; then
+  check "unknown signature rejected" 0
+fi
+python3 "$DEDUP" --baseline "$WORK/base.json" --set fixed "$WORK/a.json" >/dev/null 2>&1
+python3 - "$WORK/base.json" <<'PYTEST'
+import json, sys
+entries = json.load(open(sys.argv[1]))['findings'].values()
+assert all(e['status'] == ('fixed' if e['path'] == 'x.go' else 'false-positive') for e in entries)
+PYTEST
+
 # The replaced frontend is never actionable.
 cat > "$WORK/f.json" <<'JSON'
 {"comments":[{"path":"cmd/demo-api/static/x.js","start_line":1,"severity":"critical","category":"bug","content":"x","existing_code":"y"}]}

@@ -32,7 +32,12 @@ func EvaluateRisk(sess Session, events []Event, now time.Time) (float64, []strin
 	toolErrors := 0
 	panics := 0
 	rollbacks := 0
+	lastActivity := sess.UpdatedAt
 	for _, ev := range events {
+		if sess.ID != "" && ev.SessionID == sess.ID && ev.TS.After(lastActivity) {
+			lastActivity = ev.TS
+		}
+
 		switch ev.Type {
 		case "mcp_call":
 			if strings.EqualFold(ev.Status, "error") {
@@ -59,7 +64,7 @@ func EvaluateRisk(sess Session, events []Event, now time.Time) (float64, []strin
 		score += math.Min(riskRollbackCap, float64(rollbacks)*riskRollback)
 		reasons = append(reasons, fmt.Sprintf("%d eval rollback(s)", rollbacks))
 	}
-	if sess.Status == "active" && !sess.UpdatedAt.IsZero() && now.Sub(sess.UpdatedAt) > stallWindow {
+	if sess.Status == "active" && !lastActivity.IsZero() && now.Sub(lastActivity) > stallWindow {
 		score += riskStalled
 		reasons = append(reasons, "session stalled without events")
 	}
@@ -70,7 +75,7 @@ func EvaluateRisk(sess Session, events []Event, now time.Time) (float64, []strin
 }
 
 var (
-	panicWord = regexp.MustCompile(`(?i)(^|[^a-z])panic`)
+	panicWord = regexp.MustCompile(`(?i)(^|[^a-z])panic(s|ked|king)?([^a-z]|$)`)
 	// panicNegation matches prose that explicitly reports the absence of a
 	// panic, so "no panic observed", "without panic", "panic-free" and
 	// "0 panics" are not counted as panic events.
@@ -180,7 +185,7 @@ func (s *Store) RecomputeRisk(ctx context.Context) (int, error) {
 		return 0, err
 	}
 	if len(sessions) == riskScanLimit {
-		log.Printf("control: risk scan truncated at %d sessions; older sessions were not rescored", riskScanLimit)
+		log.Printf("control: risk scan reached its %d session limit", riskScanLimit)
 	}
 	now := time.Now().UTC()
 	updated := 0
@@ -190,7 +195,7 @@ func (s *Store) RecomputeRisk(ctx context.Context) (int, error) {
 			return updated, err
 		}
 		if len(events) == riskScanLimit {
-			log.Printf("control: risk scan for session %s truncated at %d events; older events were not scored", sess.ID, riskScanLimit)
+			log.Printf("control: risk scan for session %s reached its %d event limit", sess.ID, riskScanLimit)
 		}
 		// A session's window ends at its own end (or now); global events after
 		// that must not be attributed to it.
@@ -203,7 +208,7 @@ func (s *Store) RecomputeRisk(ctx context.Context) (int, error) {
 			return updated, err
 		}
 		if len(globals) == riskScanLimit {
-			log.Printf("control: risk global scan for session %s truncated at %d events; older events were not scored", sess.ID, riskScanLimit)
+			log.Printf("control: risk global scan for session %s reached its %d event limit", sess.ID, riskScanLimit)
 		}
 		combined := append(append([]Event{}, events...), globals...)
 		score, reasons := EvaluateRisk(sess, combined, now)

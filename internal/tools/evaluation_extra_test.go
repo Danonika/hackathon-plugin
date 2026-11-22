@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"testing/synctest"
+	"time"
 
 	"hackathonkit.local/agentkit/internal/evaluation"
 )
@@ -207,4 +209,58 @@ func TestPathSegmentAndResolveRepoPath(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(root, "tmp", "out.json")); err != nil {
 		t.Fatalf("written file missing: %v", err)
 	}
+}
+
+func TestEvaluationHistoryKeepsSameInstantRecords(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		reg, root := testRegistry(t)
+		now := time.Now().UTC()
+		decisions := map[string]float64{}
+		rankings := map[string]string{}
+		for i, sha := range []string{"first", "second"} {
+			score := float64(70 + i)
+			decision := call(t, reg, "eval.compare", map[string]any{"snapshot_sha": "same-snapshot", "candidate": score, "mode": "technical", "persist": true})
+			if decision.Status != "ok" {
+				t.Fatalf("compare: %+v", decision)
+			}
+			decisions[decision.Data.(map[string]any)["decision_path"].(string)] = score
+			rank := call(t, reg, "eval.rank", map[string]any{"aggregates_json": []any{aggregateFixture(sha, 16, 20, 16)}, "persist": true})
+			if rank.Status != "ok" {
+				t.Fatalf("rank: %+v", rank)
+			}
+			rankings[rank.Data.(map[string]any)["ranking_path"].(string)] = sha
+		}
+		if len(decisions) != 2 || len(rankings) != 2 {
+			t.Errorf("history contains %d distinct decisions and %d distinct rankings", len(decisions), len(rankings))
+		}
+		for path, score := range decisions {
+			raw, err := os.ReadFile(filepath.Join(root, path))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var record struct {
+				evaluation.Comparison
+				TS time.Time `json:"ts"`
+			}
+			if err := json.Unmarshal(raw, &record); err != nil {
+				t.Fatal(err)
+			}
+			if record.Candidate != score || record.Mode != evaluation.ModeTechnical || !record.TS.Equal(now) {
+				t.Errorf("decision %s: %+v, expected score %v, timestamp %v", path, record, score, now)
+			}
+		}
+		for path, sha := range rankings {
+			raw, err := os.ReadFile(filepath.Join(root, path))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var record evaluation.Ranking
+			if err := json.Unmarshal(raw, &record); err != nil {
+				t.Fatal(err)
+			}
+			if len(record.Entries) != 1 || record.Entries[0].SnapshotSHA != sha {
+				t.Errorf("ranking %s: %+v", path, record)
+			}
+		}
+	})
 }

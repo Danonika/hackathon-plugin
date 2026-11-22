@@ -3,7 +3,8 @@ FROM golang:1.27.0-alpine3.24 AS build
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN --mount=type=cache,target=/go/pkg/mod go mod download
-COPY . .
+COPY cmd ./cmd
+COPY internal ./internal
 # Build both binaries in one layer and reuse the module/build caches so a
 # source change does not re-download modules or recompile shared packages twice.
 RUN --mount=type=cache,target=/go/pkg/mod \
@@ -27,6 +28,8 @@ ENV HACKATHONKIT_REPO_ROOT=/workspace
 USER ${HACKATHONKIT_UID}:${HACKATHONKIT_GID}
 
 FROM runtime-base AS hackathonkit-mcp
+COPY plugins/hackathonkit/skills /workspace/plugins/hackathonkit/skills
+COPY configs /workspace/configs
 COPY --from=build /out/hackathonkit-mcp /usr/local/bin/hackathonkit-mcp
 ENTRYPOINT ["hackathonkit-mcp"]
 
@@ -42,9 +45,14 @@ ENTRYPOINT ["hackathonkit-demo-api"]
 # Go-enabled gate image: runs scripts/quality-gate.sh from the bind mount and
 # stores evidence under evals/quality/. Use with `docker compose run --rm quality`.
 FROM golang:1.27.0-alpine3.24 AS quality
-RUN apk add --no-cache git
+ARG HACKATHONKIT_UID=1000
+ARG HACKATHONKIT_GID=1000
+RUN test "${HACKATHONKIT_UID}" -gt 0 && test "${HACKATHONKIT_GID}" -gt 0 && \
+    apk add --no-cache git && \
+    mkdir -p /home/hackathonkit/go-mod /home/hackathonkit/go-build && \
+    chown -R "${HACKATHONKIT_UID}:${HACKATHONKIT_GID}" /home/hackathonkit
+ENV HACKATHONKIT_QUALITY_FROM_SOURCE=1 HOME=/home/hackathonkit GOCACHE=/home/hackathonkit/go-build GOMODCACHE=/home/hackathonkit/go-mod
+USER ${HACKATHONKIT_UID}:${HACKATHONKIT_GID}
 WORKDIR /workspace
 ENV HACKATHONKIT_REPO_ROOT=/workspace
-# Runs as root on purpose: the gate writes evals/quality/ evidence through a
-# host bind mount whose ownership is unknown, and it is CI-only tooling.
 ENTRYPOINT ["sh", "scripts/quality-gate.sh"]

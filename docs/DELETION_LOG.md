@@ -2,7 +2,7 @@
 
 ## [2026-09-22] Refactor Session
 
-Baseline: `prior revision` (v0.13.1), Go 1.27.1. Analysis only; no production behavior
+Baseline: `ac1184d` (v0.13.1), Go 1.27.1. Analysis only; no production behavior
 was intended to change except the documented atomic-write consolidation.
 
 Tools and signals used:
@@ -136,7 +136,7 @@ Tools and signals used:
 - `sh scripts/coverage-check.sh` - total 88.7% (target 80%).
 - `sh scripts/quality-gate.sh` - ok 7/7 (gofmt, build, vet, test, coverage,
   selftest, skills); report at
-  `evals/quality/prior revision/gate.json`.
+  `evals/quality/<commit>/gate.json`.
 - `hackathonkit-mcp --selftest` - 37 tools, handshake ok.
 - `hackathonkit-mcp --validate-skills` - all skills compliant.
 - Re-scan after the changes: `deadcode -test ./...` clean,

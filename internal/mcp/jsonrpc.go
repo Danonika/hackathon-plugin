@@ -18,10 +18,9 @@ func (r *Request) IsNotification() bool {
 type Response struct {
 	JSONRPC string          `json:"jsonrpc"`
 	ID      json.RawMessage `json:"id,omitempty"`
-	// Result/Error are marshalled by the custom MarshalJSON below; the tags
-	// here only document intent (they are not consulted).
-	Result any       `json:"-"`
-	Error  *RPCError `json:"-"`
+	// The field tags are used when decoding. MarshalJSON chooses which one to send.
+	Result any       `json:"result"`
+	Error  *RPCError `json:"error"`
 }
 
 // MarshalJSON keeps the JSON-RPC 2.0 wire contract: a response carries either
@@ -58,6 +57,7 @@ type RPCError struct {
 
 const (
 	CodeParseError     = -32700
+	CodeInvalidRequest = -32600
 	CodeInvalidParams  = -32602
 	CodeMethodNotFound = -32601
 	CodeInternalError  = -32603

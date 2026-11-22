@@ -31,15 +31,26 @@ valid_version() {
   printf '%s' "$1" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'
 }
 
-if [ -n "$1" ]; then
+stage=""
+trap '[ -z "$stage" ] || rm -f "$stage"' EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+replace_text() {
+  stage=$(mktemp "$1.tmp.XXXXXX")
+  cp -p "$1" "$stage"
+  sed "$2" "$1" > "$stage"
+  mv "$stage" "$1"
+  stage=""
+}
+
+if [ "$#" -gt 0 ]; then
   VERSION="$1"
   if ! valid_version "$VERSION"; then
     echo "[set-version] version must be MAJOR.MINOR.PATCH (got '$VERSION')" >&2
     exit 2
   fi
   before=$(sed -n 's/^const version = "\([^"]*\)".*/\1/p' "$MAIN" | head -n 1)
-  sed -i.bak "s/^const version = \"[^\"]*\"/const version = \"$VERSION\"/" "$MAIN"
-  rm -f "$MAIN.bak"
+  replace_text "$MAIN" "s/^const version = \"[^\"]*\"/const version = \"$VERSION\"/"
   after=$(sed -n 's/^const version = "\([^"]*\)".*/\1/p' "$MAIN" | head -n 1)
   if [ "$after" != "$VERSION" ]; then
     echo "[set-version] failed to update main.go (was '$before', expected '$VERSION')" >&2
@@ -54,22 +65,38 @@ if ! valid_version "$VERSION"; then
   exit 1
 fi
 
-# JSON manifests: replace the version value in each, then verify.
+# Change only the plugin version in each manifest, including the named entry
+# in the marketplace. Other plugins or nested metadata can carry their own versions.
 for f in "$ROOT/.claude-plugin/marketplace.json" "$ROOT/.claude-plugin/plugin.json" "$ROOT/plugins/hackathonkit/.codex-plugin/plugin.json"; do
   [ -f "$f" ] || continue
-  sed -i.bak "s/\"version\": *\"[0-9][0-9.]*\"/\"version\": \"$VERSION\"/" "$f"
-  rm -f "$f.bak"
-  if ! grep -Eq "\"version\": *\"$VERSION\"" "$f"; then
-    echo "[set-version] failed to update $f" >&2
-    exit 1
-  fi
+  stage=$(mktemp "$f.tmp.XXXXXX")
+  cp -p "$f" "$stage"
+  python3 - "$f" "$stage" "$VERSION" <<'PYTHON'
+import json, os, sys
+source, output, version = sys.argv[1:]
+with open(source, encoding="utf-8") as stream:
+    data = json.load(stream)
+target = data
+if os.path.basename(source) == "marketplace.json":
+    entries = [item for item in data.get("plugins", []) if item.get("name") == "hackathonkit"]
+    if len(entries) != 1:
+        sys.exit("expected one hackathonkit plugin in " + source)
+    target = entries[0]
+if not isinstance(target.get("version"), str):
+    sys.exit("missing plugin version in " + source)
+if target["version"] != version:
+    target["version"] = version
+    with open(output, "w", encoding="utf-8") as stream:
+        stream.write(json.dumps(data, ensure_ascii=False, indent=2) + "\n")
+PYTHON
+  mv "$stage" "$f"
+  stage=""
 done
 
 # README status line.
 if [ -f "$ROOT/README.md" ]; then
-  sed -i.bak "s/^Status: v[0-9][0-9.]*\./Status: v$VERSION./" "$ROOT/README.md"
-  rm -f "$ROOT/README.md.bak"
-  grep -Eq "^Status: v$VERSION\." "$ROOT/README.md" || {
+  replace_text "$ROOT/README.md" "s/^Status: v[0-9][0-9.]*\./Status: v$VERSION./"
+  awk -v prefix="Status: v$VERSION." 'index($0,prefix)==1 {found=1} END {exit !found}' "$ROOT/README.md" || {
     echo "[set-version] failed to update the README status line" >&2
     exit 1
   }
@@ -79,8 +106,7 @@ fi
 GUIDE="$ROOT/docs/HACKATHON-GUIDE.md"
 if [ -f "$GUIDE" ]; then
   if grep -q "Версия плагина: \*\*[0-9][0-9.]*\*\*" "$GUIDE"; then
-    sed -i.bak "s/Версия плагина: \*\*[0-9][0-9.]*\*\*/Версия плагина: **$VERSION**/" "$GUIDE"
-    rm -f "$GUIDE.bak"
+    replace_text "$GUIDE" "s/Версия плагина: \*\*[0-9][0-9.]*\*\*/Версия плагина: **$VERSION**/"
   fi
   if ! grep -Fq "Версия плагина: **$VERSION**" "$GUIDE"; then
     echo "[set-version] failed to update $GUIDE (expected 'Версия плагина: **$VERSION**')" >&2

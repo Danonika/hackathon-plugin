@@ -121,7 +121,7 @@ func TestApplyWhereOperators(t *testing.T) {
 		{"name = delta", 0},
 	}
 	for _, c := range cases {
-		got, _, err := applyWhere(tbl, c.where)
+		got, _, err := applyWhere(t.Context(), tbl, c.where)
 		if err != nil {
 			t.Fatalf("applyWhere(%q): %v", c.where, err)
 		}
@@ -131,7 +131,7 @@ func TestApplyWhereOperators(t *testing.T) {
 	}
 
 	for _, bad := range []string{"value", "value >", "missing = 1", "value ~ 1"} {
-		if _, _, err := applyWhere(tbl, bad); err == nil {
+		if _, _, err := applyWhere(t.Context(), tbl, bad); err == nil {
 			t.Fatalf("applyWhere(%q) must fail", bad)
 		}
 	}
@@ -254,7 +254,10 @@ func TestProfileTimestampAndTextKinds(t *testing.T) {
 			{"2026-01-05", "delta", "5"},
 		},
 	}
-	profiles := profileColumns(tbl, nil)
+	profiles, _, err := profileColumnsIndexed(t.Context(), tbl, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if profiles[0].Kind != "timestamp" {
 		t.Fatalf("when kind = %q, want timestamp", profiles[0].Kind)
 	}
@@ -263,5 +266,20 @@ func TestProfileTimestampAndTextKinds(t *testing.T) {
 	}
 	if profiles[2].Kind != "text" {
 		t.Fatalf("mixed kind = %q, want text", profiles[2].Kind)
+	}
+}
+
+func TestQueryFiltersPreserveHeaderAndValueSpaces(t *testing.T) {
+	reg, root := testRegistry(t)
+	mustWrite(t, filepath.Join(root, "data", "input", "stations.csv"), "Site Name,Reading\nNorth  Yard,8\nNorth Yard,9\n")
+	env := call(t, reg, "data.query", map[string]any{
+		"path": "stations.csv", "where": "Site Name = North  Yard", "columns": []any{"Reading"},
+	})
+	if env.Status != "ok" {
+		t.Fatalf("filter by displayed header: %+v", env)
+	}
+	rows := env.Data.(map[string]any)["rows"].([]map[string]string)
+	if len(rows) != 1 || rows[0]["Reading"] != "8" {
+		t.Fatalf("wanted only exact station, got %+v", rows)
 	}
 }

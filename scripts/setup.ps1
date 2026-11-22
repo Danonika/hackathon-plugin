@@ -8,25 +8,10 @@ function Fail([string]$Message) {
   exit 1
 }
 
-# Recursively delete a tree without following junctions/symlinks (Windows
-# PowerShell 5.1's Remove-Item -Recurse descends into directory links).
-function Remove-TreeNoReparse([string]$Path) {
-  $item = Get-Item -LiteralPath $Path -Force
-  if ($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) {
-    Remove-Item -LiteralPath $Path -Force -ErrorAction Stop
-    return
-  }
-  if ($item.PSIsContainer) {
-    foreach ($child in Get-ChildItem -LiteralPath $Path -Force) {
-      Remove-TreeNoReparse $child.FullName
-    }
-  }
-  Remove-Item -LiteralPath $Path -Force -ErrorAction Stop
-}
-
 if ($Profile -notin @("core", "full")) {
   Fail "[setup] invalid profile: $Profile (expected core or full)"
 }
+$Profile = $Profile.ToLowerInvariant()
 if (-not $PSCommandPath) {
   Fail "[setup] PSCommandPath is empty; run this script as a file, not dot-sourced"
 }
@@ -61,13 +46,11 @@ $hasToken = $false
 if (Test-Path -LiteralPath $envPath) {
   $hasToken = [bool](Select-String -LiteralPath $envPath -Pattern '^HACKATHONKIT_DEMO_TOKEN=.' -Quiet -ErrorAction SilentlyContinue)
   if ($hasToken) {
-    # Fail closed on a guessable value: only a random-looking 32-char hex token
-    # counts as real, so shipped placeholders (change-me-in-production,
-    # my-token, secret, ...) are regenerated rather than protecting the demo.
+    # Replace known placeholders while preserving user-managed token formats.
     $tokenMatch = Select-String -LiteralPath $envPath -Pattern '^HACKATHONKIT_DEMO_TOKEN=(.*)$' -ErrorAction SilentlyContinue | Select-Object -First 1
     if ($tokenMatch) {
       $tokenValue = $tokenMatch.Matches[0].Groups[1].Value.Trim()
-      if ($tokenValue -notmatch '^[0-9a-fA-F]{32}$') {
+      if ($tokenValue -in @("", "change-me-in-production", "change-me", "my-token", "secret")) {
         $hasToken = $false
       }
     }
@@ -79,7 +62,7 @@ if (-not $hasToken) {
   $token = -join ($bytes | ForEach-Object { $_.ToString("x2") })
   try {
     $lines = @()
-    if (Test-Path -LiteralPath $envPath) { $lines = @(Get-Content -LiteralPath $envPath) }
+    if (Test-Path -LiteralPath $envPath) { $lines = @(Get-Content -LiteralPath $envPath -Encoding UTF8) }
     $replaced = $false
     for ($i = 0; $i -lt $lines.Count; $i++) {
       if ($lines[$i] -match '^HACKATHONKIT_DEMO_TOKEN=') { $lines[$i] = "HACKATHONKIT_DEMO_TOKEN=$token"; $replaced = $true }
@@ -91,7 +74,7 @@ if (-not $hasToken) {
     try {
       [System.IO.File]::WriteAllLines($envTmp, [string[]]$lines, (New-Object System.Text.UTF8Encoding($false)))
       if (Test-Path -LiteralPath $envPath) {
-        [System.IO.File]::Replace($envTmp, $envPath, $null)
+        [System.IO.File]::Replace($envTmp, $envPath, [System.Management.Automation.Language.NullString]::Value)
       } else {
         [System.IO.File]::Move($envTmp, $envPath)
       }
@@ -108,37 +91,14 @@ if (-not $hasToken) {
 }
 
 $global:LASTEXITCODE = 0
-& (Join-Path $root "scripts/sync-harness.ps1")
+& (Join-Path $root "scripts/sync-harness.ps1") -InstallProfile $Profile
 if ($LASTEXITCODE -ne 0) { Fail "[setup] sync-harness failed" }
 
 # Codex plugins cannot bundle slash commands; install /verify as a custom prompt.
-& (Join-Path $root "scripts/install-prompts.ps1") install
-if ($LASTEXITCODE -ne 0) { Write-Warning "[setup] could not install the Codex command prompts" }
-
-if ($Profile -eq "core") {
-  foreach ($dir in @((Join-Path $root ".agents/skills"), (Join-Path $root ".claude/skills"))) {
-    if (-not (Test-Path -LiteralPath $dir)) { continue }
-    $dirFull = [System.IO.Path]::GetFullPath($dir).TrimEnd([System.IO.Path]::DirectorySeparatorChar) + [System.IO.Path]::DirectorySeparatorChar
-    foreach ($skill in @("judge", "project-cost", "roast-project", "cp-expert-refactoring", "system-design-expert", "self-improvement-controller", "output-self-check", "skill-authoring", "qa-expert")) {
-      $skillPath = Join-Path $dir $skill
-      $skillFull = [System.IO.Path]::GetFullPath($skillPath)
-      if (-not $skillFull.StartsWith($dirFull, [System.StringComparison]::OrdinalIgnoreCase)) {
-        Write-Warning "[setup] refusing to remove a path outside the mirror: $skillFull"
-        continue
-      }
-      if (Test-Path -LiteralPath $skillPath) {
-        $item = Get-Item -LiteralPath $skillPath -Force
-        if ($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) {
-          Write-Warning "[setup] skipping reparse point: $skillPath"
-          continue
-        }
-        try { Remove-TreeNoReparse $skillPath }
-        catch { Write-Warning "[setup] could not remove ${skillPath}: $($_.Exception.Message)" }
-      }
-    }
-  }
-  Write-Host "[setup] core profile: explicit-only evaluation skills excluded from mirrors (the plugin still ships all skills)"
-}
+try {
+  & (Join-Path $root "scripts/install-prompts.ps1") install
+  if ($LASTEXITCODE -ne 0) { throw "exit $LASTEXITCODE" }
+} catch { Write-Warning "[setup] could not install the Codex command prompts: $_" }
 
 $global:LASTEXITCODE = 0
 & (Join-Path $root "scripts/gen-mcp-manifest.ps1") -Root $root
@@ -178,11 +138,11 @@ if ($dockerOk) {
   }
   New-Item -ItemType Directory -Force -Path (Join-Path $root "bin") | Out-Null
   $exe = if ($env:OS -eq "Windows_NT") { ".exe" } else { "" }
-  go build -o "bin/hackathonkit-mcp$exe" ./cmd/hackathonkit-mcp
+  go build -trimpath -buildvcs=false -o "bin/hackathonkit-mcp$exe" ./cmd/hackathonkit-mcp
   if ($LASTEXITCODE -ne 0) { Fail "[setup] go build hackathonkit-mcp failed" }
-  go build -o "bin/hackathonkit-demo-api$exe" ./cmd/demo-api
+  go build -trimpath -buildvcs=false -o "bin/hackathonkit-demo-api$exe" ./cmd/demo-api
   if ($LASTEXITCODE -ne 0) { Fail "[setup] go build demo-api failed" }
-  go build -o "bin/hackathonkit-ctl$exe" ./cmd/hackathonkit-ctl
+  go build -trimpath -buildvcs=false -o "bin/hackathonkit-ctl$exe" ./cmd/hackathonkit-ctl
   if ($LASTEXITCODE -ne 0) { Fail "[setup] go build hackathonkit-ctl failed" }
   Write-Host "[setup] local binaries built in bin/"
 }

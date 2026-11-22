@@ -14,44 +14,14 @@ if (-not (Test-Path $exe)) { Check "mcp binary" $false "run scripts/setup.ps1"; 
 Check "mcp binary" $true $exe
 
 $script:McpStderr = ""
-# Native invocations run under a bounded wait so a hung/slow process (or a
-# network stall) fails the run instead of blocking it forever.
-function Invoke-ExeBounded([string[]]$ExeArgs, [string]$InFile, [string]$OutFile, [string]$ErrFile, [int]$TimeoutMs) {
-  $proc = $null
-  try {
-    $proc = Start-Process -FilePath $exe -ArgumentList $ExeArgs `
-      -RedirectStandardInput $InFile -RedirectStandardOutput $OutFile -RedirectStandardError $ErrFile -PassThru -NoNewWindow
-  } catch {
-    return $false
-  }
-  if (-not $proc) { return $false }
-  if (-not $proc.WaitForExit($TimeoutMs)) {
-    try {
-      if (-not $proc.HasExited) { $proc.Kill() }
-      $proc.WaitForExit()
-    } catch { }
-    $script:ExeExitCode = -1
-    return $false
-  }
-  # A native invocation that exits non-zero must not be treated as success.
-  $script:ExeExitCode = $proc.ExitCode
-  return ($proc.ExitCode -eq 0)
-}
+. (Join-Path $PSScriptRoot "native-probe.ps1")
 function Mcp([string]$payload) {
-  $inFile = [System.IO.Path]::GetTempFileName()
-  $outFile = [System.IO.Path]::GetTempFileName()
-  $errFile = [System.IO.Path]::GetTempFileName()
   try {
-    Set-Content -LiteralPath $inFile -Value $payload
-    if (-not (Invoke-ExeBounded -ExeArgs @("--repo-root", "`"$Root`"") -InFile $inFile -OutFile $outFile -ErrFile $errFile -TimeoutMs 60000)) {
-      $script:McpStderr = if ($script:ExeExitCode -eq -1) { "MCP call timed out after 60s" } else { "MCP call exited with code $($script:ExeExitCode)" }
-      return ""
-    }
-    $script:McpStderr = (Get-Content -LiteralPath $errFile -Raw -ErrorAction SilentlyContinue)
-    return ((Get-Content -LiteralPath $outFile -Raw -ErrorAction SilentlyContinue))
-  } finally {
-    Remove-Item -LiteralPath $inFile, $outFile, $errFile -Force -ErrorAction SilentlyContinue
-  }
+    $probe = Invoke-NativeProbe $exe @("--repo-root", $probeRoot) ($payload + "`n") $probeRoot 60000
+    if ($probe.Code -ne 0) { throw "MCP exited with code $($probe.Code)" }
+    $script:McpStderr = ""
+    return $probe.Out
+  } catch { $script:McpStderr = "$_"; return "" }
 }
 function Call([string]$id, [string]$tool, [string]$argsJson) {
   $req = '{"jsonrpc":"2.0","id":' + $id + ',"method":"tools/call","params":{"name":"' + $tool + '","arguments":' + $argsJson + '}}'
@@ -76,15 +46,10 @@ function Call([string]$id, [string]$tool, [string]$argsJson) {
 }
 
 function Set-RoutingMode([string]$mode) {
-  $inFile = [System.IO.Path]::GetTempFileName()
-  $outFile = [System.IO.Path]::GetTempFileName()
-  $errFile = [System.IO.Path]::GetTempFileName()
   try {
-    Set-Content -LiteralPath $inFile -Value ""
-    return (Invoke-ExeBounded -ExeArgs @("--set-routing-mode", $mode, "--repo-root", "`"$Root`"") -InFile $inFile -OutFile $outFile -ErrFile $errFile -TimeoutMs 60000)
-  } finally {
-    Remove-Item -LiteralPath $inFile, $outFile, $errFile -Force -ErrorAction SilentlyContinue
-  }
+    $probe = Invoke-NativeProbe $exe @("--set-routing-mode", $mode, "--repo-root", $probeRoot) "" $probeRoot 60000
+    return $probe.Code -eq 0
+  } catch { return $false }
 }
 
 # 1. pages
@@ -111,6 +76,16 @@ foreach ($m in @("fly-app.js", "fly-anatomy.js", "fly-brain.js", "fly-state.js")
   } catch { Check "module $m" $false $_.Exception.Message }
 }
 
+# Training feedback and routing changes belong to this test run. Start from the
+# same routing config and trained brain but keep every mutable file in a scratch root.
+$probeRoot = Join-Path ([IO.Path]::GetTempPath()) ("hackathonkit-fly-" + [Guid]::NewGuid().ToString("N"))
+try {
+  [void][IO.Directory]::CreateDirectory((Join-Path $probeRoot "configs"))
+  [void][IO.Directory]::CreateDirectory((Join-Path $probeRoot "data/index"))
+  foreach ($name in @("config.yaml","routing.yaml")) {
+    Copy-Item -LiteralPath (Join-Path $Root "configs/$name") -Destination (Join-Path $probeRoot "configs/$name") -ErrorAction Stop
+  }
+  Copy-Item -LiteralPath (Join-Path $Root "data/index/fly-brain.json") -Destination (Join-Path $probeRoot "data/index/fly-brain.json") -ErrorAction Stop
 # 2. routing mode normal
 Check "set routing mode normal" (Set-RoutingMode "normal") ""
 $ctx = Call "1" "system.context" "{}"
@@ -133,7 +108,7 @@ if ($rec) {
 }
 
 # 4. dopamine counters before
-$brainPath = Join-Path $Root "data\index\fly-brain.json"
+$brainPath = Join-Path $probeRoot "data\index\fly-brain.json"
 $pamBefore = 0; $ppl1Before = 0
 if (Test-Path $brainPath) {
   $brain = Get-Content $brainPath -Raw | ConvertFrom-Json
@@ -156,7 +131,7 @@ if (Test-Path $brainPath) { $ppl1After = [int]((Get-Content $brainPath -Raw | Co
 Check "PPL1 incremented (pain)" ($ppl1After -gt $ppl1Before) ("before=" + $ppl1Before + " after=" + $ppl1After)
 
 # 7. neuron events log
-$logPath = Join-Path $Root "logs\fly-neuron-events.jsonl"
+$logPath = Join-Path $probeRoot "logs\fly-neuron-events.jsonl"
 $taskMarker = "find anomalies in sensor telemetry"
 $events = @()
 if (Test-Path $logPath) {
@@ -174,7 +149,7 @@ Check "active KC exported" ($lastRec -and ($lastRec.active_kc | Measure-Object).
 Check "neuron events: feedback" ($fbEvents.Count -ge 1) (($fbEvents | Select-Object -Last 1).source)
 
 # 8. memory grows
-$memPath = Join-Path $Root "data\index\fly-memory.json"
+$memPath = Join-Path $probeRoot "data\index\fly-memory.json"
 $memCount = 0
 if (Test-Path $memPath) { $memCount = ((Get-Content $memPath -Raw | ConvertFrom-Json).examples | Measure-Object).Count }
 Check "kNN memory" ($memCount -ge 2) ($memCount.ToString() + " examples")
@@ -188,6 +163,10 @@ if ($ctx) { Check "restored normal mode" ($ctx.data.routing_mode -eq "normal") (
   if (-not (Set-RoutingMode "normal")) {
     Check "restore normal mode (cleanup)" $false "the cleanup --set-routing-mode normal call failed"
   }
+}
+
+} finally {
+  if ([IO.Directory]::Exists($probeRoot)) { Remove-Item -LiteralPath $probeRoot -Recurse -Force }
 }
 
 Write-Host ""

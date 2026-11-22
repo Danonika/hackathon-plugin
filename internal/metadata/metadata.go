@@ -198,15 +198,12 @@ type Postgres struct {
 // success (it is simply disabled).
 var errRecorderClosed = errors.New("metadata: recorder closed")
 
-// recordWriteTimeout bounds a write whose caller supplied no deadline, so a
+// recordWriteTimeout caps every write, so a
 // stalled query cannot hold the read lock (and therefore block Close)
 // indefinitely.
 const recordWriteTimeout = 10 * time.Second
 
 func boundedWriteCtx(ctx context.Context) (context.Context, context.CancelFunc) {
-	if _, ok := ctx.Deadline(); ok {
-		return context.WithCancel(ctx)
-	}
 	return context.WithTimeout(ctx, recordWriteTimeout)
 }
 
@@ -240,7 +237,9 @@ func openPostgres(ctx context.Context, dsn string, newPool func(context.Context,
 		pool.Close()
 		return nil, err
 	}
-	if _, err := pool.Exec(ddlCtx, migrations); err != nil && !isDuplicateDDL(err) {
+	migrationCtx, migrationCancel := context.WithTimeout(ctx, 15*time.Second)
+	defer migrationCancel()
+	if _, err := pool.Exec(migrationCtx, migrations); err != nil && !isDuplicateDDL(err) {
 		pool.Close()
 		return nil, err
 	}
@@ -263,10 +262,10 @@ func (p *Postgres) RecordArtifact(ctx context.Context, rec ArtifactRecord) error
 	}
 	// Hold the read lock across Exec so Close cannot tear the pool down while
 	// the write is in flight (which would silently drop the record).
-	writeCtx, cancel := boundedWriteCtx(ctx)
-	defer cancel()
 	p.mu.RLock()
 	defer p.mu.RUnlock()
+	writeCtx, cancel := boundedWriteCtx(ctx)
+	defer cancel()
 	if p.pool == nil {
 		if p.closed {
 			return errRecorderClosed

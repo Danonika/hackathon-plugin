@@ -589,7 +589,7 @@ func TestTUIModelLoadViewAndUpdate(t *testing.T) {
 			t.Fatalf("view missing %q:\n%s", want, view)
 		}
 	}
-	if model.Init() == nil || tickCmd() == nil {
+	if model.Init() == nil || tickCmd(model.gen) == nil {
 		t.Fatal("tick commands must not be nil")
 	}
 
@@ -637,7 +637,7 @@ func TestTUIModelLoadViewAndUpdate(t *testing.T) {
 	if len(model.sessions) != 2 {
 		t.Fatalf("refresh sessions = %+v", model.sessions)
 	}
-	updated, cmd = model.Update(refreshMsg{})
+	updated, cmd = model.Update(refreshMsg{gen: model.gen})
 	model = applyCmd(updated.(tuiModel), cmd)
 	if len(model.sessions) != 2 {
 		t.Fatalf("tick refresh sessions = %+v", model.sessions)
@@ -719,4 +719,20 @@ func runSessionsOut(t *testing.T, args ...string) string {
 		t.Fatalf("cmdSessions(%v): %v", args, err)
 	}
 	return buf.String()
+}
+
+func TestRefreshDoesNotSupersedeSlowLoad(t *testing.T) {
+	m := newTUIModel(nil, nil)
+	updated, cmd := m.Update(loadedMsg{sessions: []control.Session{}, gen: m.gen})
+	m = updated.(tuiModel)
+	if cmd == nil {
+		t.Fatal("completed load must schedule the next refresh")
+	}
+	staleTimer := refreshMsg{gen: m.gen}
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("r")})
+	m = updated.(tuiModel)
+	updated, cmd = m.Update(staleTimer)
+	if cmd != nil || updated.(tuiModel).gen != m.gen {
+		t.Fatal("old timer superseded newer load")
+	}
 }

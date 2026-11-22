@@ -2,7 +2,7 @@
 /*
  * Hackathon Agent Kit Codex hooks.
  *
- * Usage: node hooks.js <session-start|tool-use|stop>
+ * Usage: node hooks.js <session-start|tool-use|session-end>
  *
  * Hooks must never break a Codex session: every failure is swallowed and the
  * process exits 0. Each active session owns one file under
@@ -19,8 +19,7 @@ const { execFileSync } = require("child_process");
 
 // A session without a stop event is expired after this window.
 const SESSION_TTL_MS = 12 * 60 * 60 * 1000;
-// Upper bound for a single hook payload. Larger input is truncated with a
-// warning instead of being silently mangled.
+// Maximum hook payload retained in memory. Oversized events are skipped.
 const STDIN_LIMIT = 8 * 1024 * 1024;
 
 const EVENT = process.argv[2] || "";
@@ -117,7 +116,7 @@ function safeCwd() {
 
 function findRepoUp(start) {
   let dir = start;
-  for (let i = 0; i < 8; i += 1) {
+  while (dir) {
     // Require the hackathonkit marker, not just any repo, so session state is never
     // written into an unrelated checkout.
     if (isHackathonKitRepo(dir)) return dir;
@@ -183,30 +182,34 @@ function appendJSONL(file, record) {
   }
 }
 
-function readStdin() {
+async function readStdin() {
   try {
     if (process.stdin.isTTY) return "";
-    const buf = fs.readFileSync(0);
-    // Hook payloads are normally small; only a pathological payload is capped,
-    // and that is reported rather than silently cut mid-JSON (which would drop
-    // the session id and misattribute the event).
-    if (buf.length > STDIN_LIMIT) {
-      process.stderr.write("hackathonkit hooks: stdin payload exceeds " + STDIN_LIMIT + " bytes; truncating\n");
-      return buf.subarray(0, STDIN_LIMIT).toString("utf8");
+    const chunks = [];
+    let total = 0;
+    for await (const chunk of process.stdin) {
+      total += chunk.length;
+      if (total > STDIN_LIMIT) {
+        process.stderr.write("hackathonkit hooks: oversized input; skipping event\n");
+        return null;
+      }
+      chunks.push(chunk);
     }
-    return buf.toString("utf8");
+    return Buffer.concat(chunks, total).toString("utf8");
   } catch (_) {
-    return "";
+    process.stderr.write("hackathonkit hooks: could not read hook input; skipping event\n");
+    return null;
   }
 }
 
 function parsePayload(text) {
+  if (!text.trim()) return {};
   try {
     const parsed = JSON.parse(text);
-    return parsed && typeof parsed === "object" ? parsed : {};
-  } catch (_) {
-    return {};
-  }
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) return parsed;
+  } catch (_) {}
+  process.stderr.write("hackathonkit hooks: invalid hook payload; skipping event\n");
+  return null;
 }
 
 // The hook payload schema varies by harness; accept the common session keys.
@@ -266,8 +269,7 @@ function writeActive(entry) {
   if (!ROOT_VALID) return;
   try {
     fs.mkdirSync(SESSIONS_DIR, { recursive: true });
-    const now = new Date().toISOString();
-    fs.writeFileSync(sessionFile(entry.id), JSON.stringify({ ...entry, updated_at: now }) + "\n");
+    fs.writeFileSync(sessionFile(entry.id), JSON.stringify(entry) + "\n");
   } catch (_) {}
 }
 
@@ -275,28 +277,36 @@ function ownedByRoot(id) {
   if (!id || !ROOT_VALID) return false;
   try {
     const entry = JSON.parse(fs.readFileSync(sessionFile(id), "utf8"));
-    return Boolean(entry && entry.root === ROOT);
+    return Boolean(entry && entry.root === ROOT && entry.id === id);
   } catch (_) {
     return false;
   }
 }
 
 function removeActive(id) {
-  if (!id) return;
+  if (!id || !ROOT_VALID) return;
   try {
     fs.unlinkSync(sessionFile(id));
   } catch (_) {}
 }
 
-// Refresh updated_at (and the file mtime) on each tool call so a legitimate
-// long-running session is not treated as expired while it is still active.
+// Refresh the existing inode. If SessionEnd removes it concurrently, a late
+// tool event must not recreate the session file.
 function touchActive(id) {
   if (!id || !ROOT_VALID) return;
+  let fd;
   try {
-    const entry = JSON.parse(fs.readFileSync(sessionFile(id), "utf8"));
-    if (!entry || entry.root !== ROOT) return;
-    writeActive({ ...entry, id: entry.id });
-  } catch (_) {}
+    fd = fs.openSync(sessionFile(id), "r+");
+    const entry = JSON.parse(fs.readFileSync(fd, "utf8"));
+    if (entry.root === ROOT && entry.id === id) {
+      const now = new Date();
+      fs.futimesSync(fd, now, now);
+    }
+  } catch (_) {
+    // SessionEnd may have already removed the file.
+  } finally {
+    if (fd !== undefined) fs.closeSync(fd);
+  }
 }
 
 function isExpired(full, entry) {
@@ -315,6 +325,7 @@ function isExpired(full, entry) {
 }
 
 function readActive() {
+  if (!ROOT_VALID) return [];
   try {
     const entries = [];
     for (const name of fs.readdirSync(SESSIONS_DIR)) {
@@ -373,6 +384,7 @@ function validatedFallbackID() {
 
 function fallbackContext() {
   const lines = ["Hackathon Agent Kit session context", "routing: unknown (run scripts/setup.sh)"];
+  if (!ROOT_VALID) return lines.join("\n");
   try {
     const routing = fs.readFileSync(path.join(ROOT, "configs", "routing.yaml"), "utf8");
     const mode = (routing.match(/mode:\s*(\w+)/) || [])[1];
@@ -423,18 +435,22 @@ function toolName(payload) {
   return "";
 }
 
-try {
+async function handleEvent() {
+  const raw = await readStdin();
+  if (raw === null) return;
+  const payload = parsePayload(raw);
+  if (!payload) return;
   switch (EVENT) {
     case "session-start": {
-      const payload = parsePayload(readStdin());
       const id = payloadSessionID(payload) || newSessionID();
-      writeActive({ id, root: ROOT, started_at: new Date().toISOString() });
-      appendJSONL(SESSIONS_LOG, {
-        ts: new Date().toISOString(),
-        type: "session_start",
-        session_id: id,
-        root: ROOT,
-      });
+      if (ownedByRoot(id)) {
+        // Codex also emits SessionStart on compaction and resume.
+        touchActive(id);
+      } else {
+        const started = new Date().toISOString();
+        writeActive({ id, root: ROOT, started_at: started });
+        appendJSONL(SESSIONS_LOG, { ts: started, type: "session_start", session_id: id, root: ROOT });
+      }
       let context = "";
       try {
         context = binaryContext().trim();
@@ -444,12 +460,7 @@ try {
       break;
     }
     case "tool-use": {
-      const raw = readStdin();
-      const payload = parsePayload(raw);
-      let tool = toolName(payload);
-      if (!tool) {
-        tool = (raw.match(/"tool_name"\s*:\s*"([^"]+)"/) || [])[1] || "";
-      }
+      const tool = toolName(payload);
       const id = payloadSessionID(payload) || validatedFallbackID();
       touchActive(id);
       appendJSONL(EVENTS_LOG, {
@@ -460,9 +471,14 @@ try {
       });
       break;
     }
-    case "stop": {
-      const payload = parsePayload(readStdin());
+    case "stop": // Compatibility with older manual invocations.
+    case "session-end": {
+      if (payload.hook_event_name === "Stop") return;
       let id = payloadSessionID(payload);
+      if (!id && EVENT === "session-end") {
+        process.stderr.write("hackathonkit hooks: SessionEnd without a session id; skipping event\n");
+        return;
+      }
       if (!id) {
         const active = readActive();
         if (active.length === 1) {
@@ -491,12 +507,14 @@ try {
     default:
       process.stderr.write("hackathonkit hooks: unknown event " + EVENT + "\n");
   }
-} catch (err) {
+}
+
+handleEvent().catch((err) => {
   // A hook must never fail the harness session: report and exit 0.
   try {
     process.stderr.write("hackathonkit hooks: " + (err && err.message ? err.message : String(err)) + "\n");
   } catch (_) {}
-}
+});
 
 // Natural exit lets stdout flush; process.exit() can truncate piped output.
 process.exitCode = 0;

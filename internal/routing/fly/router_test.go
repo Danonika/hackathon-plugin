@@ -87,3 +87,12 @@ func TestRecommendKeywordTieBreakIsDeterministic(t *testing.T) {
 		}
 	}
 }
+
+func TestUnmappedLearnedCategoryCannotRoute(t *testing.T) {
+	if categoryAvailable("unmapped-category", map[string]bool{"data.inspect": true}) {
+		t.Fatal("a route must map to executable capabilities")
+	}
+	if n := centroidDims(map[string][]float64{"valid": {1, 2}, "missing": {}}); n != 0 {
+		t.Fatal("empty centroid accepted", n)
+	}
+}

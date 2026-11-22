@@ -64,21 +64,12 @@ func registerPlans(reg *mcp.Registry, d Deps) {
 			if slugErr != nil {
 				return mcp.Fail(trace(ctx), slugErr.Error()), nil
 			}
-			if !argBool(args, "overwrite", false) {
-				existing, err := plans.Load(d.Cfg.Root(), slug)
-				if err == nil && existing.Slug != "" {
-					return mcp.Fail(trace(ctx), fmt.Sprintf("plan %q already exists (revision %d); use plan.update or pass overwrite=true", slug, existing.Revision)), nil
-				}
-				if err != nil && !os.IsNotExist(err) {
-					return mcp.Fail(trace(ctx), "cannot read existing plan: "+err.Error()), nil
-				}
-			}
 			warnings := []string{}
 			stages := []plans.Stage{}
 			seenStage := map[string]bool{}
 			if rawValue, present := args["stages"]; present && rawValue != nil {
 				if _, isArray := rawValue.([]any); !isArray {
-					warnings = append(warnings, "stages must be an array; default stages were used")
+					return mcp.Fail(trace(ctx), "stages must be an array"), nil
 				}
 			}
 			if raw, ok := args["stages"].([]any); ok && len(raw) > 0 {
@@ -114,6 +105,9 @@ func registerPlans(reg *mcp.Registry, d Deps) {
 					seenStage[cleanID] = true
 					stages = append(stages, plans.Stage{ID: cleanID, Goal: goal, Status: status, TimeboxMinute: timebox})
 				}
+				if skipped > 0 && len(stages) == 0 {
+					return mcp.Fail(trace(ctx), "stages must include a stage with an id"), nil
+				}
 				if skipped > 0 {
 					warnings = append(warnings, fmt.Sprintf("skipped %d malformed stage(s)", skipped))
 				}
@@ -121,14 +115,30 @@ func registerPlans(reg *mcp.Registry, d Deps) {
 			if len(stages) == 0 {
 				stages = append(stages, plans.DefaultStages...)
 			}
+			scenario := argMap(args, "mandatory_scenario")
+			if _, present := args["mandatory_scenario"]; present && scenario == nil {
+				return mcp.Fail(trace(ctx), "mandatory_scenario must be an object"), nil
+			}
 			plan := plans.Plan{
 				Slug:              slug,
 				Revision:          1,
 				Task:              argString(args, "task"),
-				MandatoryScenario: argMap(args, "mandatory_scenario"),
+				MandatoryScenario: scenario,
 				Stages:            stages,
 			}
-			if err := plans.Save(d.Cfg.Root(), plan); err != nil {
+			err := plans.WithLock(ctx, d.Cfg.Root(), slug, func() error {
+				if !argBool(args, "overwrite", false) {
+					existing, err := plans.Load(d.Cfg.Root(), slug)
+					if err == nil && existing.Slug != "" {
+						return fmt.Errorf("plan %q already exists (revision %d); use plan.update or pass overwrite=true", slug, existing.Revision)
+					}
+					if err != nil && !os.IsNotExist(err) {
+						return fmt.Errorf("cannot read existing plan: %w", err)
+					}
+				}
+				return plans.Save(d.Cfg.Root(), plan)
+			})
+			if err != nil {
 				return mcp.Fail(trace(ctx), err.Error()), nil
 			}
 			if d.Metrics != nil {
@@ -172,31 +182,36 @@ func registerPlans(reg *mcp.Registry, d Deps) {
 			if !plans.ValidStatus(status) {
 				return mcp.Fail(trace(ctx), fmt.Sprintf("invalid status %q", status)), nil
 			}
-			plan, err := plans.Load(d.Cfg.Root(), slug)
+			var plan plans.Plan
+			err := plans.WithLock(ctx, d.Cfg.Root(), slug, func() error {
+				var err error
+				plan, err = plans.Load(d.Cfg.Root(), slug)
+				if err != nil {
+					return err
+				}
+				// Never let the slug stored inside the file redirect the write to a
+				// different plan than the one just read.
+				plan.Slug = slug
+				found := false
+				for i := range plan.Stages {
+					if plan.Stages[i].ID != stageID {
+						continue
+					}
+					plan.Stages[i].Status = status
+					if goal := argString(args, "goal"); goal != "" {
+						plan.Stages[i].Goal = goal
+					}
+					plan.Stages[i].Evidence = append(plan.Stages[i].Evidence, argStringSlice(args, "evidence")...)
+					found = true
+					break
+				}
+				if !found {
+					return fmt.Errorf("unknown stage %s", stageID)
+				}
+				plan.Revision++
+				return plans.Save(d.Cfg.Root(), plan)
+			})
 			if err != nil {
-				return mcp.Fail(trace(ctx), err.Error()), nil
-			}
-			// Never let the slug stored inside the file redirect the write to a
-			// different plan than the one just read.
-			plan.Slug = slug
-			found := false
-			for i := range plan.Stages {
-				if plan.Stages[i].ID != stageID {
-					continue
-				}
-				plan.Stages[i].Status = status
-				if goal := argString(args, "goal"); goal != "" {
-					plan.Stages[i].Goal = goal
-				}
-				plan.Stages[i].Evidence = append(plan.Stages[i].Evidence, argStringSlice(args, "evidence")...)
-				found = true
-				break
-			}
-			if !found {
-				return mcp.Fail(trace(ctx), "unknown stage "+stageID), nil
-			}
-			plan.Revision++
-			if err := plans.Save(d.Cfg.Root(), plan); err != nil {
 				return mcp.Fail(trace(ctx), err.Error()), nil
 			}
 			if d.Metrics != nil {

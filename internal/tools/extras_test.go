@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"testing/synctest"
 )
 
 func TestClassificationTool(t *testing.T) {
@@ -303,4 +304,35 @@ func TestMimeForExt(t *testing.T) {
 			t.Fatalf("mimeForExt(%q) = %q, want %q", ext, got, want)
 		}
 	}
+}
+
+func TestSameTitleReportsKeepIndependentArtifacts(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		reg, _ := testRegistry(t)
+		var ids []string
+		for _, body := range []string{"northbound", "southbound"} {
+			env := call(t, reg, "reports.create", map[string]any{"title": "Service update", "sections": []any{map[string]any{"body": body}}})
+			if env.Status != "ok" {
+				t.Fatalf("create: %+v", env)
+			}
+			ids = append(ids, env.Data.(map[string]any)["artifact_id"].(string))
+		}
+		if ids[0] == ids[1] {
+			t.Fatalf("two reports returned the same artifact %s", ids[0])
+		}
+		for i, body := range []string{"northbound", "southbound"} {
+			result := call(t, reg, "documents.get", map[string]any{"artifact_id": ids[i]})
+			if result.Status != "ok" || !strings.Contains(result.Data.(map[string]any)["text"].(string), body) {
+				t.Fatalf("read %s: %+v", ids[i], result)
+			}
+			indexed := call(t, reg, "knowledge.index", map[string]any{"artifact_id": ids[i]})
+			if indexed.Status != "ok" {
+				t.Fatalf("index %s: %+v", ids[i], indexed)
+			}
+			hits := call(t, reg, "knowledge.search", map[string]any{"query": body, "index_id": indexed.Data.(map[string]any)["index_id"]})
+			if hits.Status != "ok" || len(hits.Sources) != 1 || hits.Sources[0].ArtifactID != ids[i] {
+				t.Fatalf("lookup %s: %+v", body, hits)
+			}
+		}
+	})
 }

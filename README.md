@@ -2,7 +2,7 @@
 
 Local Codex plugin backed by a typed MCP capability layer. Codex is the main reasoning engine, Skills define domain workflows, the local MCP server exposes deterministic and AI-powered capabilities, and the experimental Fly router recommends capability routes while Codex keeps the final decision.
 
-Status: v0.16.99. MCP runtime (41 tools), 29 standard-compliant skills (validator-enforced), Go test coverage enforced at an 80% gate, session hooks, durable learnings, Codex subagents, four harness adapters, a full control plane (SQLite store, daemon, TUI, worktrees, agent runs, risk scoring, session handoff), staged build plans, PDF/XLSX processing, Fly v2 (keyword + embeddings + kNN memory + mushroom-body learning + LLM classifier), Postgres/MinIO backends, demo dashboard, install profiles/repair, a quality gate with a Go-enabled Docker target, a Fly A/B benchmark, plan review, security review, a clean-checkout rehearsal command, a resource-aware planner (API resource questionnaire, provider probes, per-track variants), a Telegram integration capability for built projects and the evaluation subsystem (deterministic aggregation, calibration, loop decisions and bundle freezing) are in place.
+Status: v0.17.0. MCP runtime (41 tools), 34 standard-compliant skills (validator-enforced), Go test coverage enforced at an 80% gate, session hooks, durable learnings, Codex subagents, four harness adapters, a full control plane (SQLite store, daemon, TUI, worktrees, agent runs, risk scoring, session handoff), staged build plans, PDF/XLSX processing, Fly v2 (keyword + embeddings + kNN memory + mushroom-body learning + LLM classifier), Postgres/MinIO backends, demo dashboard, install profiles/repair, a quality gate with a Go-enabled Docker target, a Fly A/B benchmark, plan review, security review, a clean-checkout rehearsal command, a resource-aware planner (API resource questionnaire, provider probes, per-track variants), a Telegram integration capability for built projects and the evaluation subsystem (deterministic aggregation, calibration, loop decisions and bundle freezing) are in place.
 
 ## Contents
 
@@ -31,14 +31,14 @@ Status: v0.16.99. MCP runtime (41 tools), 29 standard-compliant skills (validato
 - [Testing](#testing)
 - [Known limitations](#known-limitations)
 - [Troubleshooting](#troubleshooting)
-- [Hackathon day](#hackathonkit-day)
+- [Hackathon day](#hackathon-day)
 
 ## Architecture
 
 ```text
 Codex (reasoning, final decisions)
   |
-  |-- Skills (29): workflow prompts, progressive disclosure, evidence contracts
+  |-- Skills (34): workflow prompts, progressive disclosure, evidence contracts
   |     task-router, build-planner, theme-research, rag-research, document-intelligence,
   |     data-analysis, time-series-analysis, government-services, kazakh-language,
   |     report-builder, judge, project-cost, roast-project, cp-expert-refactoring,
@@ -61,7 +61,7 @@ Codex (reasoning, final decisions)
         charts/reports.*    SVG and markdown/HTML artifacts
         audio/vision.*      OpenAI transcription and vision (need OPENAI_API_KEY)
   |
-  |-- Hooks (Node 18+): SessionStart context injection, PostToolUse events, Stop handoff
+  |-- Hooks (Node 18+): SessionStart context injection, PostToolUse events, SessionEnd handoff
   |
   |-- Control plane (hackathonkit-ctl): JSONL -> SQLite ingest, daemon API, TUI, worktrees, risk, handoff
   |
@@ -81,6 +81,8 @@ Codex (reasoning, final decisions)
 - Codex CLI (`npm install -g @openai/codex` or the official installer)
 - Optional: Go 1.27+ for local development without Docker
 - Optional: `OPENAI_API_KEY` for embeddings, `audio.transcribe`, `vision.analyze` and the LLM classifier in Fly
+
+On Unix, keep the local `bin/` directory and executable writable only by their owner (`chmod go-w bin bin/hackathonkit-mcp`).
 
 Fallback without Docker: if `bin/hackathonkit-mcp.exe` (or `bin/hackathonkit-mcp`) exists, the launcher runs it directly, so the whole kit works on a machine without a running Docker engine.
 
@@ -166,9 +168,9 @@ The standard is enforced mechanically: `hackathonkit-mcp --validate-skills` (or 
 |---|---|
 | `SessionStart` | Injects a compact context block: routing mode, current plan stage, top learnings, pending eval decisions |
 | `PostToolUse` | Appends `{ts, type, session_id, tool}` to `logs/session-events.jsonl` for the control plane |
-| `Stop` | Appends `session_end` to `logs/sessions.jsonl` and removes only that session's file under `data/control/sessions/` |
+| `SessionEnd` | Appends `session_end` to `logs/sessions.jsonl` and removes only that session's file under `data/control/sessions/` |
 
-The context block comes from `hackathonkit-mcp --session-context` (local binary, then `docker compose`, then a shell fallback). Active sessions own one file each under `data/control/sessions/` (gitignored, no shared read-modify-write), so overlapping start/stop operations cannot erase each other. Events use the session id from the hook payload when present, otherwise the most recently started active session. The project root is resolved from validated candidates (explicit override, then the working directory tree, then the in-repo plugin), so a cached plugin install never writes into `~/.codex`. `node plugins/hackathonkit/scripts/hooks.test.js` verifies overlap, cached roots, unsafe ids and the Windows `.exe` lookup; `scripts/doctor.sh` runs it.
+The context block comes from `hackathonkit-mcp --session-context` (local binary, then `docker compose`, then a shell fallback). Active sessions own one file each under `data/control/sessions/` (gitignored, no shared read-modify-write), so overlapping start/stop operations cannot erase each other. Tool events use the session ID from the hook payload when present, otherwise the most recently started active session. Session-end events require the thread ID. A compaction refreshes the current session without logging another start. The project root is resolved from validated candidates (explicit override, then the working directory tree, then the in-repo plugin), so a cached plugin install never writes into `~/.codex`. `node plugins/hackathonkit/scripts/hooks.test.js` verifies overlap, cached roots, unsafe ids and the Windows `.exe` lookup; `scripts/doctor.sh` runs it.
 
 ## Learnings
 
@@ -425,7 +427,7 @@ Artifacts always land in `data/artifacts` (offline-safe). With the environment c
 
 | Key | Default | Meaning |
 |---|---|---|
-| `openai.chat_model` | `deepseek-v4-flash` | chat/classification model |
+| `openai.chat_model` | `gpt-4o-mini` | chat/classification model (override for custom `OPENAI_BASE_URL` services) |
 | `openai.vision_model` | `gpt-4o-mini` | vision model |
 | `openai.transcribe_model` | `whisper-1` | audio model |
 | `openai.embedding_model` | `text-embedding-3-small` | Fly embeddings |
@@ -462,6 +464,12 @@ Artifacts always land in `data/artifacts` (offline-safe). With the environment c
 
 Every call gets a `trace_id` (`kit-...`) that flows through the envelope, logs and stored records.
 
+## Upgrading an existing installation
+
+The plugin and MCP server ID is `hackathonkit`. Environment settings specific to the kit use the `HACKATHONKIT_` prefix. When moving from a differently named installation, copy your existing settings to the corresponding keys in `.env.example`. Remove the previous plugin registration before enabling the new one so the host loads only one copy. Restart the host after setup.
+
+To reuse existing Docker volumes, keep the existing Compose project name in `COMPOSE_PROJECT_NAME`, and set `POSTGRES_USER`, `POSTGRES_DB`, `MINIO_ROOT_USER`, and `MINIO_BUCKET` to the values already in use. Keep the associated passwords in your local `.env`.
+
 ## Plugin packaging
 
 - `plugins/hackathonkit/.codex-plugin/plugin.json` - name, version, `skills: "./skills/"`, `mcpServers: "./.mcp.json"`.
@@ -479,12 +487,14 @@ The skill directory stays the single source of truth; `scripts/sync-harness.sh` 
 | Harness | Files | Notes |
 |---|---|---|
 | Codex | plugin + `.codex/config.toml`, `.codex/AGENTS.md`, `.codex/agents/{researcher,reviewer,evaluator}.toml` | full support: skills, hooks, subagents, MCP |
-| Claude Code | `.claude-plugin/plugin.json`, `.claude-plugin/marketplace.json`, generated `.claude/skills` | MCP command uses a repository-relative compose file |
+| Claude Code | `.claude-plugin/plugin.json`, `.claude-plugin/marketplace.json`, generated `.claude/skills` | MCP uses the shared launcher. For a cached installation, set `HACKATHONKIT_REPO_ROOT` to the prepared checkout. |
 | OpenCode | `.opencode/opencode.json`, `.opencode/README.md` | loads `AGENTS.md`, registers the MCP server |
 | Cursor | `.cursor/rules/hackathonkit.mdc` | conventions and MCP usage |
 | Any harness | `AGENTS.md` | portable instructions |
 
-Install profiles: `scripts/setup.sh --profile core` excludes the explicit-only evaluation skills from the generated mirrors (the plugin itself always ships all 29). `scripts/repair.sh` regenerates `.mcp.json`, mirrors and install state; `scripts/uninstall.sh [--yes]` removes generated artifacts (dry run without `--yes`). `configs/install-state.json` records version, profile, runtime and adapters.
+On Linux and macOS, skill and command mirrors use atomic directory exchange when the filesystem supports it. If a changed, populated mirror cannot be replaced atomically, sync reports the failure and leaves the current mirror available. For a maintenance update, stop processes reading the mirror and run `HACKATHONKIT_SYNC_OFFLINE=1 sh scripts/sync-harness.sh` to allow a backup-and-restore swap.
+
+Install profiles: `scripts/setup.sh --profile core` excludes skills with `allow_implicit_invocation: false` from the generated mirrors (the plugin itself always ships all 34 skills). `scripts/repair.sh` regenerates `.mcp.json`, mirrors and install state; `scripts/uninstall.sh [--yes]` removes generated artifacts (dry run without `--yes`). `configs/install-state.json` records version, profile, runtime and adapters.
 
 ## Scripts
 
@@ -511,8 +521,8 @@ plugins/hackathonkit/          Codex plugin (single source of truth for skills)
   .codex-plugin/plugin.json
   .mcp.json               generated by scripts/setup (absolute launcher path; prefers bin/, falls back to docker compose)
   .mcp.json.template      template with {{REPO_ROOT}} placeholder
-  hooks/codex-hooks.json  SessionStart / PostToolUse / Stop hook registration
-  skills/                 29 skills, each with SKILL.md + agents/openai.yaml (+ references/)
+  hooks/codex-hooks.json  SessionStart / PostToolUse / SessionEnd hook registration
+  skills/                 34 skills, each with SKILL.md + agents/openai.yaml (+ references/)
   scripts/                launchers and hooks.js (session lifecycle)
 .agents/plugins/           repo marketplace
 .agents/skills/            generated fallback mirror (scripts/sync-skills)
@@ -629,7 +639,7 @@ This is the verification path for the Docker stack and native Windows hooks, whi
 - The MCP layer has no internet access: `theme-research` uses the host's web search when available and otherwise works from the provided corpus, marking external gaps explicitly.
 - Codex plugin install writes to `~/.codex`; after editing plugin files bump the plugin version and re-run setup. The `.codex/config.toml` fallback works without the plugin.
 - Session hooks require Node 18+ on the host (Codex CLI already needs Node). Every hook is best-effort and never blocks a session; without Node the hooks are skipped.
-- `--profile core` filters only the generated skill mirrors; the Codex plugin always ships all 29 skills.
+- `--profile core` filters only the generated skill mirrors; the Codex plugin always ships all 34 skills.
 - Learning recall uses embeddings when `OPENAI_API_KEY` is set and keyword overlap otherwise; learnings never leave the local repository.
 - The control plane is optional: hooks and MCP work without it. `demo-api /control` reads SQLite read-only and shows a hint until `hackathonkit-ctl ingest` or the daemon has run.
 - `hackathonkit-ctl run` requires the Codex CLI on `PATH` and `git` for `--worktree`; the daemon binds loopback only and never proxies to the network.
@@ -645,7 +655,7 @@ This is the verification path for the Docker stack and native Windows hooks, whi
 | Symptom | Fix |
 |---|---|
 | Plugin tools missing in Codex | Start a new session; re-run `scripts/setup.sh`; verify with `scripts/doctor.sh` |
-| `docker: command not found` | Build local binaries: `go build -o bin/hackathonkit-mcp ./cmd/hackathonkit-mcp`; the launcher prefers them |
+| `docker: command not found` | Build local binaries: `go build -trimpath -buildvcs=false -o bin/hackathonkit-mcp ./cmd/hackathonkit-mcp`; the launcher prefers them |
 | MCP handshake fails | `go run ./cmd/hackathonkit-mcp --selftest`; check `plugins/hackathonkit/.mcp.json` exists and points at the right root |
 | No embeddings / Fly falls back | Set `OPENAI_API_KEY`; the hash encoder is the intentional fallback |
 | Artifacts not visible in Postgres/MinIO | Check `POSTGRES_DSN` / `MINIO_*` and the `storage_backend_error` warnings on stderr |

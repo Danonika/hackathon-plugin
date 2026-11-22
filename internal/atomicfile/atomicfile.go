@@ -65,16 +65,7 @@ func Write(path string, data []byte, mode os.FileMode) error {
 		return err
 	}
 	tmpName := tmp.Name()
-	if mode&0o077 == 0 && runtime.GOOS != "windows" && tightenDir(dir) {
-		// MkdirAll leaves an existing directory's mode untouched, so tighten it
-		// explicitly to keep the private-directory guarantee for state files.
-		// Done after CreateTemp so an unwritable directory still fails here.
-		if err := os.Chmod(dir, dirMode); err != nil {
-			tmp.Close()
-			os.Remove(tmpName)
-			return err
-		}
-	}
+
 	if _, err := tmp.Write(data); err != nil {
 		tmp.Close()
 		os.Remove(tmpName)
@@ -129,16 +120,4 @@ func isDirSyncUnsupported(err error) bool {
 	return errors.Is(err, syscall.EINVAL) ||
 		errors.Is(err, syscall.ENOTSUP) ||
 		errors.Is(err, syscall.EOPNOTSUPP)
-}
-
-// tightenDir reports whether dir is safe to chmod to a private mode. It refuses
-// "." (returned by filepath.Dir for a path with no directory component) and
-// filesystem/volume roots, so this package never changes the mode of the
-// process working directory or the filesystem root.
-func tightenDir(dir string) bool {
-	clean := filepath.Clean(dir)
-	if clean == "." {
-		return false
-	}
-	return filepath.Dir(clean) != clean
 }

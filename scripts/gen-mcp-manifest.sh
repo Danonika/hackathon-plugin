@@ -9,7 +9,6 @@ case "$SELF" in
   *) SELF=$(command -v -- "$SELF" 2>/dev/null || echo "$SELF") ;;
 esac
 ROOT="${1:-$(CDPATH= cd -- "$(dirname -- "$SELF")/.." && pwd)}"
-TEMPLATE="$ROOT/plugins/hackathonkit/.mcp.json.template"
 
 if [ ! -d "$ROOT" ]; then
   echo "[mcp-manifest] repository root not found: '$ROOT'" >&2
@@ -24,6 +23,7 @@ ROOT="$(CDPATH= cd -- "$ROOT" 2>/dev/null && pwd -P)" || {
   echo "[mcp-manifest] cannot resolve repository root: '$REQUESTED_ROOT'" >&2
   exit 1
 }
+TEMPLATE="$ROOT/plugins/hackathonkit/.mcp.json.template"
 if [ ! -f "$TEMPLATE" ]; then
   echo "[mcp-manifest] template not found: $TEMPLATE" >&2
   exit 1
@@ -43,7 +43,12 @@ json_escape() {
   printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g'
 }
 
-MANIFEST="$ROOT/plugins/hackathonkit/.mcp.json"
+. "$(dirname -- "$0")/private-write.sh"
+plugin="$ROOT/plugins/hackathonkit"
+for path in "$ROOT/plugins" "$plugin" "$plugin/scripts" "$plugin/scripts/hackathonkit-mcp-launcher.sh"; do
+  private_write "$path"
+done
+MANIFEST="$plugin/.mcp.json"
 TMP=$(mktemp "$ROOT/plugins/hackathonkit/.mcp.json.tmp.XXXXXX")
 cleanup_manifest() { rm -f "$TMP"; }
 trap cleanup_manifest EXIT
@@ -56,37 +61,29 @@ ROOT_JSON=$(json_escape "$ROOT") || exit 1
 LAUNCHER_JSON=$(json_escape "hackathonkit-mcp-launcher.sh") || exit 1
 export ROOT_JSON LAUNCHER_JSON
 awk '
-  BEGIN { root = ENVIRON["ROOT_JSON"]; launcher = ENVIRON["LAUNCHER_JSON"] }
   {
-    pos = 1
-    while ((i = index(substr($0, pos), "{{REPO_ROOT}}")) > 0) {
-      start = pos + i - 1
-      $0 = substr($0, 1, start - 1) root substr($0, start + 13)
-      pos = start + length(root)
+    line = $0
+    while (match(line, /\{\{[^{}]+\}\}/)) {
+      printf "%s", substr(line, 1, RSTART-1)
+      key = substr(line, RSTART, RLENGTH)
+      if (key == "{{REPO_ROOT}}") printf "%s", ENVIRON["ROOT_JSON"]
+      else if (key == "{{MCP_LAUNCHER}}") printf "%s", ENVIRON["LAUNCHER_JSON"]
+      else { print "unknown manifest placeholder: " key > "/dev/stderr"; exit 1 }
+      line = substr(line, RSTART + RLENGTH)
     }
-    pos = 1
-    while ((i = index(substr($0, pos), "{{MCP_LAUNCHER}}")) > 0) {
-      start = pos + i - 1
-      $0 = substr($0, 1, start - 1) launcher substr($0, start + 16)
-      pos = start + length(launcher)
-    }
-    print
+    print line
   }
 ' "$TEMPLATE" > "$TMP"
 
-if grep -q -e "{{REPO_ROOT}}" -e "{{MCP_LAUNCHER}}" "$TMP"; then
-  echo "[mcp-manifest] unexpanded placeholder remains; keeping the previous manifest" >&2
-  exit 1
-fi
 if command -v python3 >/dev/null 2>&1; then
-  if ! python3 -c 'import json,sys; json.load(open(sys.argv[1]))' "$TMP" 2>/dev/null; then
-    echo "[mcp-manifest] rendered manifest is not valid JSON; keeping the previous manifest" >&2
-    exit 1
-  fi
+  python3 -c 'import json,sys; json.load(open(sys.argv[1]))' "$TMP"
+elif command -v node >/dev/null 2>&1; then
+  node -e 'JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"))' "$TMP"
+elif command -v jq >/dev/null 2>&1; then
+  jq -e 'type == "object"' "$TMP" >/dev/null
 else
-  # Without a validator a malformed manifest could be published and break every
-  # MCP client; make the reduced guarantee visible.
-  echo "[mcp-manifest] warning: python3 unavailable; cannot validate the rendered manifest" >&2
+  echo "[mcp-manifest] Python, Node or jq is required to validate the manifest" >&2
+  exit 1
 fi
 
 chmod 0644 "$TMP"

@@ -15,10 +15,11 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
+
+	"hackathonkit.local/agentkit/internal/filelock"
 )
 
 const (
@@ -242,7 +243,7 @@ func (s *Store) Record(ctx context.Context, in RecordInput) (RecordResult, error
 	}
 	if vector != nil {
 		for i := range doc.Learnings {
-			if doc.Learnings[i].ID == result.Learning.ID {
+			if normalizeKey(doc.Learnings[i].Trigger, doc.Learnings[i].Insight) == key {
 				doc.Learnings[i].Vector = vector
 				result.Learning.Vector = vector
 				break
@@ -440,93 +441,8 @@ func (s *Store) embed(ctx context.Context, text string) ([]float64, error) {
 }
 
 // lockFile serializes load-modify-save across processes sharing this path.
-const lockStaleAfter = 30 * time.Second
-
-// lockOwnerPID reads the pid recorded in an existing lock file, or 0 when it is
-// absent/unreadable/malformed.
-func lockOwnerPID(lockPath string) int {
-	data, err := os.ReadFile(lockPath)
-	if err != nil {
-		return 0
-	}
-	pid, err := strconv.Atoi(strings.TrimSpace(string(data)))
-	if err != nil || pid <= 0 {
-		return 0
-	}
-	return pid
-}
-
-// processAlive is implemented per platform in proc_unix.go / proc_windows.go.
-
 func (s *Store) lockFile() (func(), error) {
-	lockPath := s.path + ".lock"
-	if err := os.MkdirAll(filepath.Dir(lockPath), 0o755); err != nil {
-		return nil, err
-	}
-	mine := os.Getpid()
-	for i := 0; i < 50; i++ {
-		f, err := os.OpenFile(lockPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
-		if err == nil {
-			// The pid record is load-bearing: unlock() only removes a lock whose
-			// pid matches, so a failed write would leave an unremovable lock.
-			if _, werr := fmt.Fprintf(f, "%d\n", mine); werr != nil {
-				f.Close()
-				_ = os.Remove(lockPath)
-				return nil, fmt.Errorf("write learning lock %s: %w", lockPath, werr)
-			}
-			if cerr := f.Close(); cerr != nil {
-				_ = os.Remove(lockPath)
-				return nil, fmt.Errorf("close learning lock %s: %w", lockPath, cerr)
-			}
-			return func() {
-				// Only remove a lock this process still owns: it may have been
-				// reclaimed as stale and re-acquired by a peer.
-				if lockOwnerPID(lockPath) == mine {
-					_ = os.Remove(lockPath)
-				}
-			}, nil
-		}
-		if !os.IsExist(err) {
-			return nil, err
-		}
-		// Reclaim a lock only when its owner process is actually gone, or when
-		// no pid was recorded and the file is older than the stale window.
-		// mtime alone would evict a slow-but-live holder.
-		owner := lockOwnerPID(lockPath)
-		reclaim := false
-		if owner != 0 {
-			reclaim = !processAlive(owner)
-		} else if info, statErr := os.Stat(lockPath); statErr == nil && time.Since(info.ModTime()) > lockStaleAfter {
-			reclaim = true
-		}
-		if reclaim && reclaimLock(lockPath, owner) {
-			continue
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
-	return nil, fmt.Errorf("learning store is locked by another process")
-}
-
-// reclaimLock removes a stale lock without deleting a peer's freshly created
-// lock. It atomically detaches the inode, verifies the detached file still
-// records the stale owner, and only then deletes it; if a peer re-created the
-// lock between the liveness check and the rename, the detached inode is
-// restored instead. This closes the remove-by-path TOCTOU window.
-func reclaimLock(lockPath string, stalePID int) bool {
-	detached := fmt.Sprintf("%s.stale.%d.%d", lockPath, os.Getpid(), time.Now().UnixNano())
-	if err := os.Rename(lockPath, detached); err != nil {
-		return false
-	}
-	if lockOwnerPID(detached) == stalePID {
-		_ = os.Remove(detached)
-		return true
-	}
-	if _, err := os.Lstat(lockPath); os.IsNotExist(err) {
-		_ = os.Rename(detached, lockPath)
-	} else {
-		_ = os.Remove(detached)
-	}
-	return false
+	return filelock.Acquire(s.path+".lock", time.Second)
 }
 
 func (s *Store) load() (fileFormat, error) {
@@ -562,13 +478,12 @@ func (s *Store) save(doc fileFormat) error {
 		return err
 	}
 	tmpName := tmp.Name()
+	defer os.Remove(tmpName)
 	if _, err := tmp.Write(append(data, '\n')); err != nil {
 		tmp.Close()
-		os.Remove(tmpName)
 		return err
 	}
 	if err := tmp.Close(); err != nil {
-		os.Remove(tmpName)
 		return err
 	}
 	return os.Rename(tmpName, s.path)

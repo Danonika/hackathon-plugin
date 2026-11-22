@@ -53,7 +53,7 @@ func TestXLSXSheetFileFallbackOrdering(t *testing.T) {
 		"xl/worksheets/sheet2.xml":  inlineSheet([]string{"Alpha"}),
 		"xl/worksheets/sheetX.xml":  inlineSheet([]string{"Gamma"}),
 	})
-	sheets, warnings, err := readXLSXSheets(path)
+	sheets, warnings, err := readXLSXSheets(t.Context(), path)
 	if err != nil {
 		t.Fatalf("readXLSXSheets: %v (warnings %v)", err, warnings)
 	}
@@ -70,7 +70,7 @@ func TestXLSXSheetFileFallbackOrdering(t *testing.T) {
 		t.Fatalf("unparseable sheet number must sort last: %+v", sheets[2].Table.Headers)
 	}
 
-	tbl, _, err := readXLSXTable(path, "Sheet1")
+	tbl, _, err := readXLSXTable(t.Context(), path, "Sheet1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -87,7 +87,7 @@ func TestXLSXMissingSheetAndNoWorksheets(t *testing.T) {
 		"xl/workbook.xml":            wbXML,
 		"xl/_rels/workbook.xml.rels": relsXML,
 	})
-	sheets, warnings, err := readXLSXSheets(missing)
+	sheets, warnings, err := readXLSXSheets(t.Context(), missing)
 	if err != nil {
 		t.Fatalf("missing sheet file must be a warning, got error %v", err)
 	}
@@ -97,17 +97,17 @@ func TestXLSXMissingSheetAndNoWorksheets(t *testing.T) {
 	if len(warnings) == 0 || warnings[0] == "" {
 		t.Fatalf("expected missing-sheet warning, got %v", warnings)
 	}
-	if _, _, err := readXLSXTable(missing, ""); err == nil {
+	if _, _, err := readXLSXTable(t.Context(), missing, ""); err == nil {
 		t.Fatal("readXLSXTable must fail when the sheet file is missing")
 	}
 
 	empty := buildZipFiles(t, map[string]string{
 		"xl/workbook.xml": `<?xml version="1.0" encoding="UTF-8"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheets></sheets></workbook>`,
 	})
-	if _, _, err := readXLSXSheets(empty); err == nil {
+	if _, _, err := readXLSXSheets(t.Context(), empty); err == nil {
 		t.Fatal("readXLSXSheets must fail without worksheets")
 	}
-	if _, _, err := readXLSXTable(empty, ""); err == nil {
+	if _, _, err := readXLSXTable(t.Context(), empty, ""); err == nil {
 		t.Fatal("readXLSXTable must fail without worksheets")
 	}
 
@@ -115,7 +115,7 @@ func TestXLSXMissingSheetAndNoWorksheets(t *testing.T) {
 		"xl/sharedStrings.xml":     `<sst><si><t>broken`,
 		"xl/worksheets/sheet1.xml": inlineSheet([]string{"Kept"}),
 	})
-	sheets, warnings, err = readXLSXSheets(badShared)
+	sheets, warnings, err = readXLSXSheets(t.Context(), badShared)
 	if err != nil {
 		t.Fatalf("malformed sharedStrings must not fail: %v", err)
 	}
@@ -142,7 +142,7 @@ func TestXLSXInlineStringsAndRefFallbacks(t *testing.T) {
 		`<c t="inlineStr"><is><t>NoRef</t></is></c>` +
 		`</row></sheetData></worksheet>`
 	path := buildZipFiles(t, map[string]string{"xl/worksheets/sheet1.xml": sheet})
-	tbl, _, err := readXLSXTable(path, "")
+	tbl, _, err := readXLSXTable(t.Context(), path, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -181,7 +181,7 @@ func TestXLSXStylesAdvanced(t *testing.T) {
 		"xl/_rels/workbook.xml.rels": relsXML,
 		"xl/worksheets/sheet1.xml":   sheet,
 	})
-	sheets, warnings, err := readXLSXSheets(path)
+	sheets, warnings, err := readXLSXSheets(t.Context(), path)
 	if err != nil {
 		t.Fatalf("readXLSXSheets: %v (%v)", err, warnings)
 	}
@@ -248,7 +248,7 @@ func TestXLSXCellBeyondMaxColumn(t *testing.T) {
 		`<row r="1"><c r="ZZZZZ1" t="inlineStr"><is><t>far</t></is></c><c r="A1" t="inlineStr"><is><t>near</t></is></c></row>` +
 		`</sheetData></worksheet>`
 	path := buildZipFiles(t, map[string]string{"xl/worksheets/sheet1.xml": sheet})
-	tbl, _, err := readXLSXTable(path, "")
+	tbl, _, err := readXLSXTable(t.Context(), path, "")
 	if err != nil {
 		t.Fatal(err)
 	}

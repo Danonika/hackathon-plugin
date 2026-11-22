@@ -10,6 +10,8 @@ bin
 data
 logs
 evals
+**/logs
+**/evals
 .agents/skills
 .claude/skills
 .opencode/commands
@@ -33,6 +35,24 @@ configs/resources.json
 plugins/hackathonkit/.mcp.json
 # Drop documentation from the build context; no Go package embeds markdown
 # (the embedded assets are cmd/demo-api/static/*.html|js), so only the root
-# README is kept. Add an explicit negation here if a go:embed'd .md appears.
+# README and runtime skill documents are kept.
 **/*.md
 !README.md
+!plugins/hackathonkit/skills/**/*.md
+
+# Credentials and host build outputs are never build inputs.
+**/*.key
+**/*.pem
+**/*.p12
+**/*.pfx
+**/*.exe
+**/.DS_Store
+**/.coverage
+hackathonkit-mcp
+hackathonkit-ctl
+hackathonkit-demo-api
+hackathonkit-rehearse
+/demo-api
+/fly-bench
+/fly-train
+docs/ocr-artifacts

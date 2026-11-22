@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"hackathonkit.local/agentkit/internal/atomicfile"
+	"hackathonkit.local/agentkit/internal/filelock"
 )
 
 // Def describes one externally billable provider the harness can use.
@@ -120,6 +121,8 @@ func LookupTrack(ref string) (Track, bool) {
 	if len(number) == 1 && number >= "0" && number <= "9" {
 		number = "0" + number
 	}
+	matches := 0
+	var partial Track
 	for _, t := range tracks {
 		prefix, slug, ok := strings.Cut(t.ID, "-")
 		if !ok {
@@ -131,12 +134,15 @@ func LookupTrack(ref string) (Track, bool) {
 			slug == ref,
 			slugRef != "" && slug == slugRef,
 			slugRef == "" && number == prefix,
-			label == ref,
-			len(ref) >= 4 && strings.Contains(label, ref):
+			label == ref:
 			return t, true
 		}
+		if len(ref) >= 4 && strings.Contains(label, ref) {
+			partial = t
+			matches++
+		}
 	}
-	return Track{}, false
+	return partial, matches == 1
 }
 
 // Path returns the profile location under the repository root.
@@ -182,6 +188,23 @@ func Load(root string) (Profile, bool, error) {
 	return profile, true, nil
 }
 
+// Update serializes profile read-modify-write for both MCP tools and CLI callers.
+func Update(root string, mutate func(*Profile) error) error {
+	release, err := filelock.Acquire(Path(root)+".lock", 5*time.Second)
+	if err != nil {
+		return err
+	}
+	defer release()
+	profile, _, err := Load(root)
+	if err != nil {
+		return err
+	}
+	if err = mutate(&profile); err != nil {
+		return err
+	}
+	return Save(root, profile)
+}
+
 // Save writes the profile atomically with least-privilege permissions.
 func Save(root string, profile Profile) error {
 	// Profile is passed by value but Claimed is a shared map; copy it so Save
@@ -211,8 +234,7 @@ func Save(root string, profile Profile) error {
 	// representations does not have its claim silently reverted on save.
 	profile.CodexPro = profile.CodexPro || profile.Claimed["codex_pro"]
 	profile.Claimed["codex_pro"] = profile.CodexPro
-	if _, ok := LookupTrack(profile.Track); ok {
-		track, _ := LookupTrack(profile.Track)
+	if track, ok := LookupTrack(profile.Track); ok {
 		profile.Track = track.ID
 	} else if strings.TrimSpace(profile.Track) == "" {
 		profile.Track = ""

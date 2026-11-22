@@ -142,3 +142,13 @@ func TestValidateRequiresPolicyForExplicitOnly(t *testing.T) {
 		t.Fatalf("explicit-only skill with policy must pass: %+v", report2.Skills)
 	}
 }
+
+func TestEmptySkillCatalog(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "plugins", "hackathonkit", "skills"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if r, err := Validate(root); err == nil || r.OK {
+		t.Fatalf("empty skill catalog passed: %+v, %v", r, err)
+	}
+}

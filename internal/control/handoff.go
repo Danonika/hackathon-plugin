@@ -3,6 +3,7 @@ package control
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -35,12 +36,12 @@ func BuildHandoff(ctx context.Context, store *Store, learn *learning.Store, root
 	}
 	handoff.Session = session
 
-	plan, ok, planErr := plans.LatestErr(root)
+	plan, ok, planErr := sessionPlan(root, session)
 	if ok {
 		handoff.Plan = &plan
 	}
 	if planErr != nil {
-		handoff.Notes = append(handoff.Notes, "latest plan unreadable: "+planErr.Error())
+		handoff.Notes = append(handoff.Notes, "session plan unavailable: "+planErr.Error())
 	}
 	if learn != nil {
 		if items, err := learn.Top(maxLearnings, 0.5); err == nil {
@@ -79,6 +80,32 @@ func BuildHandoff(ctx context.Context, store *Store, learn *learning.Store, root
 	return handoff, nil
 }
 
+// Prefer the worktree that the session actually ran in. An unresolvable
+// explicitly assigned plan is a degraded handoff, never a different project.
+func sessionPlan(root string, session Session) (plans.Plan, bool, error) {
+	roots := []string{root}
+	if session.Worktree != "" && session.Worktree != root {
+		roots = []string{session.Worktree, root}
+	}
+	for _, dir := range roots {
+		if session.PlanSlug != "" {
+			plan, err := plans.Load(dir, session.PlanSlug)
+			if os.IsNotExist(err) {
+				continue
+			}
+			return plan, err == nil, err
+		}
+		plan, found, err := plans.LatestErr(dir)
+		if found || err != nil {
+			return plan, found, err
+		}
+	}
+	if session.PlanSlug != "" {
+		return plans.Plan{}, false, fmt.Errorf("assigned plan %q was not found", session.PlanSlug)
+	}
+	return plans.Plan{}, false, nil
+}
+
 // RenderHandoff formats a handoff as a paste-ready markdown block.
 func RenderHandoff(h Handoff) string {
 	var b strings.Builder
@@ -97,7 +124,7 @@ func RenderHandoff(h Handoff) string {
 		fmt.Fprintf(&b, "- risk reasons: %s\n", line(strings.Join(h.Session.RiskReasons, "; ")))
 	}
 	if h.Plan != nil {
-		fmt.Fprintf(&b, "- plan: %s\n", plans.Summary(*h.Plan))
+		fmt.Fprintf(&b, "- plan: %s\n", line(plans.Summary(*h.Plan)))
 		if stage, ok := plans.CurrentStage(*h.Plan); ok && stage.Goal != "" {
 			fmt.Fprintf(&b, "  next: %s - %s\n", line(stage.ID), line(stage.Goal))
 		}
@@ -112,7 +139,13 @@ func RenderHandoff(h Handoff) string {
 			if ev.Status != "" {
 				label += " [" + ev.Status + "]"
 			}
-			fmt.Fprintf(&b, "  - %s %s\n", ev.TS.Format("15:04:05"), label)
+			fmt.Fprintf(&b, "  - %s %s\n", ev.TS.Format("15:04:05"), line(label))
+		}
+	}
+	if len(h.Outputs) > 0 {
+		b.WriteString("- outputs:\n")
+		for _, out := range h.Outputs {
+			fmt.Fprintf(&b, "  - %s %s\n", line(out.Ref), line(out.Summary))
 		}
 	}
 	if len(h.Learnings) > 0 {
@@ -127,7 +160,7 @@ func RenderHandoff(h Handoff) string {
 	if len(h.Notes) > 0 {
 		b.WriteString("- warnings (handoff degraded):\n")
 		for _, note := range h.Notes {
-			fmt.Fprintf(&b, "  - %s\n", note)
+			fmt.Fprintf(&b, "  - %s\n", line(note))
 		}
 	}
 	b.WriteString("Resume by following the plan's current stage; record new learnings with learning.record.\n")

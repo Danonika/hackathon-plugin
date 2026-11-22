@@ -8,38 +8,39 @@ case "$SELF" in
     # the literal name makes dirname return "." and derives the repo root from
     # the caller's cwd (an attacker-controlled directory).
     RESOLVED=$(command -v -- "$SELF" 2>/dev/null || true)
-    if [ -z "$RESOLVED" ]; then
-      echo "Hackathon Agent Kit launcher: cannot resolve launcher path from '$SELF'" >&2
-      exit 1
-    fi
-    SELF="$RESOLVED"
+    case "$RESOLVED" in
+      */*) SELF="$RESOLVED" ;;
+      *) echo "Hackathon Agent Kit launcher: cannot resolve launcher path from '$SELF'" >&2; exit 1 ;;
+    esac
     ;;
 esac
 # Resolve symlink chains so the root is derived from the real file. A single
 # readlink hop stops at an intermediate link and computes the wrong root.
 if command -v realpath >/dev/null 2>&1; then
-  SELF=$(realpath -- "$SELF" 2>/dev/null || printf '%s' "$SELF")
-elif command -v readlink >/dev/null 2>&1; then
+  SELF=$(realpath "$SELF") || exit 1
+else
   hops=0
-  while [ -L "$SELF" ] && [ "$hops" -lt 40 ]; do
-    TARGET=$(readlink "$SELF" 2>/dev/null || true)
-    if [ -z "$TARGET" ]; then
-      break
+  while [ -L "$SELF" ]; do
+    if [ "$hops" -ge 40 ]; then
+      echo "Hackathon Agent Kit launcher: too many symlink hops" >&2
+      exit 1
     fi
+    TARGET=$(readlink "$SELF") || exit 1
     case "$TARGET" in
       /*) SELF="$TARGET" ;;
-      *) SELF="$(dirname -- "$SELF")/$TARGET" ;;
+      *) SELF="$(dirname "$SELF")/$TARGET" ;;
     esac
     hops=$((hops + 1))
   done
 fi
+[ -f "$SELF" ] || { echo "Hackathon Agent Kit launcher: missing launcher file" >&2; exit 1; }
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$SELF")" && pwd -P)"
-REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd -P)"
+REPO_ROOT=$(CDPATH= cd -- "${HACKATHONKIT_REPO_ROOT:-$SCRIPT_DIR/../../..}" && pwd -P) || exit 1
 
 # The launcher execs whatever binary sits under the derived root, so refuse to
 # run unless that root really is a Hackathon Agent Kit checkout (guards an unresolved or
 # wrong root from a cwd-relative caller).
-if [ ! -f "$REPO_ROOT/plugins/hackathonkit/scripts/hooks.js" ] && [ ! -f "$REPO_ROOT/go.mod" ]; then
+if ! grep -Eq '^module[[:space:]]+hackathonkit\.local/agentkit([[:space:]]|$)' "$REPO_ROOT/go.mod" 2>/dev/null; then
   echo "Hackathon Agent Kit launcher: '$REPO_ROOT' does not look like the Hackathon Agent Kit repository root" >&2
   exit 1
 fi
@@ -57,7 +58,7 @@ for arg in "$@"; do
   esac
 done
 
-if [ -L "$REPO_ROOT/bin/hackathonkit-mcp" ]; then
+if [ -L "$REPO_ROOT/bin" ] || [ -L "$REPO_ROOT/bin/hackathonkit-mcp" ]; then
   # A symlinked binary can be re-targeted by another local user between the
   # check and the exec; refuse it outright.
   echo "Hackathon Agent Kit launcher: refusing to exec a symlinked binary: $REPO_ROOT/bin/hackathonkit-mcp" >&2
@@ -65,7 +66,16 @@ if [ -L "$REPO_ROOT/bin/hackathonkit-mcp" ]; then
 fi
 
 if [ -f "$REPO_ROOT/bin/hackathonkit-mcp" ] && [ -x "$REPO_ROOT/bin/hackathonkit-mcp" ]; then
-  # Re-verify immediately before exec to narrow the check/use window.
+  # Treat the checkout containing this launcher as trusted. A writable bin
+  # directory or executable inside it would permit a different local user to
+  # substitute the program even after the regular-file checks above.
+  owner=$(id -un) || exit 1
+  unsafe=$(find "$REPO_ROOT/bin" "$REPO_ROOT/bin/hackathonkit-mcp" -prune \
+    \( -perm -002 -o -perm -020 -o \( ! -user "$owner" ! -user root \) \) -print) || exit 1
+  if [ -n "$unsafe" ]; then
+    echo "Hackathon Agent Kit launcher: bin and its executable must be owned by the current user or root and writable only by the owner" >&2
+    exit 1
+  fi
   exec "$REPO_ROOT/bin/hackathonkit-mcp" --repo-root "$REPO_ROOT" "$@"
 fi
 
@@ -81,7 +91,7 @@ if [ ! -f "$REPO_ROOT/docker-compose.yml" ]; then
 fi
 
 if ! command -v docker >/dev/null 2>&1; then
-  echo "Hackathon Agent Kit launcher: docker CLI not found and no local binary at $REPO_ROOT/bin/hackathonkit-mcp" >&2
+  echo "Hackathon Agent Kit launcher: docker CLI not found and no usable local binary at $REPO_ROOT/bin/hackathonkit-mcp" >&2
   exit 1
 fi
 

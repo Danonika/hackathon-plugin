@@ -74,6 +74,9 @@ type embeddingCache struct {
 func centroidDims(centroids map[string][]float64) int {
 	dims := 0
 	for _, vec := range centroids {
+		if len(vec) == 0 {
+			return 0
+		}
 		if dims == 0 {
 			dims = len(vec)
 		} else if len(vec) != dims {
@@ -129,7 +132,7 @@ func (r *Router) embedTask(ctx context.Context, task string) ([]float64, bool) {
 		return nil, false
 	}
 	vectors, err := r.embedder.Embed(ctx, []string{task})
-	ok := err == nil && len(vectors) == 1
+	ok := err == nil && len(vectors) == 1 && len(vectors[0]) > 0
 	var vec []float64
 	if ok {
 		vec = normalizeVector(vectors[0])
@@ -170,7 +173,14 @@ func (r *Router) embeddingCategoryScores(ctx context.Context, task string) (map[
 		// (rather than deleting it) so a transient mismatch cannot destroy a
 		// valid shared cache; a successful rebuild overwrites it.
 		r.mu.Lock()
-		r.centroids = nil
+		if centroidDims(r.centroids) != len(taskVec) {
+			if time.Now().Before(r.centroidRetryAt) {
+				r.mu.Unlock()
+				return nil, false
+			}
+			r.centroids = nil
+			r.centroidRetryAt = time.Now().Add(30 * time.Second)
+		}
 		r.mu.Unlock()
 		rebuilt, ok := r.ensureCentroidsWith(ctx, false)
 		if !ok {
@@ -289,7 +299,7 @@ func (r *Router) ensureCentroidsWith(ctx context.Context, useCache bool) (map[st
 	if ok {
 		r.centroids = centroids
 		r.centroidFailAt = time.Time{}
-	} else {
+	} else if ctx.Err() == nil {
 		r.centroidFailAt = time.Now()
 	}
 	close(r.building)

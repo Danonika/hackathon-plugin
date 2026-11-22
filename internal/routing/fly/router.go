@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"hackathonkit.local/agentkit/internal/config"
 )
@@ -53,7 +54,10 @@ type Router struct {
 	embedCacheOK   bool
 	embedCacheSet  bool
 
-	centroidFailAt time.Time
+	centroidFailAt  time.Time
+	centroidRetryAt time.Time
+	llmRetryAt      time.Time
+	llmRevision     uint64
 }
 
 func NewRouter(settings config.RoutingSettings) *Router {
@@ -124,10 +128,22 @@ var categoryCapabilities = map[string][]string{
 func (r *Router) Recommend(ctx context.Context, task string, meta map[string]any, available []string) Result {
 	scores := map[string]float64{}
 	lower := strings.ToLower(task)
+	tokens := strings.FieldsFunc(lower, func(r rune) bool { return !unicode.IsLetter(r) && !unicode.IsDigit(r) })
+	hasKeyword := func(kw string) bool {
+		if strings.ContainsRune(kw, ' ') {
+			return strings.Contains(lower, kw)
+		}
+		for _, token := range tokens {
+			if strings.HasPrefix(token, kw) {
+				return true
+			}
+		}
+		return false
+	}
 	for category, keywords := range categoryKeywords {
 		hits := 0
 		for _, kw := range keywords {
-			if strings.Contains(lower, kw) {
+			if hasKeyword(kw) {
 				hits++
 			}
 		}
@@ -322,9 +338,8 @@ func boost(scores map[string]float64, category string, delta float64) {
 func categoryAvailable(category string, avail map[string]bool) bool {
 	caps, known := categoryCapabilities[category]
 	if !known {
-		// A dynamic encoder/MBrain category with no capability mapping is not
-		// filtered by capability availability.
-		return true
+		// Learned labels with no mapped tools cannot supply a runnable route.
+		return false
 	}
 	if len(avail) == 0 {
 		return true

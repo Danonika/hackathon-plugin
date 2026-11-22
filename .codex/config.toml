@@ -22,19 +22,15 @@ web_search = "disabled"
 # absolute launcher path to the USER config ($CODEX_HOME/config.toml), which
 # Codex applies with higher precedence.
 # POSIX only: on Windows `sh` is unavailable, so run scripts/setup.ps1, which
-# generates plugins/hackathonkit/.mcp.json with the .cmd launcher, or replace
+# generates plugins/hackathonkit/.mcp.json with the Node launcher, or replace
 # `command`/`args` below manually.
-#
-# NOTE: keep `command`/`args` (and every other root-level key) ABOVE the first
-# [table] header. TOML tables persist until the next header, so a key placed
-# after [mcp_servers.hackathonkit] is parsed as a server option and silently ignored.
 #
 # The resolved root is passed to `sh` as a quoted argument, so a path containing
 # spaces is preserved. Running the launcher through `sh` also avoids depending
 # on the checkout's executable bit.
 [mcp_servers.hackathonkit]
 command = "sh"
-args = ["-c", "root=$(git rev-parse --show-toplevel 2>/dev/null) || { echo 'Hackathon Agent Kit: not inside a git checkout' >&2; exit 1; }; exec sh \"$root/plugins/hackathonkit/scripts/hackathonkit-mcp-launcher.sh\""]
+args = ["-c", "unset GIT_DIR GIT_WORK_TREE; root=$(git rev-parse --show-toplevel) || { echo 'Hackathon Agent Kit: could not resolve the project checkout' >&2; exit 1; }; grep -Eq '^module[[:space:]]+hackathonkit[.]local/agentkit([[:space:]]|$)' \"$root/go.mod\" || { echo 'Hackathon Agent Kit: expected a Hackathon Agent Kit checkout' >&2; exit 1; }; exec sh \"$root/plugins/hackathonkit/scripts/hackathonkit-mcp-launcher.sh\""]
 # 180s covers the docker-compose fallback on a cold machine (image pull/build +
 # dependency startup). Raise further or pre-build images if your network is slow.
 startup_timeout_sec = 180

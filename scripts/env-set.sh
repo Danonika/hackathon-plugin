@@ -38,10 +38,8 @@ case "$KEY" in
 esac
 
 if [ "$FROM_STDIN" = "1" ]; then
+  # Command substitution removes terminal line endings from piped input.
   VALUE=$(cat)
-  # A single trailing newline is a line terminator, not part of the value.
-  VALUE=${VALUE%"
-"}
 fi
 
 # Resolve symlink chains iteratively (`readlink -f`/`realpath` are not portable,
@@ -69,6 +67,13 @@ while [ -L "$FILE" ]; do
   esac
 done
 
+# Serialize the complete read/modify/write transaction, including the first creation.
+. "$(dirname -- "$0")/file-lock.sh"
+acquire_file_lock "$FILE.write-lock"
+if [ -L "$FILE" ] || { [ -e "$FILE" ] && [ ! -f "$FILE" ]; }; then
+  echo "env-set: refusing non-regular file $FILE" >&2
+  exit 1
+fi
 MODE="600"
 OWNER=""
 if [ -f "$FILE" ]; then
@@ -84,103 +89,17 @@ TMP=$(mktemp "$FILE.tmp.XXXXXX" 2>/dev/null) || {
   echo "env-set: cannot create a temp file next to $FILE" >&2
   exit 1
 }
-trap 'rm -f "$TMP"' EXIT INT TERM
+trap 'rm -f "$TMP"' EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 INPUT="$FILE"
 if [ ! -f "$FILE" ]; then
   INPUT=/dev/null
 fi
 
-# The key is matched literally (no regex) and the value travels through the
-# environment, so backslashes and other escape sequences survive unchanged.
-LOCK="$FILE.lock"
-LOCKED=0
-LOCK_TOKEN="$$.$(date +%s 2>/dev/null || echo 0)"
-lock_is_stale() {
-  [ -d "$LOCK" ] || return 1
-  holder=$(cat "$LOCK/pid" 2>/dev/null || true)
-  if [ -n "$holder" ]; then
-    # kill -0 fails for a dead pid (and, less often, for EPERM on a live one).
-    if kill -0 "$holder" 2>/dev/null; then
-      return 1
-    fi
-    return 0
-  fi
-  # No pid yet: only reclaim after a grace period, so a concurrent
-  # mkdir-then-write window is not stolen from a live writer.
-  now=$(date +%s 2>/dev/null || echo 0)
-  mtime=$(stat -c %Y "$LOCK" 2>/dev/null || stat -f %m "$LOCK" 2>/dev/null || echo "$now")
-  [ $((now - mtime)) -ge 30 ]
-}
-claim_stale_lock() {
-  lock_is_stale || return 0
-  # Snapshot the identity of the lock we judged stale, then re-read it after the
-  # rename-aside. A peer may have removed and re-created the lock in between; in
-  # that case the renamed directory is a live peer's lock and is restored rather
-  # than deleted.
-  holder=$(cat "$LOCK/pid" 2>/dev/null || true)
-  owner=$(cat "$LOCK/owner" 2>/dev/null || true)
-  aside="$LOCK.stale.$$"
-  if mv "$LOCK" "$aside" 2>/dev/null; then
-    now_holder=$(cat "$aside/pid" 2>/dev/null || true)
-    now_owner=$(cat "$aside/owner" 2>/dev/null || true)
-    if [ "$now_holder" = "$holder" ] && [ "$now_owner" = "$owner" ]; then
-      rm -rf "$aside"
-    elif [ ! -e "$LOCK" ]; then
-      # Break the swap claim and put the still-live lock back.
-      mv "$aside" "$LOCK" 2>/dev/null || true
-    else
-      # Another contender already claimed the path. The moved directory is
-      # either the same stale lock (a peer re-created the path first) or a live
-      # lock we moved by mistake. Drop it only if its recorded owner is gone;
-      # otherwise leave it aside rather than deleting a live lock.
-      if [ -z "$now_holder" ] || ! kill -0 "$now_holder" 2>/dev/null; then
-        rm -rf "$aside"
-      fi
-    fi
-  fi
-}
-claim_stale_lock
-for _ in 1 2 3 4 5 6 7 8 9 10; do
-  if mkdir "$LOCK" 2>/dev/null; then
-    printf '%s' "$$" > "$LOCK/pid" 2>/dev/null || true
-    printf '%s' "$LOCK_TOKEN" > "$LOCK/owner" 2>/dev/null || true
-    LOCKED=1
-    break
-  fi
-  # A peer may have removed/re-created the lock; re-evaluate staleness each pass.
-  claim_stale_lock
-  sleep 1
-done
-if [ "$LOCKED" != "1" ]; then
-  echo "env-set: another writer holds $LOCK; aborting" >&2
-  exit 1
-fi
-release_lock() {
-  [ "$LOCKED" = "1" ] || return 0
-  # Verify ownership, then release with an atomic rename-aside. If the owner file
-  # is unreadable (written best-effort), fall back to the pid so a genuine owner
-  # still releases; a peer's live lock is unaffected either way.
-  owner=$(cat "$LOCK/owner" 2>/dev/null || true)
-  pid_owner=$(cat "$LOCK/pid" 2>/dev/null || true)
-  if [ "$owner" = "$LOCK_TOKEN" ] || { [ -z "$owner" ] && [ "$pid_owner" = "$$" ]; }; then
-    if mv "$LOCK" "$LOCK.done.$$" 2>/dev/null; then
-      rm -rf "$LOCK.done.$$"
-    fi
-  fi
-  LOCKED=0
-}
-
-cleanup_env_set() {
-  rm -f "$TMP"
-  release_lock
-}
-on_signal_env_set() { cleanup_env_set; exit 130; }
-trap cleanup_env_set EXIT
-trap on_signal_env_set INT TERM
-
 (umask 077 && KEY="$KEY" VALUE="$VALUE" awk '
-  function enc(v) {
+  function enc(v,    out, i, c) {
     # Default-deny: emit bare only when the value is provably safe to source
     # unquoted. Anything else is quoted and escaped, so shell metacharacters
     # (`;`, `&`, `|`, `<`, `>`, `(`, `)`, `*`, `?`, `!`, `{`, `}`, `~`, ...)
@@ -188,13 +107,15 @@ trap on_signal_env_set INT TERM
     if (v == "" || v ~ /^[A-Za-z0-9_.,:\/@%+=-]+$/) {
       return v
     }
-    gsub(/\\/, "\\\\", v)
-    gsub(/"/, "\\\"", v)
-    gsub(/\n/, "\\n", v)
-    gsub(/\r/, "\\r", v)
-    gsub(/\$/, "\\$", v)
-    gsub(/`/, "\\`", v)
-    return "\"" v "\""
+    out = "\""
+    for (i=1; i<=length(v); i++) {
+      c = substr(v,i,1)
+      if (c == "\n") out = out "\\n"
+      else if (c == "\r") out = out "\\r"
+      else if (c == "\\" || c == "\"" || c == "$" || c == "`") out = out "\\" c
+      else out = out c
+    }
+    return out "\""
   }
   BEGIN { k = ENVIRON["KEY"]; v = ENVIRON["VALUE"]; done = 0 }
   substr($0, 1, length(k) + 1) == k "=" {

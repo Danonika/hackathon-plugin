@@ -34,14 +34,12 @@ func (r *Router) ActivationSnapshot(ctx context.Context, task string, topN int) 
 	}
 	vec, ok := r.embedTask(ctx, task)
 	if !ok {
+		empty["reason"] = "task embedding unavailable"
 		return empty
 	}
-	scores, code, ok := func() (map[string]float64, []float64, bool) {
-		brainMu.Lock()
-		defer brainMu.Unlock()
-		return brain.scores(vec)
-	}()
+	scores, code, ok := brain.scores(vec)
 	if !ok {
+		empty["reason"] = "brain readout unavailable"
 		return empty
 	}
 	samples := make([]KCSample, 0)

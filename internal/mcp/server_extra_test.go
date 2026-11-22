@@ -97,7 +97,7 @@ func TestHandleMethods(t *testing.T) {
 		t.Fatalf("unknown method = %+v", missing.Error)
 	}
 
-	if got := srv.handle(context.Background(), &Request{Method: "ping"}); got != nil {
+	if got := srv.handle(context.Background(), &Request{JSONRPC: "2.0", Method: "ping"}); got != nil {
 		t.Fatal("notifications must not produce a response")
 	}
 }

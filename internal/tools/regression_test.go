@@ -136,7 +136,7 @@ func TestKnowledgeCorpusScope(t *testing.T) {
 
 func TestXLSXExcelDates(t *testing.T) {
 	path := buildXLSXWithDates(t)
-	sheets, warnings, err := readXLSXSheets(path)
+	sheets, warnings, err := readXLSXSheets(t.Context(), path)
 	if err != nil {
 		t.Fatalf("readXLSXSheets: %v (%v)", err, warnings)
 	}

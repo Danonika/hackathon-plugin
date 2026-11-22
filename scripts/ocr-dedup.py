@@ -31,12 +31,15 @@ A finding seen again while status is fixed/false-positive/wontfix/accepted stays
 suppressed; only `open` counts toward the metric.
 """
 
+from contextlib import contextmanager
 import argparse
+from pathlib import Path
 import hashlib
 import json
 import os
 import re
 import sys
+import tempfile
 import time
 
 
@@ -63,13 +66,17 @@ def load_json(path):
 def merge(baseline, scans, now):
     findings = baseline.setdefault("findings", {})
     new_sigs = []
+    scanned_sigs = set()
     for scan in scans:
-        comments = scan.get("comments") or []
+        comments = scan.get("comments")
+        if not isinstance(comments, list):
+            raise ValueError("OCR result must contain a comments list")
         for c in comments:
             path = c.get("path") or ""
             if path.startswith("cmd/demo-api/static/"):
                 continue  # replaced frontend; not actionable
             sig = signature(path, c)
+            scanned_sigs.add(sig)
             title = norm(c.get("content"))[:160]
             entry = findings.get(sig)
             if entry is None:
@@ -95,7 +102,7 @@ def merge(baseline, scans, now):
                 entry["title"] = title
                 entry["last_seen"] = now
             entry["seen_count"] = entry.get("seen_count", 0) + 1
-    return findings, new_sigs
+    return findings, new_sigs, scanned_sigs
 
 
 def severity_counts(findings, statuses=("open",)):
@@ -104,6 +111,37 @@ def severity_counts(findings, statuses=("open",)):
         if e.get("status") in statuses:
             counts[e.get("severity", "?")] = counts.get(e.get("severity", "?"), 0) + 1
     return counts
+
+
+@contextmanager
+def atomic_output(path):
+    directory = Path(path).resolve().parent
+    directory.mkdir(parents=True, exist_ok=True)
+    tmp = tempfile.NamedTemporaryFile(mode="w", dir=directory, delete=False, encoding="utf-8")
+    try:
+        with tmp as fh:
+            yield fh
+        if os.path.exists(path):
+            os.chmod(tmp.name, os.stat(path).st_mode & 0o777)
+        os.replace(tmp.name, path)
+    finally:
+        Path(tmp.name).unlink(missing_ok=True)
+
+
+@contextmanager
+def update_lock(destination):
+    # Keep the lock inode in place across atomic replacement of the backlog.
+    lock = Path(str(destination) + ".lock")
+    lock.parent.mkdir(parents=True, exist_ok=True)
+    with lock.open("a+b") as fh:
+        if os.name == "nt":
+            import msvcrt
+            fh.seek(0)
+            msvcrt.locking(fh.fileno(), msvcrt.LK_LOCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(fh, fcntl.LOCK_EX)
+        yield
 
 
 def main():
@@ -118,6 +156,17 @@ def main():
     ap.add_argument("--summary", action="store_true")
     args = ap.parse_args()
 
+    target = args.out_json or args.baseline
+    if args.out_md and Path(args.out_md).resolve() == Path(target).resolve():
+        ap.error("Markdown and JSON outputs must have different paths")
+    if args.set_status or args.scans or args.out_json or args.out_md:
+        with update_lock(target):
+            process(args, ap)
+    else:
+        process(args, ap)
+
+
+def process(args, ap):
     now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     if os.path.exists(args.baseline):
         baseline = load_json(args.baseline)
@@ -125,29 +174,35 @@ def main():
         baseline = {"version": 1, "findings": {}}
 
     scans = [load_json(p) for p in args.scans]
-    findings, new_sigs = merge(baseline, scans, now)
+    findings, new_sigs, scanned_sigs = merge(baseline, scans, now)
 
+    if args.match is not None and not args.set_status:
+        ap.error("--match requires --set")
     if args.set_status:
-        changed = 0
-        for sig, e in findings.items():
-            if args.match and not sig.startswith(args.match):
-                continue
-            e["status"] = args.set_status
-            changed += 1
-        print(f"[ocr-dedup] set status={args.set_status} on {changed} finding(s)", file=sys.stderr)
+        if args.match is not None:
+            matches = [sig for sig in findings if args.match and sig.startswith(args.match)]
+            if len(matches) != 1:
+                ap.error("--match must uniquely identify one finding")
+        elif scans:
+            matches = scanned_sigs
+        else:
+            ap.error("--set requires --match or an input scan")
+        for sig in matches:
+            findings[sig]["status"] = args.set_status
+        print(f"[ocr-dedup] set status={args.set_status} on {len(matches)} finding(s)", file=sys.stderr)
 
-    out_json = args.out_json or args.baseline
-    os.makedirs(os.path.dirname(os.path.abspath(out_json)), exist_ok=True)
-    with open(out_json, "w", encoding="utf-8") as fh:
-        json.dump(baseline, fh, indent=2, sort_keys=True)
-        fh.write("\n")
+    if scans or args.set_status or args.out_json:
+        with atomic_output(args.out_json or args.baseline) as fh:
+            json.dump(baseline, fh, indent=2, sort_keys=True)
+            fh.write("\n")
 
     open_counts = severity_counts(findings, ("open",))
     total_open = sum(open_counts.values())
+    severity_summary = ", ".join(f"{key}={value}" for key, value in sorted(open_counts.items()))
+    breakdown = f" ({severity_summary})" if severity_summary else ""
     print(
         f"[ocr-dedup] merged {len(scans)} scan(s): "
-        f"{len(new_sigs)} new, {total_open} open unique "
-        f"({', '.join(f'{k}={v}' for k, v in sorted(open_counts.items()))})",
+        f"{len(new_sigs)} new, {total_open} open unique{breakdown}",
         file=sys.stderr,
     )
 
@@ -163,11 +218,24 @@ def main():
                 print(f"{sig}\t{e.get('severity')}\t{e.get('path')}:{e.get('line')}\t{e.get('title','')[:80]}")
 
     if args.out_md:
-        with open(args.out_md, "w", encoding="utf-8") as fh:
+        target_path = Path(args.out_json or args.baseline).resolve()
+        with atomic_output(args.out_md) as fh:
             fh.write("# Canonical OCR backlog\n\n")
             fh.write(f"Updated: {now}\n\n")
-            fh.write(f"Open unique findings: **{total_open}** "
-                     f"({', '.join(f'{k}={v}' for k, v in sorted(open_counts.items()))})\n\n")
+            fh.write(f"Open unique findings: **{total_open}**{breakdown}\n\n")
+            counts = {}
+            for entry in findings.values():
+                status = entry["status"]
+                counts[status] = counts.get(status, 0) + 1
+            fh.write("| Disposition | Findings |\n| --- | ---: |\n")
+            for status, count in sorted(counts.items()):
+                fh.write(f"| {status} | {count} |\n")
+            try:
+                json_link = os.path.relpath(target_path, Path(args.out_md).resolve().parent)
+            except ValueError:  # Windows Markdown and JSON outputs on different drives.
+                fh.write(f"\nJSON backlog: {target_path}\n\n")
+            else:
+                fh.write(f"\nIndividual findings and review notes are in the [JSON backlog](<{Path(json_link).as_posix()}>).\n\n")
             for sev in ("critical", "high", "medium", "low", "?"):
                 rows = [e for e in findings.values() if e.get("status") == "open" and e.get("severity") == sev]
                 if not rows:
@@ -175,6 +243,8 @@ def main():
                 fh.write(f"## {sev.upper()} ({len(rows)})\n\n")
                 for e in sorted(rows, key=lambda z: (z.get("path") or "", z.get("line") or 0)):
                     fh.write(f"- [ ] `{e['sig']}` `{e['path']}:{e['line']}` _{e.get('category')}_ {e.get('title','')}\n")
+                    if e.get("review_note"):
+                        fh.write(f"  {e['review_note']}\n")
                 fh.write("\n")
 
 

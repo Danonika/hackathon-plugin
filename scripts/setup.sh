@@ -42,36 +42,10 @@ esac
 cd "$ROOT"
 echo "[setup] repository root: $ROOT (profile: $PROFILE)"
 
-if [ ! -f .env ]; then
-  if [ ! -f .env.example ]; then
-    echo "[setup] .env.example is missing; cannot create .env" >&2
-    exit 1
-  fi
-  (umask 077 && cp .env.example .env)
-  echo "[setup] created .env from .env.example (set OPENAI_API_KEY for speech/vision)"
-fi
-# .env holds credentials: never leave it group/other readable.
-if [ -f .env ]; then
-  ENV_MODE=$(stat -c '%a' .env 2>/dev/null || stat -f '%Lp' .env 2>/dev/null || true)
-  if [ -z "$ENV_MODE" ]; then
-    # An unreadable mode must never be treated as "already safe"; force it.
-    echo "[setup] warning: cannot read the mode of .env; forcing 600" >&2
-    chmod 600 .env 2>/dev/null || {
-      echo "[setup] cannot chmod .env to 600; refusing to write credentials into a world-readable file" >&2
-      exit 1
-    }
-  else
-    case "$ENV_MODE" in
-      *00) ;;
-      *) chmod 600 .env 2>/dev/null || {
-           echo "[setup] cannot chmod .env to 600; refusing to write credentials into a world-readable file" >&2
-           exit 1
-         } ;;
-    esac
-  fi
-fi
+sh "$ROOT/scripts/prepare-env.sh"
+
 # A deterministic demo token protects the demo API without manual steps.
-if ! grep -q '^HACKATHONKIT_DEMO_TOKEN=.' .env 2>/dev/null; then
+if ! awk '/^HACKATHONKIT_DEMO_TOKEN=/ { sub(/^[^=]*=/,""); gsub(/^[[:space:]]+|[[:space:]]+$/,""); if (length && $0 != "change-me" && $0 != "change-me-in-production" && $0 != "my-token" && $0 != "secret" && $0 != "\"\"") valid=1 } END {exit !valid}' .env; then
   TOKEN=$(od -An -N16 -tx1 /dev/urandom 2>/dev/null | tr -d ' \n' || true)
   if [ -n "$TOKEN" ]; then
     # Pass the secret on stdin so it never appears in the process argv.
@@ -89,30 +63,11 @@ if command -v id >/dev/null 2>&1; then
   echo "[setup] recorded HACKATHONKIT_UID/HACKATHONKIT_GID in .env for bind-mount ownership"
 fi
 
-sh "$ROOT/scripts/sync-harness.sh"
+sh "$ROOT/scripts/sync-harness.sh" "$PROFILE"
 
 # Codex plugins cannot bundle slash commands; install /verify as a custom prompt
 # in $CODEX_HOME/prompts (best-effort, never blocks setup).
 sh "$ROOT/scripts/install-prompts.sh" install || echo "[setup] warning: could not install the Codex command prompts" >&2
-
-EXPLICIT_ONLY_SKILLS="judge project-cost roast-project cp-expert-refactoring system-design-expert self-improvement-controller output-self-check skill-authoring qa-expert"
-if [ "$PROFILE" = "core" ]; then
-  removed=0
-  for dir in "$ROOT/.agents/skills" "$ROOT/.claude/skills"; do
-    [ -d "$dir" ] || continue
-    for skill in $EXPLICIT_ONLY_SKILLS; do
-      target="$dir/$skill"
-      if [ -e "$target" ]; then
-        if rm -rf "$target" 2>/dev/null; then
-          removed=$((removed + 1))
-        else
-          echo "[setup] warning: could not remove $target" >&2
-        fi
-      fi
-    done
-  done
-  echo "[setup] core profile: removed $removed explicit-only skill mirror(s) (the plugin still ships all skills)"
-fi
 
 sh "$ROOT/scripts/gen-mcp-manifest.sh" "$ROOT"
 sh "$ROOT/scripts/gen-codex-config.sh" "$ROOT"
@@ -132,7 +87,7 @@ if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
     docker compose -f "$ROOT/docker-compose.yml" ps >&2 2>/dev/null || true
     # Stop the partial stack so its published ports (5432/6379/9000) do not
     # conflict with the local-binary path; keep named volumes (-v omitted).
-    docker compose -f "$ROOT/docker-compose.yml" down >&2 2>/dev/null || true
+    docker compose -f "$ROOT/docker-compose.yml" down >&2 || { echo "[setup] could not stop the partial stack" >&2; exit 1; }
   fi
 fi
 
@@ -143,9 +98,12 @@ if [ "$RUNTIME" = "binary" ]; then
   fi
   echo "[setup] building local binaries"
   mkdir -p "$ROOT/bin"
-  (cd "$ROOT" && go build -o bin/hackathonkit-mcp ./cmd/hackathonkit-mcp)
-  (cd "$ROOT" && go build -o bin/hackathonkit-demo-api ./cmd/demo-api)
-  (cd "$ROOT" && go build -o bin/hackathonkit-ctl ./cmd/hackathonkit-ctl)
+  . "$ROOT/scripts/private-write.sh"
+  private_write "$ROOT/bin"
+  (cd "$ROOT" && go build -trimpath -buildvcs=false -o bin/hackathonkit-mcp ./cmd/hackathonkit-mcp)
+  (cd "$ROOT" && go build -trimpath -buildvcs=false -o bin/hackathonkit-demo-api ./cmd/demo-api)
+  (cd "$ROOT" && go build -trimpath -buildvcs=false -o bin/hackathonkit-ctl ./cmd/hackathonkit-ctl)
+  for name in hackathonkit-mcp hackathonkit-demo-api hackathonkit-ctl; do private_write "$ROOT/bin/$name"; done
   echo "[setup] local binaries built in bin/"
 fi
 

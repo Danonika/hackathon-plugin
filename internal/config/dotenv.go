@@ -31,7 +31,10 @@ func LoadDotEnv(root string) {
 			continue
 		}
 		value := strings.TrimSpace(line[eq+1:])
-		value = unquoteEnvValue(value)
+		value, ok := unquoteEnvValue(value)
+		if !ok {
+			log.Printf("dotenv: missing closing quote for %q", key)
+		}
 		if !validEnvKey(key) {
 			log.Printf("dotenv: ignoring invalid key %q", key)
 			continue
@@ -75,7 +78,7 @@ func validEnvKey(key string) bool {
 	return true
 }
 
-func unquoteEnvValue(value string) string {
+func unquoteEnvValue(value string) (string, bool) {
 	if len(value) > 0 {
 		switch value[0] {
 		case '"':
@@ -108,7 +111,7 @@ func unquoteEnvValue(value string) string {
 				}
 				if r == '"' {
 					if isClosingQuote(runes, i) {
-						return b.String()
+						return b.String(), true
 					}
 					// An interior quote (e.g. KEY="abc"def) is not a
 					// terminator: keep it rather than silently dropping the
@@ -118,21 +121,26 @@ func unquoteEnvValue(value string) string {
 				}
 				b.WriteRune(r)
 			}
-			return b.String()
+			if escaped {
+				b.WriteByte('\\')
+			}
+			return b.String(), false
 		case '\'':
 			runes := []rune(value)
 			for i := 1; i < len(runes); i++ {
 				if runes[i] == '\'' && isClosingQuote(runes, i) {
-					return string(runes[1:i])
+					return string(runes[1:i]), true
 				}
 			}
-			return value[1:]
+			return value[1:], false
 		}
 	}
-	if idx := strings.Index(value, " #"); idx >= 0 {
-		value = strings.TrimSpace(value[:idx])
+	for i := 1; i < len(value); i++ {
+		if value[i] == '#' && (value[i-1] == ' ' || value[i-1] == '\t') {
+			return strings.TrimSpace(value[:i]), true
+		}
 	}
-	return value
+	return value, true
 }
 
 // isClosingQuote reports whether the quote at index idx terminates the value:

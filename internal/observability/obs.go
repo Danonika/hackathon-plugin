@@ -146,14 +146,18 @@ func TailJSONL(path string, limit int) ([]json.RawMessage, error) {
 	if err != nil {
 		return nil, err
 	}
+	if !st.Mode().IsRegular() {
+		return nil, fmt.Errorf("tail JSONL: %s is not a regular file", path)
+	}
 	const chunkSize = 64 * 1024
 	const maxTailBytes = 4 << 20
-	// Accumulate chunks and concatenate once: prepending to a growing buffer on
-	// every iteration is O(n^2) in the tail size.
+	// After a window with too few valid records, at least double the window
+	// before rescanning to bound total copying and validation.
 	chunks := [][]byte{}
 	total := 0
 	newlines := 0
 	stopAt := limit + 1
+	minTotal := 0
 	offset := st.Size()
 	lines := []json.RawMessage{}
 	for {
@@ -177,7 +181,7 @@ func TailJSONL(path string, limit int) ([]json.RawMessage, error) {
 			newlines += bytes.Count(chunk, []byte{'\n'})
 			// Enough newlines buffered means the requested tail is complete; the
 			// maxTailBytes cap below only bounds memory for pathological files.
-			if newlines > stopAt {
+			if total >= minTotal && newlines > stopAt {
 				break
 			}
 		}
@@ -209,6 +213,7 @@ func TailJSONL(path string, limit int) ([]json.RawMessage, error) {
 			break
 		}
 		stopAt = newlines + limit + 1
+		minTotal = min(maxTailBytes, 2*total)
 	}
 	if len(lines) > limit {
 		lines = lines[len(lines)-limit:]

@@ -57,24 +57,36 @@ if ($missingMarkers.Count -gt 0) {
 }
 
 $codexFail = 0
-if (Get-Command codex -CommandType Application -ErrorAction SilentlyContinue) {
-  if ($Yes) {
-    $global:LASTEXITCODE = 0
-    & codex plugin remove hackathonkit *> $null
-    $removeExit = $LASTEXITCODE
-    if ($removeExit -ne 0) { Write-Warning "[uninstall] codex plugin remove failed (exit $removeExit)"; $codexFail = 1 }
-    $global:LASTEXITCODE = 0
-    & codex plugin marketplace remove hackathonkit-local *> $null
-    $marketExit = $LASTEXITCODE
-    if ($marketExit -ne 0) { Write-Warning "[uninstall] codex marketplace remove failed (exit $marketExit)"; $codexFail = 1 }
-    if ($codexFail -eq 0) {
-      Write-Host "[uninstall] removed hackathonkit plugin and marketplace"
+$codex = Get-Command codex -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+if ($codex) {
+  foreach ($kind in @("plugin", "marketplace")) {
+    if ($kind -eq "plugin") {
+      $listArgs = @("plugin", "list", "--json")
+      $removeArgs = @("plugin", "remove", "hackathonkit")
+      $name = "hackathonkit"
+      $field = "installed"
     } else {
-      Write-Warning "[uninstall] hackathonkit plugin/marketplace removal reported errors"
+      $listArgs = @("plugin", "marketplace", "list", "--json")
+      $removeArgs = @("plugin", "marketplace", "remove", "hackathonkit-local")
+      $name = "hackathonkit-local"
+      $field = "marketplaces"
     }
-  } else {
-    Write-Host "would run: codex plugin remove hackathonkit"
-    Write-Host "would run: codex plugin marketplace remove hackathonkit-local"
+    $listing = & $codex.Source @listArgs 2>$null
+    if ($LASTEXITCODE -ne 0) {
+      Write-Warning "[uninstall] could not enumerate $kind registrations"
+      $codexFail = 1
+      continue
+    }
+    try {
+      $values = (($listing -join [Environment]::NewLine) | ConvertFrom-Json).$field
+      if ($values -isnot [array]) { throw "missing $field array" }
+      $registered = @($values | Where-Object { $_.name -ceq $name }).Count -gt 0
+    } catch { Write-Warning "[uninstall] invalid $kind listing"; $codexFail = 1; continue }
+    if (-not $registered) { continue }
+    if ($Yes) {
+      & $codex.Source @removeArgs *> $null
+      if ($LASTEXITCODE -ne 0) { Write-Warning "[uninstall] failed removing $name"; $codexFail = 1 }
+    } else { Write-Host "would run: codex $($removeArgs -join ' ')" }
   }
 }
 
@@ -112,7 +124,16 @@ if ($Yes) {
 foreach ($rel in $targets) {
   $target = Join-Path $root $rel
   $rootPrefix = $root.TrimEnd([System.IO.Path]::DirectorySeparatorChar, '/', '\') + [System.IO.Path]::DirectorySeparatorChar
-  if (-not $target.StartsWith($rootPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+  $intermediateLink = $false
+  $ancestor = Split-Path -Parent $target
+  while ($ancestor -and $ancestor -ne $root) {
+    if ([IO.Directory]::Exists($ancestor) -and ([IO.File]::GetAttributes($ancestor) -band [IO.FileAttributes]::ReparsePoint)) {
+      $intermediateLink = $true
+      break
+    }
+    $ancestor = Split-Path -Parent $ancestor
+  }
+  if ($intermediateLink -or -not $target.StartsWith($rootPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
     Write-Warning "[uninstall] refusing to remove a path outside the repository: $target"
     $Failures++
     continue
@@ -128,6 +149,7 @@ foreach ($rel in $targets) {
       $item = Get-Item -LiteralPath $skillTarget -Force
       if ($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) {
         Write-Warning "[uninstall] skipping reparse point: $rel\$($skill.Name)"
+        $Failures++
         continue
       }
       $same = $false
@@ -151,7 +173,7 @@ foreach ($rel in $targets) {
           # immediately before deleting so a path swapped for a reparse point in
           # between cannot defeat the junction/user-skill protection.
           $final = Get-Item -LiteralPath $skillTarget -Force -ErrorAction Stop
-          if ($final.Attributes -band [System.IO.FileAttributes]::ReparsePoint -or $final.FullName -ne $item.FullName) {
+          if ($final.Attributes -band [System.IO.FileAttributes]::ReparsePoint -or -not (Test-SameTree $skill.FullName $final.FullName)) {
             Write-Warning "[uninstall] $rel\$($skill.Name) changed before removal; skipping"
             $Failures++
             continue
@@ -189,6 +211,6 @@ if (-not $Yes) {
   exit 0
 }
 if ($Failures -gt 0 -or $codexFail -ne 0) {
-  Fail "[uninstall] finished with warnings ($Failures path failure(s), $codexFail codex failure(s))"
+  Fail "[uninstall] partially completed ($Failures path failure(s), $codexFail Codex failure(s)); review the warnings above"
 }
 Write-Host "[uninstall] done. data/input, data/artifacts, logs/ and committed files were kept (data/control was removed)."

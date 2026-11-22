@@ -1,7 +1,7 @@
 # Hackathon Agent Kit for Codex CLI
 
 This supplements the root `AGENTS.md` with Codex-specific guidance. The plugin
-registers the MCP server, 29 skills and three lifecycle hooks; the repository
+registers the MCP server, 34 skills and three lifecycle hooks; the repository
 fallback path (`.codex/config.toml` + `.agents/skills`) works without the
 plugin.
 
@@ -10,7 +10,7 @@ plugin.
 The `SessionStart` hook injects a compact context block: live routing mode,
 current plan stage, top learnings and pending eval decisions. Read it before
 planning. `PostToolUse` appends tool events to `logs/session-events.jsonl`;
-`Stop` closes the session.
+`SessionEnd` closes the session when the main thread ends.
 
 ## Subagents
 
@@ -48,7 +48,7 @@ skills and tools; the user only states the task or runs a command). `scripts/set
 otherwise run that script once. Before claiming work is done, run `/verify` (or
 `scripts/quality-gate.sh`): seven gate checks including **test coverage** (default 80%).
 
-Windows: use the `.ps1` scripts and `hackathonkit-mcp-launcher.cmd`.
+Windows: use the `.ps1` scripts and the Node MCP launcher.
 
 ## Skills
 

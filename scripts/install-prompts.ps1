@@ -61,17 +61,30 @@ switch ($Action) {
         }
         try {
           $same = (Get-FileHash -LiteralPath $f.FullName -Algorithm SHA256).Hash -eq (Get-FileHash -LiteralPath $dest -Algorithm SHA256).Hash
-          if (-not $same) { Write-Warning "[prompts] warning: overwriting locally modified prompt $dest" }
+          if (-not $same) {
+            $backup = "$dest.bak.$([Guid]::NewGuid().ToString('N'))"
+            [IO.File]::Copy($dest, $backup, $false)
+            Write-Warning "[prompts] backed up modified prompt to $backup"
+          }
         } catch {
-          Write-Warning "[prompts] warning: could not compare ${dest}: $($_.Exception.Message)"
+          Write-Warning "[prompts] could not compare or back up ${dest}: $($_.Exception.Message)"
+          $skipped++
+          continue
         }
       }
-      Copy-Item -LiteralPath $f.FullName -Destination $dest -Force
+      $stage = Join-Path $DestDir (".prompt." + [guid]::NewGuid().ToString("N"))
+      try {
+        [IO.File]::Copy($f.FullName, $stage, $false)
+        if ($existing) { [IO.File]::Replace($stage, $dest, [System.Management.Automation.Language.NullString]::Value) }
+        else { [IO.File]::Move($stage, $dest) }
+      } catch { Write-Warning "[prompts] could not install $dest"; $skipped++ }
+      finally { [IO.File]::Delete($stage) }
     }
-    Write-Host "[prompts] installed $($Sources.Count) prompt(s) to $DestDir"
-    if ($skipped -gt 0) { Write-Warning "[prompts] skipped $skipped non-regular destination(s)" }
+    Write-Host "[prompts] installed $($Sources.Count - $skipped) prompt(s) to $DestDir"
+    if ($skipped -gt 0) { Write-Warning "[prompts] skipped $skipped destination(s)"; exit 1 }
   }
   "remove" {
+    $failures = 0
     $removed = 0
     $kept = 0
     foreach ($f in $Sources) {
@@ -81,6 +94,7 @@ switch ($Action) {
         $same = (Get-FileHash -LiteralPath $f.FullName -Algorithm SHA256).Hash -eq (Get-FileHash -LiteralPath $dest -Algorithm SHA256).Hash
       } catch {
         Write-Warning "[prompts] could not compare ${dest}: $($_.Exception.Message)"
+        $failures++
         $kept++
         continue
       }
@@ -94,7 +108,7 @@ switch ($Action) {
           continue
         }
         try { Remove-Item -LiteralPath $dest -Force -ErrorAction Stop; $removed++ }
-        catch { Write-Warning "[prompts] could not remove ${dest}: $($_.Exception.Message)"; $kept++ }
+        catch { Write-Warning "[prompts] could not remove ${dest}: $($_.Exception.Message)"; $kept++; $failures++ }
       } else {
         Write-Warning "[prompts] keeping modified prompt: $dest"
         $kept++
@@ -102,13 +116,18 @@ switch ($Action) {
     }
     $detail = if ($kept -gt 0) { " ($kept kept)" } else { "" }
     Write-Host "[prompts] removed $removed prompt(s) from $DestDir$detail"
+    if ($failures) { exit 1 }
   }
   "status" {
     $missing = @()
     $outdated = @()
     foreach ($f in $Sources) {
       $dest = Join-Path $DestDir $f.Name
-      if (-not (Test-Path -LiteralPath $dest)) { $missing += $f.Name; continue }
+      $entry = Get-Item -LiteralPath $dest -Force -ErrorAction SilentlyContinue
+      if (-not $entry -or $entry.PSIsContainer -or ($entry.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+        $missing += $f.Name
+        continue
+      }
       try {
         if ((Get-FileHash -LiteralPath $f.FullName -Algorithm SHA256).Hash -ne (Get-FileHash -LiteralPath $dest -Algorithm SHA256).Hash) {
           $outdated += $f.Name

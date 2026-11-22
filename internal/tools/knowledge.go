@@ -238,6 +238,9 @@ func registerKnowledge(reg *mcp.Registry, d Deps) {
 			corpus := argString(args, "corpus")
 			doc := indexDoc{Source: source, ArtifactID: artifactID, Corpus: corpus, CreatedAt: time.Now().UTC().Format(time.RFC3339)}
 			for i, chunk := range chunks {
+				if err := ctx.Err(); err != nil {
+					return mcp.Fail(trace(ctx), err.Error()), nil
+				}
 				terms := map[string]int{}
 				for _, tok := range tokenize(chunk) {
 					terms[tok]++
@@ -322,6 +325,12 @@ func registerKnowledge(reg *mcp.Registry, d Deps) {
 			docs := []loadedDoc{}
 			scanned := 0
 			for _, name := range indexFiles {
+				if err := ctx.Err(); err != nil {
+					return mcp.Fail(trace(ctx), err.Error()), nil
+				}
+				if !strings.HasPrefix(name, "knowledge/") {
+					continue
+				}
 				if len(allowed) > 0 && !allowed[name] {
 					continue
 				}
@@ -336,7 +345,7 @@ func registerKnowledge(reg *mcp.Registry, d Deps) {
 					continue
 				}
 				var doc indexDoc
-				if json.Unmarshal(raw, &doc) != nil {
+				if json.Unmarshal(raw, &doc) != nil || doc.Source == "" || len(doc.Chunks) == 0 {
 					warnings = append(warnings, "index "+name+" is corrupt and was skipped")
 					continue
 				}
@@ -346,13 +355,16 @@ func registerKnowledge(reg *mcp.Registry, d Deps) {
 				docs = append(docs, loadedDoc{ID: name, Doc: doc})
 			}
 			if len(docs) == 0 {
-				return mcp.Partial(trace(ctx), map[string]any{"hits": []any{}, "index_count": 0},
-					"no index matched the requested scope; index the corpus first"), nil
+				warnings = append(warnings, "no readable knowledge index matched the requested scope")
+				return mcp.Partial(trace(ctx), map[string]any{"hits": []any{}, "index_count": 0}, warnings...), nil
 			}
 			totalChunks := 0
 			df := map[string]int{}
 			for _, ld := range docs {
 				for _, chunk := range ld.Doc.Chunks {
+					if err := ctx.Err(); err != nil {
+						return mcp.Fail(trace(ctx), err.Error()), nil
+					}
 					totalChunks++
 					for term := range chunk.Terms {
 						df[term]++
@@ -375,6 +387,9 @@ func registerKnowledge(reg *mcp.Registry, d Deps) {
 			hits := []hit{}
 			for _, ld := range docs {
 				for _, chunk := range ld.Doc.Chunks {
+					if err := ctx.Err(); err != nil {
+						return mcp.Fail(trace(ctx), err.Error()), nil
+					}
 					score := 0.0
 					for term := range queryTerms {
 						tf := chunk.Terms[term]

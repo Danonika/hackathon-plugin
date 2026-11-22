@@ -42,17 +42,25 @@ function startFallback() {
   if(fallbackTimer || closing) return;
   const poll = async () => {
     if(fallbackPending || closing) return;
-    fallbackPending=true;
+    fallbackPending = true;
+    const revisionAtStart = lastRevision;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 5000);
     try {
-      const response=await fetch('/fly-live?snapshot=1',{cache:'no-store',signal:AbortSignal.timeout(5000)});
-      if(!response.ok) throw new Error(`HTTP ${response.status}`);
-      const snapshot=await response.json();
-      if(snapshot.revision!==lastRevision) receive(snapshot);
-      if(source?.readyState!==EventSource.OPEN) connection('polling');
-    } catch { if(source?.readyState!==EventSource.OPEN) connection('offline'); }
-    finally {fallbackPending=false;}
+      const response = await fetch('/fly-live?snapshot=1', {cache:'no-store', signal:controller.signal});
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const snapshot = await response.json();
+      if (closing || revisionAtStart !== lastRevision || !fallbackTimer) return;
+      if (snapshot.revision !== lastRevision) receive(snapshot);
+      connection('polling');
+    } catch {
+      if (!closing && fallbackTimer) connection('offline');
+    } finally {
+      clearTimeout(timer);
+      fallbackPending = false;
+    }
   };
-  poll(); fallbackTimer=setInterval(poll,1000);
+  fallbackTimer=setInterval(poll,1000); poll();
 }
 function startLive() {
   if(!('EventSource' in window)){startFallback();return;}

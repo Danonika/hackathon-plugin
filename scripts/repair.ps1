@@ -1,4 +1,4 @@
-$ErrorActionPreference = "Continue"
+$ErrorActionPreference = "Stop"
 if (-not $PSCommandPath) {
   Write-Error "[repair] PSCommandPath is empty; run this script as a file, not dot-sourced"
   exit 1
@@ -11,27 +11,20 @@ if (-not $root -or -not (Test-Path -LiteralPath (Join-Path $root "docker-compose
 Set-Location -LiteralPath $root -ErrorAction Stop
 Write-Host "[repair] repository root: $root"
 
-# A missing/renamed helper writes a non-terminating error under
-# $ErrorActionPreference="Continue" and leaves $LASTEXITCODE at 0, so guard the
-# path before relying on the exit code.
-$syncHarness = Join-Path $root "scripts\sync-harness.ps1"
-if (-not (Test-Path -LiteralPath $syncHarness)) { Write-Error "[repair] sync-harness.ps1 not found"; exit 1 }
-$global:LASTEXITCODE = 0
-& $syncHarness
-if ($LASTEXITCODE -ne 0) { Write-Error "[repair] sync-harness failed"; exit 1 }
-$genManifest = Join-Path $root "scripts\gen-mcp-manifest.ps1"
-if (-not (Test-Path -LiteralPath $genManifest)) { Write-Error "[repair] gen-mcp-manifest.ps1 not found"; exit 1 }
-$global:LASTEXITCODE = 0
-& $genManifest -Root $root
-if ($LASTEXITCODE -ne 0) { Write-Error "[repair] manifest generation failed"; exit 1 }
-$installPrompts = Join-Path $root "scripts\install-prompts.ps1"
-if (-not (Test-Path -LiteralPath $installPrompts)) {
-  Write-Warning "[repair] install-prompts.ps1 not found; could not install the Codex command prompts"
-} else {
+function Invoke-RequiredScript([string]$Path, [hashtable]$Parameters) {
+  if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { throw "[repair] missing helper: $Path" }
   $global:LASTEXITCODE = 0
-  & $installPrompts install
-  if ($LASTEXITCODE -ne 0) { Write-Warning "[repair] could not install the Codex command prompts" }
+  & $Path @Parameters 2>&1 | ForEach-Object {
+    if ($_ -is [System.Management.Automation.ErrorRecord]) { throw $_ }
+    Write-Output $_
+  }
+  if ($LASTEXITCODE -ne 0) { throw "[repair] $Path failed (exit $LASTEXITCODE)" }
 }
+. (Join-Path $PSScriptRoot "skill-profile.ps1")
+$installProfile = Get-InstalledSkillProfile $root
+Invoke-RequiredScript (Join-Path $PSScriptRoot "sync-harness.ps1") @{InstallProfile = $installProfile}
+Invoke-RequiredScript (Join-Path $PSScriptRoot "gen-mcp-manifest.ps1") @{Root = $root}
+Invoke-RequiredScript (Join-Path $PSScriptRoot "install-prompts.ps1") @{Action = "install"}
 $dirFailures = 0
 foreach ($d in @("logs", "evals", "data\artifacts", "data\index", "data\control", "data\judge-bundles")) {
   try {
@@ -43,26 +36,14 @@ foreach ($d in @("logs", "evals", "data\artifacts", "data\index", "data\control"
 }
 if ($dirFailures -gt 0) { Write-Error "[repair] $dirFailures directory creation failure(s)"; exit 1 }
 
-$installProfile = "full"
-$statePath = Join-Path $root "configs\install-state.json"
-if (Test-Path -LiteralPath $statePath) {
-  try {
-    $state = Get-Content -LiteralPath $statePath -Raw | ConvertFrom-Json
-    if ($state.profile -in @("core", "full")) {
-      $installProfile = $state.profile
-    } elseif ($state.profile) {
-      Write-Warning "[repair] unknown profile '$($state.profile)' in install-state; using 'full'"
-    }
-  } catch {
-    Write-Warning "[repair] could not read the install state; using 'full'"
-  }
-}
-
 $runtime = "binary"
-if (Get-Command docker -CommandType Application -ErrorAction SilentlyContinue) {
-  $global:LASTEXITCODE = 0
-  docker info *> $null
-  if ($LASTEXITCODE -eq 0) { $runtime = "docker" }
+. (Join-Path $PSScriptRoot "native-probe.ps1")
+$docker = Get-Command docker -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+if ($docker) {
+  try {
+    $probe = Invoke-NativeProbe $docker.Source @("info") "" $root 5000
+    if ($probe.Code -eq 0) { $runtime = "docker" }
+  } catch { Write-Warning "[repair] Docker unavailable: $_" }
 }
 
 $bin = Join-Path $root "bin\hackathonkit-mcp.exe"
@@ -73,11 +54,11 @@ if ((-not (Test-Path -LiteralPath $bin)) -or (-not (Test-Path -LiteralPath $demo
     if (Get-Command go -CommandType Application -ErrorAction SilentlyContinue) {
       $binDir = Join-Path $root "bin"
       New-Item -ItemType Directory -Force -Path $binDir -ErrorAction Stop | Out-Null
-      go build -o (Join-Path $binDir "hackathonkit-mcp.exe") ./cmd/hackathonkit-mcp
+      go build -trimpath -buildvcs=false -o (Join-Path $binDir "hackathonkit-mcp.exe") ./cmd/hackathonkit-mcp
       if ($LASTEXITCODE -ne 0) { Write-Error "[repair] go build hackathonkit-mcp failed"; exit 1 }
-      go build -o (Join-Path $binDir "hackathonkit-demo-api.exe") ./cmd/demo-api
+      go build -trimpath -buildvcs=false -o (Join-Path $binDir "hackathonkit-demo-api.exe") ./cmd/demo-api
       if ($LASTEXITCODE -ne 0) { Write-Error "[repair] go build demo-api failed"; exit 1 }
-      go build -o (Join-Path $binDir "hackathonkit-ctl.exe") ./cmd/hackathonkit-ctl
+      go build -trimpath -buildvcs=false -o (Join-Path $binDir "hackathonkit-ctl.exe") ./cmd/hackathonkit-ctl
       if ($LASTEXITCODE -ne 0) { Write-Error "[repair] go build hackathonkit-ctl failed"; exit 1 }
       Write-Host "[repair] rebuilt local binaries in bin/"
     } else {
@@ -94,22 +75,20 @@ if (-not (Test-Path -LiteralPath $stateScript)) {
   Write-Error "[repair] write-install-state.ps1 is missing"
   exit 1
 }
-$global:LASTEXITCODE = 0
-& $stateScript -Root $root -Profile $installProfile -Runtime $runtime
-if ($LASTEXITCODE -ne 0) { Write-Error "[repair] write-install-state failed"; exit 1 }
+Invoke-RequiredScript $stateScript @{Root = $root; Profile = $installProfile; Runtime = $runtime}
 
 if (Get-Command codex -CommandType Application -ErrorAction SilentlyContinue) {
   $global:LASTEXITCODE = 0
   & codex plugin marketplace add $root *> $null
   $marketExit = $LASTEXITCODE
-  if ($marketExit -ne 0) { Write-Warning "[repair] codex plugin marketplace add failed (exit $marketExit)" }
+  if ($marketExit -ne 0) { throw "[repair] codex plugin marketplace add failed (exit $marketExit)" }
   $global:LASTEXITCODE = 0
   & codex plugin add hackathonkit@hackathonkit-local *> $null
   $addExit = $LASTEXITCODE
   if ($addExit -eq 0) {
     Write-Host "[repair] plugin reinstalled; start a NEW Codex session"
   } else {
-    Write-Warning "[repair] could not reinstall the plugin automatically (marketplace exit $marketExit, add exit $addExit)"
+    throw "[repair] could not reinstall the plugin automatically (marketplace exit $marketExit, add exit $addExit)"
   }
 }
 

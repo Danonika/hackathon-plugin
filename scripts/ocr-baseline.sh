@@ -19,21 +19,22 @@ ROOT="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
 BASELINE="$ROOT/docs/ocr-baseline.json"
 OUT_MD="$ROOT/docs/OCR-CANONICAL.md"
 
-if ! command -v ocr >/dev/null 2>&1; then
-  echo "[ocr-baseline] ocr CLI not found on PATH" >&2
-  exit 2
-fi
 if ! command -v python3 >/dev/null 2>&1; then
   echo "[ocr-baseline] python3 is required" >&2
   exit 2
 fi
 
 # Triage mode: apply a status to an existing finding instead of scanning.
-if [ "$1" = "--set" ]; then
+if [ "${1:-}" = "--set" ]; then
   shift
-  exec python3 "$ROOT/scripts/ocr-dedup.py" --baseline "$BASELINE" --out-json "$BASELINE" --set "$@"
+  exec python3 "$ROOT/scripts/ocr-dedup.py" --baseline "$BASELINE" --out-json "$BASELINE" --out-md "$OUT_MD" --set "$@"
 fi
 
+if ! command -v ocr >/dev/null 2>&1; then
+  echo "[ocr-baseline] ocr CLI not found on PATH" >&2
+  exit 2
+fi
+cd "$ROOT"
 SCAN=$(mktemp "${TMPDIR:-/tmp}/ocr-scan.XXXXXX")
 trap 'rm -f "$SCAN"' EXIT INT TERM
 

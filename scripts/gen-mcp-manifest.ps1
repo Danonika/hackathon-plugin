@@ -14,7 +14,7 @@ if (-not $Root) {
   if (-not $PSScriptRoot) {
     Fail "[mcp-manifest] cannot resolve the repository root (empty PSScriptRoot)"
   }
-  $Root = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
+  $Root = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot "..")).Path
 }
 if (-not (Test-Path -LiteralPath $Root -PathType Container)) {
   Fail "[mcp-manifest] repository root not found: $Root"
@@ -29,25 +29,30 @@ $templatePath = Join-Path $Root "plugins/hackathonkit/.mcp.json.template"
 if (-not (Test-Path -LiteralPath $templatePath)) {
   Fail "[mcp-manifest] template not found: $templatePath"
 }
-$template = Get-Content -LiteralPath $templatePath -Raw
+$template = Get-Content -LiteralPath $templatePath -Raw -Encoding UTF8
 if ([string]::IsNullOrWhiteSpace($template)) {
   Fail "[mcp-manifest] template is empty: $templatePath"
 }
 
-# ConvertTo-Json produces a correctly escaped JSON string literal; strip the
-# surrounding quotes so the value can be spliced into the template.
-$rootJson = ($Root.Replace("\", "/") | ConvertTo-Json -Compress)
-$rootJson = $rootJson.Substring(1, $rootJson.Length - 2)
-# Validate the TEMPLATE for unknown placeholders before substitution. Checking
-# the rendered manifest instead would false-positive when the resolved root path
-# legitimately contains braces as data (e.g. C:\work\{{demo}}\hackathonkit).
-if ($template -match "\{\{") {
-  $stripped = $template.Replace("{{REPO_ROOT}}", "").Replace("{{MCP_LAUNCHER}}", "")
-  if ($stripped -match "\{\{") {
-    Fail "[mcp-manifest] template contains an unknown placeholder ({{...}})"
+# Replace placeholders on the original text only: a root containing braces is data.
+$rootLiteral = ConvertTo-Json -InputObject ($Root.Replace("\", "/")) -Compress
+$escapedRoot = $rootLiteral.Substring(1, $rootLiteral.Length - 2)
+$expanded = [regex]::Replace($template, '\{\{[^{}]+\}\}', {
+  param($match)
+  switch -CaseSensitive ($match.Value) {
+    "{{REPO_ROOT}}" { return $escapedRoot }
+    "{{MCP_LAUNCHER}}" { return "hackathonkit-mcp-launcher.js" }
+    default { throw "[mcp-manifest] unknown template placeholder: $($match.Value)" }
   }
+})
+$parsed = $expanded | ConvertFrom-Json
+$server = $parsed.mcpServers.hackathonkit
+if (-not $server -or $server.command -isnot [string] -or $server.args -isnot [array]) {
+  Fail "[mcp-manifest] invalid hackathonkit command or args in template"
 }
-$manifest = $template.Replace("{{REPO_ROOT}}", $rootJson).Replace("{{MCP_LAUNCHER}}", "hackathonkit-mcp-launcher.cmd")
+$server.args = @($server.command) + $server.args
+$server.command = "node"
+$manifest = $parsed | ConvertTo-Json -Depth 100
 
 $manifestPath = Join-Path $Root "plugins/hackathonkit/.mcp.json"
 $manifestTmp = "$manifestPath.tmp.$PID"
@@ -68,7 +73,7 @@ try {
     try {
       if (Test-Path -LiteralPath $manifestPath) {
         # Atomic replace: never leave the destination deleted if the rename fails.
-        [System.IO.File]::Replace($manifestTmp, $manifestPath, $null)
+        [System.IO.File]::Replace($manifestTmp, $manifestPath, [System.Management.Automation.Language.NullString]::Value)
       } else {
         [System.IO.File]::Move($manifestTmp, $manifestPath)
       }

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -169,5 +170,15 @@ func TestChunkText(t *testing.T) {
 	got := chunkText("abcdefg", 4, 2)
 	if len(got) != 3 || got[0] != "abcd" || got[1] != "cdef" || got[2] != "efg" {
 		t.Fatalf("chunkText overlapping = %#v", got)
+	}
+}
+
+func TestKnowledgeSearchSkipsRouterStateAndExplainsCorruptIndexes(t *testing.T) {
+	reg, root := testRegistry(t)
+	mustWrite(t, filepath.Join(root, "data", "index", "fly-memory.json"), "{}")
+	mustWrite(t, filepath.Join(root, "data", "index", "knowledge", "broken.json"), "{")
+	env := call(t, reg, "knowledge.search", map[string]any{"query": "search"})
+	if env.Status != "partial" || env.Data.(map[string]any)["index_count"] != 0 || !strings.Contains(strings.Join(env.Warnings, " "), "broken.json") {
+		t.Fatalf("unreadable indexes should identify the failed knowledge file: %+v", env)
 	}
 }

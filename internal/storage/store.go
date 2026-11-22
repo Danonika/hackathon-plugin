@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -74,29 +75,63 @@ func (s *Store) report(err error) {
 	}
 }
 
-func (s *Store) ensureWithin(full string) error {
-	rootReal, err := filepath.EvalSymlinks(s.root)
+// ensureWithin verifies the configured directory is inside the repository and
+// the resolved target is inside that directory, including for new outputs.
+func (s *Store) ensureWithin(area, full string) error {
+	abs, err := filepath.Abs(s.root)
 	if err != nil {
-		// Root resolution failed (not created yet, permission error, symlink
-		// loop): fail closed rather than trusting a lexical comparison.
-		return fmt.Errorf("cannot resolve storage root for containment check: %w", err)
+		return err
 	}
-	p := full
+	root, err := filepath.EvalSymlinks(abs)
+	if err != nil {
+		return fmt.Errorf("cannot resolve storage root: %w", err)
+	}
+	base, err := ResolveWithin(root, area)
+	if err != nil {
+		return err
+	}
+	rel, err := filepath.Rel(filepath.Join(s.root, area), full)
+	if err != nil {
+		return err
+	}
+	if _, err = ResolveWithin(base, rel); err != nil {
+		return fmt.Errorf("path escapes repository root or configured storage directory, or cannot be resolved: %w", err)
+	}
+	return nil
+}
+
+// ResolveWithin returns a canonical path under a canonical base directory.
+// Missing suffix components are allowed for outputs. Existing links must
+// resolve successfully, and their targets must remain within the base.
+func ResolveWithin(base, rel string) (string, error) {
+	if !filepath.IsLocal(rel) {
+		return "", fmt.Errorf("path escapes its root: %s", rel)
+	}
+	full := filepath.Join(base, rel)
+	current := full
 	for {
-		real, err := filepath.EvalSymlinks(p)
+		_, err := os.Lstat(current)
 		if err == nil {
-			if real == rootReal || strings.HasPrefix(real, rootReal+string(filepath.Separator)) {
-				return nil
+			prefix, err := filepath.EvalSymlinks(current)
+			if err != nil {
+				return "", err
 			}
-			return fmt.Errorf("resolved path escapes repository root: %s", full)
+			suffix, err := filepath.Rel(current, full)
+			if err != nil {
+				return "", err
+			}
+			resolved := filepath.Join(prefix, suffix)
+			within, err := filepath.Rel(base, resolved)
+			if err != nil || !filepath.IsLocal(within) {
+				return "", fmt.Errorf("path resolves outside its root: %s", rel)
+			}
+			return resolved, nil
 		}
-		parent := filepath.Dir(p)
-		if parent == p {
-			// No ancestor could be resolved: fail closed rather than accepting
-			// a path we could not verify.
-			return fmt.Errorf("cannot resolve any ancestor of %s for containment check", full)
+		parent := filepath.Dir(current)
+		if !os.IsNotExist(err) || parent == current {
+			return "", err
 		}
-		p = parent
+		current = parent
 	}
 }
 
@@ -130,7 +165,7 @@ func (s *Store) InputPath(name string) (string, error) {
 		return "", err
 	}
 	full := filepath.Join(s.root, s.inputDir, clean)
-	if err := s.ensureWithin(full); err != nil {
+	if err := s.ensureWithin(s.inputDir, full); err != nil {
 		return "", err
 	}
 	st, err := os.Stat(full)
@@ -143,6 +178,9 @@ func (s *Store) InputPath(name string) (string, error) {
 	if st.IsDir() {
 		return "", fmt.Errorf("input path is a directory: %s", name)
 	}
+	if !st.Mode().IsRegular() {
+		return "", fmt.Errorf("input must be a regular file: %s", name)
+	}
 	return full, nil
 }
 
@@ -152,7 +190,7 @@ func (s *Store) ArtifactPath(name string, createParent bool) (string, error) {
 		return "", err
 	}
 	full := filepath.Join(s.root, s.artifactDir, clean)
-	if err := s.ensureWithin(full); err != nil {
+	if err := s.ensureWithin(s.artifactDir, full); err != nil {
 		return "", err
 	}
 	if createParent {
@@ -168,11 +206,11 @@ func (s *Store) ArtifactPath(name string, createParent bool) (string, error) {
 // a temp file in the verified parent and renamed into place, so a symlink
 // created at the final component between the check and the write is replaced
 // rather than followed.
-func (s *Store) safeWriteFile(full string, data []byte, perm os.FileMode) error {
+func (s *Store) safeWriteFile(area, full string, data []byte, perm os.FileMode) error {
 	if info, err := os.Lstat(full); err == nil && info.Mode()&os.ModeSymlink != 0 {
 		return fmt.Errorf("refusing to write through a symlink: %s", full)
 	}
-	if err := s.ensureWithin(full); err != nil {
+	if err := s.ensureWithin(area, full); err != nil {
 		return err
 	}
 	dir := filepath.Dir(full)
@@ -211,13 +249,13 @@ func (s *Store) WriteArtifact(rel string, data []byte) (string, error) {
 		return "", err
 	}
 	full := filepath.Join(s.root, s.artifactDir, clean)
-	if err := s.ensureWithin(full); err != nil {
+	if err := s.ensureWithin(s.artifactDir, full); err != nil {
 		return "", err
 	}
 	if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
 		return "", err
 	}
-	if err := s.safeWriteFile(full, data, 0o644); err != nil {
+	if err := s.safeWriteFile(s.artifactDir, full, data, 0o644); err != nil {
 		return "", err
 	}
 	id := filepath.ToSlash(clean)
@@ -246,7 +284,7 @@ func (s *Store) ReadArtifact(rel string) ([]byte, error) {
 		return nil, err
 	}
 	full := filepath.Join(s.root, s.artifactDir, clean)
-	if err := s.ensureWithin(full); err != nil {
+	if err := s.ensureWithin(s.artifactDir, full); err != nil {
 		return nil, err
 	}
 	data, err := os.ReadFile(full)
@@ -261,7 +299,7 @@ func (s *Store) ReadArtifact(rel string) ([]byte, error) {
 			return nil, fmt.Errorf("artifact %s: local read failed (%v); remote fetch failed: %w", clean, err, oerr)
 		}
 		if mkErr := os.MkdirAll(filepath.Dir(full), 0o755); mkErr == nil {
-			if werr := s.safeWriteFile(full, remote, 0o644); werr != nil {
+			if werr := s.safeWriteFile(s.artifactDir, full, remote, 0o644); werr != nil {
 				s.report(fmt.Errorf("cache remote artifact %s locally: %w", clean, werr))
 			}
 		}
@@ -274,6 +312,8 @@ func (s *Store) ReadArtifact(rel string) ([]byte, error) {
 // the object store), so a caller can detect truncation (len > limit) without
 // materializing an unbounded object. It does not rehydrate/cache the object.
 func (s *Store) ReadArtifactCapped(rel string, limit int64) ([]byte, error) {
+	// Reserve one byte for the overflow sentinel, even for an effectively unlimited read.
+	limit = min(limit, math.MaxInt64-1)
 	if limit < 0 {
 		limit = 0
 	}
@@ -282,7 +322,7 @@ func (s *Store) ReadArtifactCapped(rel string, limit int64) ([]byte, error) {
 		return nil, err
 	}
 	full := filepath.Join(s.root, s.artifactDir, clean)
-	if err := s.ensureWithin(full); err != nil {
+	if err := s.ensureWithin(s.artifactDir, full); err != nil {
 		return nil, err
 	}
 	if f, oerr := os.Open(full); oerr == nil {
@@ -317,13 +357,13 @@ func (s *Store) WriteIndex(rel string, data []byte) (string, error) {
 		return "", err
 	}
 	full := filepath.Join(s.root, s.indexDir, clean)
-	if err := s.ensureWithin(full); err != nil {
+	if err := s.ensureWithin(s.indexDir, full); err != nil {
 		return "", err
 	}
 	if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
 		return "", err
 	}
-	if err := s.safeWriteFile(full, data, 0o644); err != nil {
+	if err := s.safeWriteFile(s.indexDir, full, data, 0o644); err != nil {
 		return "", err
 	}
 	return filepath.ToSlash(clean), nil
@@ -335,7 +375,7 @@ func (s *Store) ReadIndex(rel string) ([]byte, error) {
 		return nil, err
 	}
 	full := filepath.Join(s.root, s.indexDir, clean)
-	if err := s.ensureWithin(full); err != nil {
+	if err := s.ensureWithin(s.indexDir, full); err != nil {
 		return nil, err
 	}
 	return os.ReadFile(full)

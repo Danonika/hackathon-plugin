@@ -12,15 +12,31 @@
 # Usage: scripts/gen-codex-config.sh [repo-root]
 #        scripts/gen-codex-config.sh --remove
 set -e
-if [ "$1" = "--remove" ]; then
-  CODEX_DIR="${CODEX_HOME:-$HOME/.codex}"
-  DEST="$CODEX_DIR/config.toml"
-  BEGIN="# >>> hackathonkit-mcp (managed by scripts/gen-codex-config.sh) <<<"
-  END="# <<< hackathonkit-mcp (managed by scripts/gen-codex-config.sh) >>>"
-  [ -f "$DEST" ] || { echo "[codex-config] no user config to clean at $DEST"; exit 0; }
+CODEX_DIR="${CODEX_HOME:-$HOME/.codex}"
+DEST="$CODEX_DIR/config.toml"
+BEGIN="# >>> hackathonkit-mcp (managed by scripts/gen-codex-config.sh) <<<"
+END="# <<< hackathonkit-mcp (managed by scripts/gen-codex-config.sh) >>>"
+if [ "${1:-}" = "--remove" ] && [ ! -f "$DEST" ]; then
+  echo "[codex-config] no user config to clean at $DEST"
+  exit 0
+fi
+mkdir -p "$CODEX_DIR"
+. "$(dirname -- "$0")/file-lock.sh"
+acquire_file_lock "$CODEX_DIR/.hackathonkit-config.lock"
+strip_block() {
+  awk -v begin="$BEGIN" -v end="$END" '
+    $0 == begin { if (inside) exit 1; inside=1; next }
+    $0 == end { if (!inside) exit 1; inside=0; next }
+    !inside { print }
+    END { if (inside) exit 1 }
+  ' "$DEST" || { echo "[codex-config] incomplete block markers in $DEST; keeping the original" >&2; return 1; }
+}
+if [ "${1:-}" = "--remove" ]; then
   TMP=$(mktemp "$CODEX_DIR/config.toml.tmp.XXXXXX")
   trap 'rm -f "$TMP"' EXIT
-  awk -v begin="$BEGIN" -v end="$END" '$0==begin{inside=1;next} inside&&$0==end{inside=0;next} !inside{print}' "$DEST" > "$TMP"
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
+  strip_block > "$TMP"
   chmod "$(stat -c '%a' "$DEST" 2>/dev/null || stat -f '%Lp' "$DEST" 2>/dev/null || echo 600)" "$TMP" 2>/dev/null || true
   mv "$TMP" "$DEST"
   echo "[codex-config] removed the managed hackathonkit block from $DEST"
@@ -39,26 +55,14 @@ if [ ! -f "$LAUNCHER" ]; then
   exit 1
 fi
 
-CODEX_DIR="${CODEX_HOME:-$HOME/.codex}"
-DEST="$CODEX_DIR/config.toml"
-BEGIN="# >>> hackathonkit-mcp (managed by scripts/gen-codex-config.sh) <<<"
-END="# <<< hackathonkit-mcp (managed by scripts/gen-codex-config.sh) >>>"
-
+case "$LAUNCHER" in
+  *[[:cntrl:]]*) echo "[codex-config] launcher path contains a control character" >&2; exit 1 ;;
+esac
 toml_escape() {
   printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g'
 }
 
-mkdir -p "$CODEX_DIR"
-
-# Refuse to touch a hand-written hackathonkit table: we cannot safely merge it.
-# Allow leading whitespace before the header (TOML permits it).
-if [ -f "$DEST" ] && ! grep -qF "$BEGIN" "$DEST" &&
-   grep -qE '^[[:space:]]*\[[[:space:]]*"?mcp_servers"?[[:space:]]*\.[[:space:]]*"?hackathonkit"?[[:space:]]*\]' "$DEST"; then
-  echo "[codex-config] $DEST already defines [mcp_servers.hackathonkit] without the managed markers." >&2
-  echo "[codex-config] Remove or rename that table, then re-run; refusing to overwrite it." >&2
-  exit 1
-fi
-
+# Check the unmanaged content again after stripping the generated block below.
 # Derive the timeout budgets from the committed config so the override cannot
 # silently shorten them when the project defaults change. One scan: enter the
 # [mcp_servers.hackathonkit] table, capture the two keys, leave on the next table
@@ -96,6 +100,20 @@ if [ -f "$PROJECT_CONFIG" ]; then
   STARTUP_TIMEOUT=$(printf '%s\n' "$BUDGETS" | awk '$1=="S"{print $2; exit}')
   TOOL_TIMEOUT=$(printf '%s\n' "$BUDGETS" | awk '$1=="T"{print $2; exit}')
 fi
+# Prefer exact TOML values when available; the limited extractor also supports
+# older systems and supplies the documented defaults for malformed overrides.
+if [ -f "$PROJECT_CONFIG" ] && parsed=$(python3 - "$PROJECT_CONFIG" 2>/dev/null <<'PYTHON'
+import sys, tomllib
+with open(sys.argv[1], "rb") as stream:
+    server = tomllib.load(stream).get("mcp_servers", {}).get("hackathonkit", {})
+for key in ("startup_timeout_sec", "tool_timeout_sec"):
+    value = server.get(key)
+    print(value if type(value) is int and value >= 0 else 180)
+PYTHON
+); then
+  STARTUP_TIMEOUT=$(printf '%s\n' "$parsed" | sed -n '1p')
+  TOOL_TIMEOUT=$(printf '%s\n' "$parsed" | sed -n '2p')
+fi
 case "$STARTUP_TIMEOUT" in ''|*[!0-9]*) STARTUP_TIMEOUT=180 ;; esac
 case "$TOOL_TIMEOUT" in ''|*[!0-9]*) TOOL_TIMEOUT=180 ;; esac
 
@@ -108,27 +126,99 @@ if [ -f "$DEST" ]; then
 fi
 
 TMP=$(mktemp "$CODEX_DIR/config.toml.tmp.XXXXXX")
-TMP_TRIM="$TMP.trim"
-cleanup() { rm -f "$TMP" "$TMP_TRIM"; }
+TMP_TRIM=""
+cleanup() {
+  rm -f "$TMP"
+  if [ -n "$TMP_TRIM" ]; then rm -f "$TMP_TRIM"; fi
+}
 trap cleanup EXIT
 trap 'cleanup; exit 130' INT
 trap 'cleanup; exit 143' TERM
 
-# Drop a complete managed block (BEGIN..END). A lone BEGIN with no END means a
-# previously interrupted write: drop from BEGIN to EOF so it cannot corrupt the
-# file on the next run.
+# Refuse a partial marker pair rather than silently removing user configuration.
 if [ -f "$DEST" ]; then
-  awk -v begin="$BEGIN" -v end="$END" '
-    $0 == begin { inside = 1; next }
-    inside && $0 == end { inside = 0; next }
-    !inside { print }
-  ' "$DEST" > "$TMP"
+  strip_block > "$TMP"
 else
   : > "$TMP"
 fi
 
+# Only migrate an earlier name if the marked block describes this checkout's
+# generated launcher. Another checkout, a hand-written registration, and local
+# settings added to a block belong to the user.
+TOML_MODULE=""
+if command -v python3 >/dev/null 2>&1; then
+  if python3 -c 'import tomllib' >/dev/null 2>&1; then
+    TOML_MODULE="tomllib"
+  elif python3 -c 'import tomli' >/dev/null 2>&1; then
+    TOML_MODULE="tomli"
+  fi
+fi
+if [ -n "$TOML_MODULE" ]; then
+  python3 - "$TOML_MODULE" "$TMP" "$ROOT" <<'PYTHON' || exit 1
+import importlib, re, sys
+from pathlib import Path
+
+toml = importlib.import_module(sys.argv[1])
+config_path, checkout = Path(sys.argv[2]), Path(sys.argv[3]).resolve()
+text = config_path.read_text(encoding="utf-8")
+config = toml.loads(text)
+servers = config.get("mcp_servers", {})
+if "hackathonkit" in servers:
+    sys.exit("[codex-config] refusing unmanaged hackathonkit server definition")
+
+marker = r" \(managed by scripts/gen-codex-config\.sh\)"
+block = re.compile(r"^# >>> ([A-Za-z0-9_-]+)-mcp" + marker + r" <<<\n"
+                   r'\[mcp_servers\.\1\]\ncommand = "sh"\nargs = \[[^\n]*\]\n'
+                   r"(?:startup_timeout_sec = [0-9]+\n)?(?:tool_timeout_sec = [0-9]+\n)?"
+                   r"# <<< \1-mcp" + marker + r" >>>(?:\n|$)", re.MULTILINE)
+for match in reversed(list(block.finditer(text))):
+    name = match[1]
+    server = servers.get(name)
+    if server is None:
+        continue
+    try:
+        generated = toml.loads(match[0])["mcp_servers"][name]
+    except toml.TOMLDecodeError:
+        continue
+    if server != generated:
+        continue
+    args = server.get("args")
+    if not isinstance(args, list) or len(args) != 1 or not isinstance(args[0], str):
+        continue
+    launcher = Path(args[0])
+    suffix = ("plugins", name, "scripts", f"{name}-mcp-launcher.sh")
+    if not launcher.is_absolute() or launcher.parts[-4:] != suffix or launcher.parents[3].resolve() != checkout:
+        continue
+    candidate = text[:match.start()] + text[match.end():]
+    # A literal string in the user's config may itself contain an example
+    # block. Remove only text whose sole TOML effect is the owned registration.
+    remaining = toml.loads(candidate)
+    if remaining.pop("mcp_servers", {}) != {k: v for k, v in servers.items() if k != name}:
+        continue
+    if remaining != {k: v for k, v in config.items() if k != "mcp_servers"}:
+        continue
+    text = candidate
+    del servers[name]
+config_path.write_text(text, encoding="utf-8")
+PYTHON
+else
+  # The generator can still install a fresh config without Python. A recorded
+  # launcher for this checkout needs a parsed merge to protect other settings.
+  if grep -Fq '(managed by scripts/gen-codex-config.sh) <<<' "$TMP" &&
+     grep -F "args = [\"$(toml_escape "$ROOT/plugins/")" "$TMP" | grep -Fq -- '-mcp-launcher.sh"]'; then
+    echo "[codex-config] install a Python TOML parser or remove this checkout's previous generated server block before upgrading" >&2
+    exit 1
+  fi
+  # Rendering without a TOML parser is only safe for unrelated user keys.
+  if grep -Eq '^[[:space:]]*[^#]*(mcp_servers.*hackathonkit|mcp_servers[^[:alnum:]_]*=|hackathonkit[^[:alnum:]_]*=)' "$TMP"; then
+    echo "[codex-config] install Python 3.11+ to merge an existing MCP configuration safely" >&2
+    exit 1
+  fi
+fi
+
 # Drop trailing blank lines left by the previous block, then append the block
 # with one leading blank line, so repeated runs are byte-stable.
+TMP_TRIM=$(mktemp "$CODEX_DIR/config.toml.trim.XXXXXX")
 awk 'BEGIN{b=""} /^[[:blank:]]*$/{b=b $0 "\n"; next} {printf "%s%s\n", b, $0; b=""} END{}' "$TMP" > "$TMP_TRIM"
 mv "$TMP_TRIM" "$TMP"
 
@@ -142,17 +232,7 @@ mv "$TMP_TRIM" "$TMP"
   printf '%s\n' "$END"
 } >> "$TMP"
 
-# Validate the rendered TOML when a parser is available. `tomllib` is Python
-# 3.11+; older hosts may ship `tomli`. When neither is importable, skip the
-# optional check rather than misreporting a missing module as invalid TOML.
-TOML_MODULE=""
-if command -v python3 >/dev/null 2>&1; then
-  if python3 -c 'import tomllib' >/dev/null 2>&1; then
-    TOML_MODULE="tomllib"
-  elif python3 -c 'import tomli' >/dev/null 2>&1; then
-    TOML_MODULE="tomli"
-  fi
-fi
+# Validate the rendered result with the same TOML parser used for the merge.
 if [ -n "$TOML_MODULE" ]; then
   if ! python3 -c "import $TOML_MODULE, sys; $TOML_MODULE.load(open(sys.argv[1], 'rb'))" "$TMP" 2>/dev/null; then
     echo "[codex-config] rendered config is not valid TOML; keeping the previous file" >&2

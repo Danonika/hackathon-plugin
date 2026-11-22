@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"fmt"
 	"math"
@@ -11,9 +12,11 @@ import (
 	"strings"
 	"time"
 
+	"hackathonkit.local/agentkit/internal/atomicfile"
 	"hackathonkit.local/agentkit/internal/evaluation"
 	"hackathonkit.local/agentkit/internal/mcp"
 	"hackathonkit.local/agentkit/internal/metadata"
+	"hackathonkit.local/agentkit/internal/storage"
 )
 
 func registerEvaluation(reg *mcp.Registry, d Deps) {
@@ -34,10 +37,7 @@ func registerEvaluation(reg *mcp.Registry, d Deps) {
 				return mcp.Fail(trace(ctx), err.Error()), nil
 			}
 			minValid := d.Cfg.Evaluation().MinValidJudges
-			agg := evaluation.AggregateReports(reports, argString(args, "snapshot_sha"), minValid)
-			if len(loadInvalids) > 0 {
-				agg.DroppedInvalid = append(loadInvalids, agg.DroppedInvalid...)
-			}
+			agg := aggregateLoaded(reports, loadInvalids, argString(args, "snapshot_sha"), minValid)
 			if d.Metrics != nil {
 				d.Metrics.Inc("eval_aggregate_total")
 				if dropped := len(agg.DroppedInvalid) + len(agg.DroppedConflict); dropped > 0 {
@@ -118,10 +118,8 @@ func registerEvaluation(reg *mcp.Registry, d Deps) {
 			}
 			sha := argString(args, "snapshot_sha")
 			minValid := d.Cfg.Evaluation().MinValidJudges
-			agg1 := evaluation.AggregateReports(run1, sha, minValid)
-			agg2 := evaluation.AggregateReports(run2, sha, minValid)
-			agg1.DroppedInvalid = append(invalid1, agg1.DroppedInvalid...)
-			agg2.DroppedInvalid = append(invalid2, agg2.DroppedInvalid...)
+			agg1 := aggregateLoaded(run1, invalid1, sha, minValid)
+			agg2 := aggregateLoaded(run2, invalid2, sha, minValid)
 
 			settings := d.Cfg.Evaluation()
 			minDelta := argFloat(args, "min_delta", -1)
@@ -232,10 +230,15 @@ func registerEvaluation(reg *mcp.Registry, d Deps) {
 				"mandatory_scenario_failed": comparison.MandatoryFailed,
 			}
 			if argBool(args, "persist", false) && d.Store != nil {
-				stamp := time.Now().UTC().Format("20060102-150405.000000000")
+				created := time.Now().UTC()
+				stamp := historyStamp(created)
 				rel := filepath.ToSlash(filepath.Join("evals", "decisions", uniqueSegment(argString(args, "snapshot_sha")),
 					fmt.Sprintf("%s-%s.json", mode, stamp)))
-				if path, werr := writeRepoJSON(d.Cfg.Root(), rel, comparison); werr != nil {
+				record := struct {
+					evaluation.Comparison
+					TS time.Time `json:"ts"`
+				}{Comparison: comparison, TS: created}
+				if path, werr := writeRepoJSON(d.Cfg.Root(), rel, record); werr != nil {
 					data["persist_error"] = werr.Error()
 				} else {
 					data["decision_path"] = path
@@ -388,7 +391,7 @@ func registerEvaluation(reg *mcp.Registry, d Deps) {
 				"rubric_version": evaluation.RubricVersion,
 			}
 			if argBool(args, "persist", true) && d.Store != nil {
-				stamp := time.Now().UTC().Format("20060102-150405.000000000")
+				stamp := historyStamp(time.Now().UTC())
 				rel := filepath.ToSlash(filepath.Join("evals", "rankings", "ranking-"+stamp+".json"))
 				if path, werr := writeRepoJSON(d.Cfg.Root(), rel, ranking); werr != nil {
 					data["persist_error"] = werr.Error()
@@ -447,6 +450,28 @@ func readAggregates(root string, args map[string]any) ([]evaluation.Aggregate, e
 		return nil, fmt.Errorf("aggregates or aggregates_json is required")
 	}
 	return aggregates, nil
+}
+
+// aggregateLoaded maps validation indexes from the loaded reports back to
+// their original positions among inline and file inputs.
+func aggregateLoaded(reports []evaluation.JudgeReport, invalid []evaluation.InvalidReport, sha string, minValid int) evaluation.Aggregate {
+	agg := evaluation.AggregateReports(reports, sha, minValid)
+	if len(invalid) == 0 {
+		return agg
+	}
+	positions := make([]int, 0, len(reports))
+	for i, skip := 0, 0; i < len(reports)+len(invalid); i++ {
+		if skip < len(invalid) && invalid[skip].Index == i {
+			skip++
+			continue
+		}
+		positions = append(positions, i)
+	}
+	for i, entry := range agg.DroppedInvalid {
+		agg.DroppedInvalid[i].Index = positions[entry.Index]
+	}
+	agg.DroppedInvalid = append(invalid, agg.DroppedInvalid...)
+	return agg
 }
 
 func aggregateData(agg evaluation.Aggregate) map[string]any {
@@ -538,43 +563,26 @@ func resolveRepoPath(root, rel string) (string, error) {
 	if clean == "." || clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
 		return "", fmt.Errorf("path escapes repository root: %s", rel)
 	}
-	full := filepath.Join(root, clean)
+	absRoot, err := filepath.Abs(root)
+	if err != nil {
+		return "", err
+	}
 	// Fail closed: if the root cannot be resolved the containment check is
 	// unverifiable, so reject the path instead of accepting it unchecked.
-	resolvedRoot, err := filepath.EvalSymlinks(root)
+	resolvedRoot, err := filepath.EvalSymlinks(absRoot)
 	if err != nil {
 		return "", fmt.Errorf("cannot resolve repository root: %w", err)
 	}
-	resolved := resolveExistingPath(full)
-	if resolved != resolvedRoot && !strings.HasPrefix(resolved, resolvedRoot+string(filepath.Separator)) {
-		return "", fmt.Errorf("path resolves outside the repository root: %s", rel)
+	resolved, err := storage.ResolveWithin(resolvedRoot, clean)
+	if err != nil {
+		return "", fmt.Errorf("cannot resolve repository path %s: %w", rel, err)
 	}
-	// Return the resolved path, not the original: using the unresolved path
-	// would let a symlink swapped in after this check redirect a later
-	// open/write outside the root (TOCTOU).
 	return resolved, nil
 }
 
-// resolveExistingPath resolves symlinks on the longest existing prefix of path.
-func resolveExistingPath(path string) string {
-	abs, err := filepath.Abs(path)
-	if err != nil {
-		return filepath.Clean(path)
-	}
-	current := abs
-	var suffix []string
-	for {
-		if resolved, err := filepath.EvalSymlinks(current); err == nil {
-			parts := append([]string{resolved}, suffix...)
-			return filepath.Join(parts...)
-		}
-		parent := filepath.Dir(current)
-		if parent == current {
-			return abs
-		}
-		suffix = append([]string{filepath.Base(current)}, suffix...)
-		current = parent
-	}
+// Preserve chronological filename ordering while keeping simultaneous records distinct.
+func historyStamp(created time.Time) string {
+	return created.Format("20060102-150405.000000000") + "-" + rand.Text()
 }
 
 func writeRepoJSON(root, rel string, value any) (string, error) {
@@ -586,27 +594,8 @@ func writeRepoJSON(root, rel string, value any) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+	if err := atomicfile.Write(full, append(data, '\n'), atomicfile.ModeState); err != nil {
 		return "", err
-	}
-	// Atomic replace so a crash/concurrent reader never sees a partial JSON.
-	tmp, terr := os.CreateTemp(filepath.Dir(full), ".tmp-*.json")
-	if terr != nil {
-		return "", terr
-	}
-	tmpName := tmp.Name()
-	if _, werr := tmp.Write(append(data, '\n')); werr != nil {
-		tmp.Close()
-		os.Remove(tmpName)
-		return "", werr
-	}
-	if werr := tmp.Close(); werr != nil {
-		os.Remove(tmpName)
-		return "", werr
-	}
-	if rerr := os.Rename(tmpName, full); rerr != nil {
-		os.Remove(tmpName)
-		return "", rerr
 	}
 	return filepath.ToSlash(rel), nil
 }

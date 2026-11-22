@@ -58,8 +58,8 @@ func registerSystem(reg *mcp.Registry, d Deps) {
 				"context_budget": available["system.context_budget"],
 				"telegram":       available["telegram.send"],
 			}
-			experimental := map[string]any{"fly_router": available["routing.fly_recommend"]}
-			groups["fly_router_available"] = available["routing.fly_recommend"]
+			experimental := map[string]any{"fly_router": (available["routing.fly_recommend"] && d.Router != nil)}
+			groups["fly_router_available"] = (available["routing.fly_recommend"] && d.Router != nil)
 			return mcp.OK(trace(ctx), map[string]any{
 				"groups":       groups,
 				"experimental": experimental,
@@ -79,7 +79,10 @@ func registerSystem(reg *mcp.Registry, d Deps) {
 		},
 		[]string{"task"},
 		func(ctx context.Context, args map[string]any) (any, error) {
-			task := argString(args, "task")
+			if d.Router == nil {
+				return mcp.Fail(trace(ctx), "fly router unavailable"), nil
+			}
+			task := redactSensitiveText(argString(args, "task"))
 			if task == "" {
 				return mcp.Fail(trace(ctx), "task is required"), nil
 			}
@@ -96,7 +99,7 @@ func registerSystem(reg *mcp.Registry, d Deps) {
 			telemetryWarnings := []string{}
 			logJSONL := func(path string, record map[string]any) {
 				if err := observability.AppendJSONL(path, record); err != nil {
-					telemetryWarnings = append(telemetryWarnings, "telemetry append failed: "+redactBackendError(err))
+					telemetryWarnings = append(telemetryWarnings, "telemetry append failed: "+RedactBackendError(err))
 				}
 			}
 			attachTelemetryWarnings := func(env mcp.Envelope) mcp.Envelope {
@@ -183,7 +186,7 @@ func registerSystem(reg *mcp.Registry, d Deps) {
 					CategoryScores:  res.CategoryScores,
 					Recommendations: res.Recommendations,
 				}); err != nil {
-					telemetryWarnings = append(telemetryWarnings, "fly prediction not recorded: "+redactBackendError(err))
+					telemetryWarnings = append(telemetryWarnings, "fly prediction not recorded: "+RedactBackendError(err))
 				}
 			}
 			return attachTelemetryWarnings(env), nil
@@ -201,7 +204,10 @@ func registerSystem(reg *mcp.Registry, d Deps) {
 		},
 		[]string{"task", "chosen"},
 		func(ctx context.Context, args map[string]any) (any, error) {
-			task := argString(args, "task")
+			if d.Router == nil {
+				return mcp.Fail(trace(ctx), "fly router unavailable"), nil
+			}
+			task := redactSensitiveText(argString(args, "task"))
 			chosen := argStringSlice(args, "chosen")
 			if task == "" || len(chosen) == 0 {
 				return mcp.Fail(trace(ctx), "task and chosen are required"), nil
@@ -227,7 +233,7 @@ func registerSystem(reg *mcp.Registry, d Deps) {
 				InputMetadata: argMap(args, "input_metadata"),
 			})
 			if err != nil {
-				return mcp.Fail(trace(ctx), redactBackendError(err)), nil
+				return mcp.Fail(trace(ctx), RedactBackendError(err)), nil
 			}
 			if d.Metrics != nil {
 				d.Metrics.Inc("fly_feedback_total")
@@ -235,7 +241,7 @@ func registerSystem(reg *mcp.Registry, d Deps) {
 			telemetryWarnings := []string{}
 			logJSONL := func(path string, record map[string]any) {
 				if err := observability.AppendJSONL(path, record); err != nil {
-					telemetryWarnings = append(telemetryWarnings, "telemetry append failed: "+redactBackendError(err))
+					telemetryWarnings = append(telemetryWarnings, "telemetry append failed: "+RedactBackendError(err))
 				}
 			}
 			if d.Store != nil {

@@ -5,7 +5,7 @@ ROOT="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
 REDACT="$ROOT/scripts/redact.sh"
 FAIL=0
 check() {
-  name="$1"; ok="$2"; detail="$3"
+  name="$1"; ok="$2"; detail="${3:-}"
   if [ "$ok" = "1" ]; then echo "[ok]   $name"
   else echo "[fail] $name${detail:+: $detail}"; FAIL=$((FAIL + 1)); fi
 }
@@ -17,52 +17,63 @@ check() {
 set +e
 
 out=$(printf 'postgres://user:s3cr3t@db:5432/app\n' | sh "$REDACT")
-check "url userinfo redacted" "$(printf '%s' "$out" | grep -q '://\*\*\*@db' && ! printf '%s' "$out" | grep -q 's3cr3t' && echo 1)" "got: $out"
+check "url userinfo redacted" "$(printf '%s' "$out" | grep -q '://\*\*\*@db' && ! printf '%s' "$out" | grep -q 's3cr3t' && echo 1)"
 
 out=$(printf 'POSTGRES_PASSWORD="a b"\n' | sh "$REDACT")
-check "quoted value redacted whole" "$(printf '%s' "$out" | grep -q 'POSTGRES_PASSWORD=\[redacted\]' && ! printf '%s' "$out" | grep -q 'a b' && echo 1)" "got: $out"
+check "quoted value redacted whole" "$(printf '%s' "$out" | grep -q 'POSTGRES_PASSWORD=\[redacted\]' && ! printf '%s' "$out" | grep -q 'a b' && echo 1)"
 
 out=$(printf 'API_KEY=abc123\n' | sh "$REDACT")
-check "mixed-case key redacted" "$(printf '%s' "$out" | grep -q 'API_KEY=\[redacted\]' && echo 1)" "got: $out"
+check "mixed-case key redacted" "$(printf '%s' "$out" | grep -q 'API_KEY=\[redacted\]' && echo 1)"
 
 out=$(printf 'secret: hunter2\ntoken=xyz\n' | sh "$REDACT")
-check "colon + underscore keys redacted" "$(printf '%s' "$out" | grep -q 'secret: \[redacted\]' && printf '%s' "$out" | grep -q 'token=\[redacted\]' && echo 1)" "got: $out"
+check "colon + underscore keys redacted" "$(printf '%s' "$out" | grep -q 'secret: \[redacted\]' && printf '%s' "$out" | grep -q 'token=\[redacted\]' && echo 1)"
 
 out=$(printf 'plain=value\npath=/x/y\n' | sh "$REDACT")
-check "benign content unchanged" "$(printf '%s' "$out" | grep -q 'plain=value' && printf '%s' "$out" | grep -q 'path=/x/y' && echo 1)" "got: $out"
+check "benign content unchanged" "$(printf '%s' "$out" | grep -q 'plain=value' && printf '%s' "$out" | grep -q 'path=/x/y' && echo 1)"
 
 out=$(printf '{"password":"s3cr3t","level":"info"}\n' | sh "$REDACT")
-check "json quoted key redacted" "$(printf '%s' "$out" | grep -q '"password":"\[redacted\]"' && ! printf '%s' "$out" | grep -q 's3cr3t' && printf '%s' "$out" | grep -q '"level":"info"' && echo 1)" "got: $out"
+check "json quoted key redacted" "$(printf '%s' "$out" | grep -q '"password":"\[redacted\]"' && ! printf '%s' "$out" | grep -q 's3cr3t' && printf '%s' "$out" | grep -q '"level":"info"' && echo 1)"
 
 out=$(printf 'postgres://user:p@ss@db:5432/app\n' | sh "$REDACT")
-check "password containing @ fully redacted" "$(printf '%s' "$out" | grep -q '://\*\*\*@db' && ! printf '%s' "$out" | grep -q 'p@ss' && echo 1)" "got: $out"
+check "password containing @ fully redacted" "$(printf '%s' "$out" | grep -q '://\*\*\*@db' && ! printf '%s' "$out" | grep -q 'p@ss' && echo 1)"
 
 out=$(printf 'postgres://user:pa?ss@db/x\npostgres://user:p#ss@db/x\n' | sh "$REDACT")
-check "password containing ? or # fully redacted" "$([ "$out" = "$(printf 'postgres://***@db/x\npostgres://***@db/x')" ] && echo 1)" "got: $out"
+check "password containing ? or # fully redacted" "$([ "$out" = "$(printf 'postgres://***@db/x\npostgres://***@db/x')" ] && echo 1)"
 
 out=$(printf 'http://a@b http://c@d\n' | sh "$REDACT")
-check "two whitespace-separated URLs each redacted" "$([ "$out" = "http://***@b http://***@d" ] && echo 1)" "got: $out"
+check "two whitespace-separated URLs each redacted" "$([ "$out" = "http://***@b http://***@d" ] && echo 1)"
 
 out=$(printf 'http://a@b,http://c@d\n' | sh "$REDACT")
 # Whitespace-bounded match takes the last '@', so the whole token collapses to
 # one redaction. Assert the exact output (not just the absence of secrets) so a
 # dropped or mangled line is caught too.
-check "comma-joined URLs collapse without leaking userinfo" "$([ "$out" = "http://***@d" ] && echo 1)" "got: $out"
+check "comma-joined URLs collapse without leaking userinfo" "$([ "$out" = "http://***@d" ] && echo 1)"
 
 out=$(printf 'Authorization: Bearer abc123token\napi_key1=xyz\n' | sh "$REDACT")
-check "Authorization Bearer token and numbered key redacted" "$(! printf '%s' "$out" | grep -q 'abc123token' && ! printf '%s' "$out" | grep -q 'xyz' && echo 1)" "got: $out"
+check "Authorization Bearer token and numbered key redacted" "$(printf '%s' "$out" | grep -Fq 'Authorization: [redacted]' && printf '%s' "$out" | grep -Fq 'api_key1=[redacted]' && ! printf '%s' "$out" | grep -q 'abc123token'  && echo 1)"
 
 out=$(printf 'postgres://user:pa/ss@db/x\n' | sh "$REDACT")
-check "password containing / fully redacted" "$([ "$out" = "postgres://***@db/x" ] && echo 1)" "got: $out"
+check "password containing / fully redacted" "$([ "$out" = "postgres://***@db/x" ] && echo 1)"
 
 out=$(printf "password='a b'\n" | sh "$REDACT")
-check "single-quoted value redacted whole" "$([ "$out" = "password=[redacted]" ] && echo 1)" "got: $out"
+check "single-quoted value redacted whole" "$([ "$out" = "password=[redacted]" ] && echo 1)"
 
 out=$(printf 'the token is rotating slowly\n' | sh "$REDACT")
-check "prose with a bare keyword word is left readable" "$([ "$out" = "the token is rotating slowly" ] && echo 1)" "got: $out"
+check "prose with a bare keyword word is left readable" "$([ "$out" = "the token is rotating slowly" ] && echo 1)"
 
 out=$(printf 'password=ab%s\n' "'cd" | sh "$REDACT")
-check "unquoted value containing a quote fully redacted" "$([ "$out" = "password=[redacted]" ] && echo 1)" "got: $out"
+check "unquoted value containing a quote fully redacted" "$([ "$out" = "password=[redacted]" ] && echo 1)"
+
+out=$(printf 'password: a b c\n' | sh "$REDACT")
+check "unquoted multiword assignment redacted" "$([ "$out" = 'password: [redacted]' ] && echo 1)"
+
+# Compound identifiers are deliberately treated conservatively; a keyword can
+# appear without a separator in credential names from external tools.
+out=$(printf 'monkey=label\n' | sh "$REDACT")
+check "ambiguous compound identifier follows conservative masking" "$([ "$out" = 'monkey=[redacted]' ] && echo 1)"
+
+out=$(printf 'packet_count=123\n' | sh "$REDACT")
+check "benign identifier assignment is preserved" "$([ "$out" = 'packet_count=123' ] && echo 1)"
 
 set -e
 

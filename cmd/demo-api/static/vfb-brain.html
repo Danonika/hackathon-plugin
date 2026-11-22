@@ -30,6 +30,7 @@
   <div style="margin-top:4px"><span class="good" id="pam">PAM 0</span> · <span class="bad" id="ppl1">PPL1 0</span></div>
 </div>
 <div id="err"></div>
+<script src="/fly-static/demo-poll.js"></script>
 <script>
 window.onerror = function (msg, src, line, col) {
   var b = document.getElementById('err');
@@ -105,10 +106,7 @@ const $ = id => document.getElementById(id);
 let reward = true, flashUntil = 0, lastTs = null;
 async function poll() {
   try {
-    const [fb, neurons] = await Promise.all([
-      fetch('/fly-feedback?limit=10').then(r => r.json()),
-      fetch('/fly-neuron-events?limit=20').then(r => r.json())
-    ]);
+    const neurons = await fetchSnapshotJSON('/fly-neuron-events?limit=20');
     const events = (neurons && neurons.events) || [];
     const last = events.filter(e => e.type === 'feedback').pop();
     if (last && last.ts !== lastTs) {
@@ -123,7 +121,7 @@ async function poll() {
     }
   } catch (e) { /* keep */ }
 }
-poll(); setInterval(poll, 2500);
+pollSnapshots(poll, 2500);
 
 const clock = new THREE.Clock();
 function animate() {

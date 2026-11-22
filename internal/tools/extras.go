@@ -2,8 +2,10 @@ package tools
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"sort"
@@ -153,7 +155,7 @@ func registerCharts(reg *mcp.Registry, d Deps) {
 			if kind == "bar" {
 				drawn = 1
 			}
-			stamp := time.Now().UTC().Format("20060102-150405.000")
+			stamp := artifactStamp()
 			artifact, werr := d.Store.WriteArtifact(
 				fmt.Sprintf("charts/%s-%s.svg", slugify(title), stamp),
 				[]byte(svg),
@@ -184,7 +186,10 @@ func registerCharts(reg *mcp.Registry, d Deps) {
 }
 
 func parseChartSeries(args map[string]any) ([]chartSeries, []string, error) {
-	raw, _ := args["series"].([]any)
+	raw, ok := args["series"].([]any)
+	if !ok {
+		return nil, nil, fmt.Errorf("series must be an array")
+	}
 	out := []chartSeries{}
 	warnings := []string{}
 	for i, item := range raw {
@@ -201,6 +206,9 @@ func parseChartSeries(args map[string]any) ([]chartSeries, []string, error) {
 		if len(points) == 0 {
 			warnings = append(warnings, fmt.Sprintf("series %q has no usable points and was skipped", label))
 			continue
+		}
+		if items, ok := m["points"].([]any); ok && len(points) < len(items) {
+			warnings = append(warnings, fmt.Sprintf("series %q skipped %d point(s) without numeric values", label, len(items)-len(points)))
 		}
 		out = append(out, chartSeries{Label: label, Points: points})
 	}
@@ -221,39 +229,37 @@ func parseChartPoints(raw any) []chartPoint {
 		if !ok {
 			continue
 		}
-		x := ""
-		switch xv := m["x"].(type) {
+		xValue := m["x"]
+		if xValue == nil {
+			xValue = m["t"]
+		}
+		var x string
+		switch v := xValue.(type) {
 		case string:
-			x = xv
-		case float64:
-			x = fmt.Sprintf("%g", xv)
-		default:
-			if tv, ok := m["t"].(string); ok {
-				x = tv
-			}
+			x = v
+		case float64, int, json.Number:
+			x = fmt.Sprint(v)
+		}
+		yKey := "y"
+		if m[yKey] == nil {
+			yKey = "v"
 		}
 		var y float64
-		usable := true
-		switch yv := m["y"].(type) {
+		switch v := m[yKey].(type) {
 		case float64:
-			y = yv
+			y = v
 		case int:
-			y = float64(yv)
+			y = float64(v)
 		case json.Number:
-			if parsed, perr := yv.Float64(); perr == nil {
-				y = parsed
-			} else {
-				usable = false
+			n, err := v.Float64()
+			if err != nil {
+				continue
 			}
+			y = n
 		default:
-			if vv, ok := m["v"].(float64); ok {
-				y = vv
-			} else {
-				usable = false
-			}
+			continue
 		}
-		if !usable {
-			// Never fabricate a zero datum: drop points with no numeric Y.
+		if math.IsNaN(y) || math.IsInf(y, 0) {
 			continue
 		}
 		out = append(out, chartPoint{X: x, Y: y})
@@ -447,6 +453,12 @@ func renderChartSVG(title, kind string, series []chartSeries) string {
 	return b.String()
 }
 
+// Keep generated artifact names sortable while distinguishing concurrent calls
+// from different MCP sessions, including those with the same title and content.
+func artifactStamp() string {
+	return time.Now().UTC().Format("20060102-150405.000") + "-" + rand.Text()
+}
+
 func registerReports(reg *mcp.Registry, d Deps) {
 	reg.Register(tool(
 		"reports.create",
@@ -528,7 +540,7 @@ func registerReports(reg *mcp.Registry, d Deps) {
 				}
 				content = b.String()
 			}
-			stamp := time.Now().UTC().Format("20060102-150405.000")
+			stamp := artifactStamp()
 			artifact, werr := d.Store.WriteArtifact(
 				fmt.Sprintf("reports/%s-%s%s", slugify(title), stamp, ext),
 				[]byte(content),
@@ -572,7 +584,7 @@ func registerMedia(reg *mcp.Registry, d Deps) {
 				return mcp.Fail(trace(ctx), terr.Error()), nil
 			}
 			base := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
-			stamp := time.Now().UTC().Format("20060102-150405.000")
+			stamp := artifactStamp()
 			artifact, werr := d.Store.WriteArtifact(
 				fmt.Sprintf("audio/%s-%s.txt", slugify(base), stamp),
 				[]byte(text),
@@ -633,7 +645,7 @@ func registerMedia(reg *mcp.Registry, d Deps) {
 				return mcp.Fail(trace(ctx), aerr.Error()), nil
 			}
 			base := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
-			stamp := time.Now().UTC().Format("20060102-150405.000")
+			stamp := artifactStamp()
 			artifact, werr := d.Store.WriteArtifact(
 				fmt.Sprintf("vision/%s-%s.md", slugify(base), stamp),
 				[]byte(result),

@@ -6,6 +6,7 @@ import (
 	"math"
 	"reflect"
 	"sort"
+	"time"
 )
 
 type LLMClassifier interface {
@@ -13,12 +14,21 @@ type LLMClassifier interface {
 }
 
 func (r *Router) WithLLM(classifier LLMClassifier) *Router {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.llmRevision++
 	r.llm = classifier
+	r.llmRetryAt = time.Time{}
 	return r
 }
 
 func (r *Router) llmCategoryScores(ctx context.Context, task string) (map[string]float64, bool) {
-	if r.llm == nil || nilInterface(r.llm) {
+	r.mu.Lock()
+	revision := r.llmRevision
+	classifier := r.llm
+	coolingDown := time.Now().Before(r.llmRetryAt)
+	r.mu.Unlock()
+	if coolingDown || classifier == nil || nilInterface(classifier) {
 		return nil, false
 	}
 	categories := make([]string, 0, len(categoryCapabilities))
@@ -26,11 +36,18 @@ func (r *Router) llmCategoryScores(ctx context.Context, task string) (map[string
 		categories = append(categories, category)
 	}
 	sort.Strings(categories)
-	scores, err := r.llm.ClassifyTask(ctx, task, categories)
+	scores, err := classifier.ClassifyTask(ctx, task, categories)
 	if err != nil {
 		// A persistently failing classifier must be distinguishable from "no
 		// classifier configured", so surface it in the logs.
-		log.Printf("fly: llm classifier failed: %v", err)
+		if ctx.Err() == nil {
+			r.mu.Lock()
+			if r.llmRevision == revision {
+				r.llmRetryAt = time.Now().Add(30 * time.Second)
+			}
+			r.mu.Unlock()
+			log.Print("fly: llm classifier unavailable; retrying after 30s")
+		}
 		return nil, false
 	}
 	if len(scores) == 0 {

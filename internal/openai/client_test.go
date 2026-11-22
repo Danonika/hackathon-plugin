@@ -465,13 +465,3 @@ func TestDoJSONNilOut(t *testing.T) {
 		t.Fatal(err)
 	}
 }
-
-func TestTruncate(t *testing.T) {
-	if got := truncate("short", 10); got != "short" {
-		t.Fatalf("truncate short = %q", got)
-	}
-	got := truncate(strings.Repeat("x", 10), 4)
-	if got != "xxxx..." {
-		t.Fatalf("truncate long = %q", got)
-	}
-}

@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math"
 	"runtime/debug"
 	"strings"
 	"time"
@@ -58,8 +59,12 @@ func (s *Server) Serve(ctx context.Context) error {
 
 func sanitizeRPCError(msg string) string {
 	msg = strings.TrimSpace(msg)
-	if runes := []rune(msg); len(runes) > 500 {
-		msg = string(runes[:500]) + "..."
+	count := 0
+	for i := range msg {
+		if count == 500 {
+			return msg[:i] + "..."
+		}
+		count++
 	}
 	return msg
 }
@@ -124,6 +129,10 @@ func (s *Server) ServeStreams(ctx context.Context, in io.Reader, out io.Writer) 
 				// Discard the remainder of the oversized frame in bounded
 				// chunks and keep serving the session.
 				for {
+					if err := ctx.Err(); err != nil {
+						scanErr <- err
+						return
+					}
 					_, derr := reader.ReadSlice('\n')
 					if derr == nil {
 						break
@@ -161,20 +170,30 @@ func (s *Server) ServeStreams(ctx context.Context, in io.Reader, out io.Writer) 
 				return <-scanErr
 			}
 			if bytes.Equal(line, oversizeFrame) {
-				_ = enc.Encode(Response{
+				if err := enc.Encode(Response{
 					JSONRPC: "2.0",
 					ID:      json.RawMessage("null"),
 					Error:   &RPCError{Code: CodeInvalidParams, Message: "request exceeds the maximum frame size"},
-				})
+				}); err != nil {
+					return err
+				}
 				continue
 			}
 			var req Request
 			if err := json.Unmarshal(line, &req); err != nil {
-				_ = enc.Encode(Response{
+				code := CodeParseError
+				msg := "parse error: " + sanitizeRPCError(err.Error())
+				if json.Valid(line) {
+					code = CodeInvalidRequest
+					msg = "invalid JSON-RPC request"
+				}
+				if err := enc.Encode(Response{
 					JSONRPC: "2.0",
 					ID:      json.RawMessage("null"),
-					Error:   &RPCError{Code: CodeParseError, Message: "parse error: " + sanitizeRPCError(err.Error())},
-				})
+					Error:   &RPCError{Code: code, Message: msg},
+				}); err != nil {
+					return err
+				}
 				continue
 			}
 			resp := s.handle(ctx, &req)
@@ -189,6 +208,13 @@ func (s *Server) ServeStreams(ctx context.Context, in io.Reader, out io.Writer) 
 }
 
 func (s *Server) handle(ctx context.Context, req *Request) *Response {
+	id := req.ID
+	if len(id) > 0 && !(id[0] == '"' || id[0] == '-' || (id[0] >= '0' && id[0] <= '9') || string(id) == "null") {
+		return &Response{JSONRPC: "2.0", Error: &RPCError{Code: CodeInvalidRequest, Message: "invalid request id"}}
+	}
+	if req.JSONRPC != "2.0" || req.Method == "" || (len(req.Params) > 0 && req.Params[0] != '{' && req.Params[0] != '[') {
+		return &Response{JSONRPC: "2.0", ID: id, Error: &RPCError{Code: CodeInvalidRequest, Message: "invalid JSON-RPC request"}}
+	}
 	if req.IsNotification() {
 		return nil
 	}
@@ -242,8 +268,8 @@ func (s *Server) ToolDescriptors() []map[string]any {
 
 func (s *Server) handleToolCall(ctx context.Context, req *Request, resp *Response) {
 	var p struct {
-		Name      string         `json:"name"`
-		Arguments map[string]any `json:"arguments"`
+		Name      string                     `json:"name"`
+		Arguments map[string]json.RawMessage `json:"arguments"`
 	}
 	if err := json.Unmarshal(req.Params, &p); err != nil {
 		resp.Error = &RPCError{Code: CodeInvalidParams, Message: "invalid tools/call params: " + sanitizeRPCError(err.Error())}
@@ -255,23 +281,31 @@ func (s *Server) handleToolCall(ctx context.Context, req *Request, resp *Respons
 		resp.Error = &RPCError{Code: CodeInvalidParams, Message: "unknown tool: " + sanitizeRPCError(p.Name)}
 		return
 	}
-	if p.Arguments == nil {
-		p.Arguments = map[string]any{}
+	args := make(map[string]any, len(p.Arguments))
+	for key, raw := range p.Arguments {
+		var value any
+		if err := json.Unmarshal(raw, &value); err != nil {
+			resp.Error = &RPCError{Code: CodeInvalidParams, Message: "invalid argument " + sanitizeRPCError(key)}
+			return
+		}
+		// Retain integer literals beyond the exact range of float64. Native
+		// integer tools can parse them without first rounding to 53 bits.
+		if n, ok := value.(float64); ok && math.Abs(n) >= 1<<53 && !bytes.ContainsAny(raw, ".eE") {
+			value = json.Number(string(raw))
+		}
+		args[key] = value
 	}
 	if s.opts.Metrics != nil {
 		s.opts.Metrics.Inc("mcp_tool_calls_total")
 	}
 	const maxTimeoutSec = int(24 * time.Hour / time.Second)
-	timeout := 30 * time.Second
-	if s.opts.CallTimeoutSec > 0 && s.opts.CallTimeoutSec <= maxTimeoutSec {
-		timeout = time.Duration(s.opts.CallTimeoutSec) * time.Second
-	}
+	timeout := time.Duration(min(s.opts.CallTimeoutSec, maxTimeoutSec)) * time.Second
 	callCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	callCtx = observability.WithTrace(callCtx, observability.NewTraceID())
 
 	start := time.Now()
-	result, err := s.invokeTool(callCtx, tool, p.Arguments)
+	result, err := s.invokeTool(callCtx, tool, args)
 	duration := time.Since(start)
 	status := "ok"
 	if err != nil || resultStatus(result) == "error" {

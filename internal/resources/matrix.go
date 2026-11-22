@@ -85,7 +85,9 @@ func (m Matrix) Validate() error {
 			return fmt.Errorf("resource matrix capability %q has no variants", capability)
 		}
 		seen := map[string]bool{}
-		for _, variant := range variants {
+		for i := range variants {
+			variant := &variants[i]
+			variant.Provider = strings.TrimSpace(variant.Provider)
 			if strings.TrimSpace(variant.ID) == "" {
 				return fmt.Errorf("resource matrix capability %q has a variant with an empty id", capability)
 			}
@@ -171,7 +173,7 @@ func Plan(matrix Matrix, statuses []Status, trackRef string) (TrackPlan, []Decis
 		}
 		switch {
 		case decision.Degraded && decision.Chosen.Provider == "":
-			decision.Reason = "no provider configured; deterministic fallback"
+			decision.Reason = "no ready provider; deterministic fallback"
 		case decision.Degraded:
 			decision.Reason = "no ready provider; " + decision.Chosen.Provider + " fallback is unavailable"
 		case decision.Chosen.Provider == "":

@@ -1,6 +1,8 @@
 #!/usr/bin/env sh
 set -e
 ROOT="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
+. "$ROOT/scripts/skill-profile.sh"
+PROFILE="${1:-$(installed_skill_profile "$ROOT")}"
 SRC="$ROOT/plugins/hackathonkit/skills"
 DST="$ROOT/.agents/skills"
 
@@ -19,77 +21,27 @@ count_dirs() {
 }
 
 COUNT_SRC=$(count_dirs "$SRC")
-
-# Build the mirror in a temporary directory and swap it in with a rollback on
-# failure. A single cleanup routine owns the temp dir, the backup and the lock,
-# and its traps are installed before acquisition, so a signal in any window
-# cannot leave the lock (or a partial mirror) behind.
-TMP="$DST.tmp.$$"
-LOCK="$DST.lock"
-LOCKED=0
-LOCK_TOKEN="$$.$(date +%s 2>/dev/null || echo 0)"
-OLD=""
-
-# A lock is stale when its holder is gone, or when no pid was recorded and the
-# lock is older than a grace period (covers a crash between mkdir and the pid
-# write). Reclaim is an atomic rename-aside so two waiters cannot both delete a
-# lock that a third has since re-created.
-lock_is_stale() {
-  [ -d "$LOCK" ] || return 1
-  holder=$(cat "$LOCK/pid" 2>/dev/null || true)
-  if [ -n "$holder" ]; then
-    kill -0 "$holder" 2>/dev/null && return 1
-    return 0
-  fi
-  now=$(date +%s 2>/dev/null || echo 0)
-  mtime=$(stat -c %Y "$LOCK" 2>/dev/null || stat -f %m "$LOCK" 2>/dev/null || echo "$now")
-  [ $((now - mtime)) -ge 30 ]
+[ "$COUNT_SRC" -gt 0 ] && [ -n "$(find "$SRC" -type f -name SKILL.md -print | sed -n '1p')" ] || {
+  echo "[sync-skills] refusing empty skill source" >&2; exit 1;
 }
-claim_stale_lock() {
-  lock_is_stale || return 0
-  if mv "$LOCK" "$LOCK.stale.$$" 2>/dev/null; then
-    rm -rf "$LOCK.stale.$$"
-  fi
-}
+mkdir -p "$ROOT/data/locks" "$ROOT/.agents"
+. "$ROOT/scripts/file-lock.sh"
+acquire_file_lock "$ROOT/data/locks/agents-skills.lock"
 
-# Release only a lock this run still owns, using an atomic rename-aside so a
-# peer that reclaimed and re-created the lock keeps its own directory.
-release_lock() {
-  [ "$LOCKED" = "1" ] || return 0
-  if [ "$(cat "$LOCK/owner" 2>/dev/null || true)" = "$LOCK_TOKEN" ]; then
-    if mv "$LOCK" "$LOCK.done.$$" 2>/dev/null; then
-      rm -rf "$LOCK.done.$$"
-    fi
-  fi
-  LOCKED=0
-}
-
-finish() {
-  # Restore only when the swap never completed: the backup exists and the live
-  # path is truly absent (an existing-but-wrong or dangling-symlink $DST means
-  # the swap did complete or an external writer intervened, so do not clobber).
-  if [ -n "$OLD" ] && { [ -e "$OLD" ] || [ -L "$OLD" ]; } && [ ! -e "$DST" ] && [ ! -L "$DST" ]; then
-    if mv "$OLD" "$DST" 2>/dev/null; then
-      OLD=""
-    else
-      echo "[sync-skills] WARNING: could not restore $DST from $OLD; leaving the backup in place" >&2
-    fi
-  fi
-  # Delete the backup only when the live mirror is a real directory (not a
-  # symlink), so a swapped-in link cannot cause the good copy to be discarded.
-  if [ -n "$OLD" ] && [ -d "$DST" ] && [ ! -L "$DST" ]; then
-    rm -rf "$OLD"
-  fi
-  rm -rf "$TMP"
-  release_lock
-}
-trap finish EXIT
+# Stage and verify a complete tree before swapping. Restore interrupted swaps
+# under the writer lock before constructing the next stage.
+for previous in "$DST.old."*; do
+  [ -d "$previous" ] || continue
+  if [ ! -e "$DST" ] && [ ! -L "$DST" ]; then mv "$previous" "$DST"; fi
+done
+TMP=$(mktemp -d "$DST.tmp.XXXXXX")
+trap 'rm -rf "$TMP"' EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
-rm -rf "$TMP"
-mkdir -p "$TMP"
-cp -R "$SRC/." "$TMP/"
+# mktemp creates 0700; apply ordinary directory permissions subject to the caller’s umask.
+chmod +rwx "$TMP"
+cp -RP "$SRC/." "$TMP/"
 
 COUNT_DST=$(count_dirs "$TMP")
 FILES_SRC=$(find "$SRC" -type f | wc -l | tr -d ' ')
@@ -138,45 +90,8 @@ else
   exit 1
 fi
 
-# Serialize concurrent mirror runs so two writers cannot interleave the swap.
-claim_stale_lock
-for _ in 1 2 3 4 5 6 7 8 9 10; do
-  if mkdir "$LOCK" 2>/dev/null; then
-    # Track the lock as soon as it exists: a signal before the pid write must
-    # still let finish() remove it, otherwise a pid-less lock is never reclaimed
-    # (the stale check above only acts when a numeric pid is present).
-    LOCKED=1
-    if ! printf '%s' "$$" > "$LOCK/pid" 2>/dev/null; then
-      echo "[sync-skills] cannot record the lock pid; aborting" >&2
-      rm -rf "$LOCK"
-      LOCKED=0
-      exit 1
-    fi
-    printf '%s' "$LOCK_TOKEN" > "$LOCK/owner" 2>/dev/null || true
-    break
-  fi
-  # Re-evaluate staleness each pass in case a peer removed/re-created the lock.
-  claim_stale_lock
-  sleep 1
-done
-if [ "$LOCKED" != "1" ]; then
-  echo "[sync-skills] another run holds $LOCK; aborting" >&2
-  exit 1
-fi
-
-OLD="$DST.old.$$"
-# Back up whatever currently sits at $DST (directory, file or symlink) so the
-# swap cannot destroy a non-directory path.
-if [ -e "$DST" ] || [ -L "$DST" ]; then
-  mv "$DST" "$OLD"
-fi
-if ! mv "$TMP" "$DST"; then
-  # finish() (EXIT trap) restores $OLD and leaves it in place if it cannot.
-  echo "[sync-skills] mirror swap failed; restoring the previous mirror" >&2
-  exit 1
-fi
-rm -rf "$OLD"
-OLD=""
-release_lock
-trap - EXIT INT TERM
+filter_skill_stage "$TMP" "$PROFILE"
+COUNT_DST=$(count_dirs "$TMP")
+. "$ROOT/scripts/publish-mirror.sh"
+publish_mirror "$TMP" "$DST"
 echo "[sync-skills] mirrored $COUNT_DST of $COUNT_SRC skills to .agents/skills"

@@ -1,6 +1,6 @@
 param(
   [Parameter(Mandatory = $true)][string]$Root,
-  [string]$Profile = "full",
+  [Alias("Profile")][string]$InstallProfile = "full",
   [string]$Runtime = "unknown"
 )
 
@@ -18,9 +18,10 @@ $Root = (Resolve-Path -LiteralPath $Root).Path
 if (-not (Test-Path -LiteralPath (Join-Path $Root "docker-compose.yml")) -or -not (Test-Path -LiteralPath (Join-Path $Root "go.mod"))) {
   Fail "[install-state] refusing: '$Root' does not look like the hackathonkit repository root"
 }
-if ($Profile -notin @("core", "full")) {
-  Fail "[install-state] invalid profile: $Profile (expected core or full)"
+if ($InstallProfile -notin @("core", "full")) {
+  Fail "[install-state] invalid profile: $InstallProfile (expected core or full)"
 }
+$InstallProfile = $InstallProfile.ToLowerInvariant()
 if ($Runtime -notin @("binary", "docker", "unknown")) {
   Fail "[install-state] invalid runtime: $Runtime (expected binary, docker or unknown)"
 }
@@ -47,15 +48,16 @@ if (Test-Path -LiteralPath $pluginJson) {
 
 $Skills = 0
 $mirror = Join-Path $Root ".agents/skills"
+. (Join-Path $PSScriptRoot "skill-profile.ps1")
 $srcSkills = Join-Path $Root "plugins/hackathonkit/skills"
 if (-not (Test-Path -LiteralPath $srcSkills)) {
-  Write-Warning "[install-state] skills source missing: $srcSkills"
+  Fail "[install-state] skills source missing: $srcSkills"
 }
 if (-not (Test-Path -LiteralPath $mirror)) {
   Write-Warning "[install-state] skills mirror is missing: $mirror; skills count is 0"
 }
 if (Test-Path -LiteralPath $mirror) {
-  $srcNames = @(Get-ChildItem -LiteralPath $srcSkills -Directory -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Name | Sort-Object)
+  $srcNames = @(Get-ChildItem -LiteralPath $srcSkills -Directory -ErrorAction SilentlyContinue | Where-Object { Test-SkillInProfile $_.FullName $InstallProfile } | Select-Object -ExpandProperty Name | Sort-Object)
   $dstNames = @(Get-ChildItem -LiteralPath $mirror -Directory -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Name | Sort-Object)
   $missing = @($srcNames | Where-Object { $_ -notin $dstNames })
   if ($missing.Count -gt 0) {
@@ -86,7 +88,7 @@ $adapters = @($adapterCandidates.Keys | Where-Object {
 
 $state = [ordered]@{
   version      = $Version
-  profile      = $Profile
+  profile      = $InstallProfile
   runtime      = $Runtime
   skills       = $Skills
   components   = [ordered]@{
@@ -107,25 +109,14 @@ try {
   $tmp = "$out.tmp.$PID"
   try {
     [System.IO.File]::WriteAllText($tmp, $json, (New-Object System.Text.UTF8Encoding($false)))
-    $published = $false
-    try {
-      [System.IO.File]::Replace($tmp, $out, $null)
-      $published = $true
-    } catch [System.PlatformNotSupportedException] {
-      # File.Replace is unsupported on .NET Framework and some non-Windows
-      # filesystems; Copy -Force overwrites without a check-then-act window.
-      [System.IO.File]::Copy($tmp, $out, $true)
-      $published = $true
-    } catch [System.IO.FileNotFoundException] {
-      # Destination does not exist yet: a plain move is the right call.
-      [System.IO.File]::Move($tmp, $out)
-      $published = $true
-    } catch [System.IO.IOException] {
-      # The destination may have appeared concurrently; overwrite in place.
-      [System.IO.File]::Copy($tmp, $out, $true)
-      $published = $true
+    if ([IO.File]::Exists($out)) { [IO.File]::Replace($tmp, $out, [System.Management.Automation.Language.NullString]::Value) }
+    else {
+      try { [IO.File]::Move($tmp, $out) }
+      catch [IO.IOException] {
+        if (-not [IO.File]::Exists($out)) { throw }
+        [IO.File]::Replace($tmp, $out, [System.Management.Automation.Language.NullString]::Value)
+      }
     }
-    if (-not $published) { throw "atomic install-state write did not complete" }
   } finally {
     if (Test-Path -LiteralPath $tmp) { Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue }
   }
@@ -133,5 +124,5 @@ try {
   Fail "[install-state] cannot write ${out}: $($_.Exception.Message)"
 }
 if (-not (Test-Path -LiteralPath $out)) { Fail "[install-state] atomic write did not produce $out" }
-Write-Host "[install-state] wrote configs/install-state.json (version $Version, profile $Profile, runtime $Runtime)"
+Write-Host "[install-state] wrote configs/install-state.json (version $Version, profile $InstallProfile, runtime $Runtime)"
 exit 0

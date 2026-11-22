@@ -106,3 +106,29 @@ func TestPlanDirUnderEvals(t *testing.T) {
 		t.Fatalf("Dir = %q", got)
 	}
 }
+
+func TestLatestIgnoresApprovalRecords(t *testing.T) {
+	root := t.TempDir()
+	const task = "Verify timetable"
+	if err := Save(root, Plan{Slug: "release.v2", Revision: 3, Task: task, Stages: []Stage{{ID: "S1", Status: "doing"}}}); err != nil {
+		t.Fatal(err)
+	}
+	approval := filepath.Join(Dir(root), "release-v2.approval.json")
+	if err := os.WriteFile(approval, []byte(`{"slug":"release-v2","revision":3,"decision":"approve","decided_at":"2026-03-01T12:00:00Z"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	afterPlan := time.Now().Add(time.Hour)
+	if err := os.Chtimes(approval, afterPlan, afterPlan); err != nil {
+		t.Fatal(err)
+	}
+	got, ok, err := LatestErr(root)
+	if err != nil || !ok || got.Task != task || len(got.Stages) != 1 {
+		t.Fatalf("latest plan after approval = %+v, found=%v, err=%v", got, ok, err)
+	}
+	if err := os.Remove(Path(root, "release.v2")); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, err := LatestErr(root); ok || err != nil {
+		t.Fatalf("approval alone returned found=%v, err=%v", ok, err)
+	}
+}

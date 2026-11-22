@@ -1,4 +1,4 @@
-//go:build !windows && !plan9 && !js && !wasip1
+//go:build unix
 
 package quality
 
@@ -13,18 +13,29 @@ func configureProcessGroup(cmd *exec.Cmd) {
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 }
 
-func killProcessGroup(cmd *exec.Cmd) {
-	if cmd.Process == nil {
-		return
+func ownGroup(cmd *exec.Cmd) (kill func(), release func()) {
+	if kill, release, ok := kernelGroup(cmd); ok {
+		return kill, release
 	}
-	// Probe liveness first: once Wait has reaped the child, its PID (and hence
-	// the process-group id) can be recycled, so a raw group kill could signal
-	// an unrelated process group. os.Process.Signal is synchronized with Wait
-	// and returns os.ErrProcessDone after reaping.
-	if err := cmd.Process.Signal(syscall.Signal(0)); err != nil {
-		return
+
+	return pinGroupMember(cmd)
+}
+
+func pinGroupMember(cmd *exec.Cmd) (func(), func()) {
+	// Systems without process-group descriptors keep a lightweight member of
+	// the original group until cleanup. Its pipe closes if the gate process
+	// exits. Do not reap that member until the final signal operation finishes:
+	// the kernel then cannot reuse the group's number under the cancellation.
+	guard := exec.Command("/bin/sh", "-c", "read -r hold")
+	guard.Env = []string{}
+	guard.SysProcAttr = &syscall.SysProcAttr{Setpgid: true, Pgid: cmd.Process.Pid}
+	pipe, err := guard.StdinPipe()
+	if err == nil {
+		if err = guard.Start(); err == nil {
+			return func() { _ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }, func() { _ = pipe.Close(); _ = guard.Wait() }
+		}
+		_ = pipe.Close()
 	}
-	if err := syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL); err != nil && err != syscall.ESRCH {
-		// Best effort: the process may already be gone.
-	}
+	// If the group cannot be pinned, target only the directly owned process.
+	return func() { _ = cmd.Process.Kill() }, func() {}
 }

@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"strings"
-	"sync"
 	"time"
 
 	"hackathonkit.local/agentkit/internal/mcp"
@@ -16,9 +15,6 @@ const (
 	defaultOpenAIBaseURL = "https://api.openai.com/v1"
 	defaultNVIDIABaseURL = "https://integrate.api.nvidia.com/v1"
 )
-
-// resourcesProfileMu serializes read-modify-write on the shared profile file.
-var resourcesProfileMu sync.Mutex
 
 func registerResources(reg *mcp.Registry, d Deps) {
 	reg.Register(tool(
@@ -49,8 +45,6 @@ func registerResources(reg *mcp.Registry, d Deps) {
 		},
 		nil,
 		func(ctx context.Context, args map[string]any) (any, error) {
-			resourcesProfileMu.Lock()
-			defer resourcesProfileMu.Unlock()
 			root := d.Cfg.Root()
 			valid := map[string]bool{"track": true, "note": true}
 			for _, def := range resources.Defs() {
@@ -61,41 +55,40 @@ func registerResources(reg *mcp.Registry, d Deps) {
 					return mcp.Fail(trace(ctx), fmt.Sprintf("unknown resource %q", key)), nil
 				}
 			}
-			profile, _, err := resources.Load(root)
+			err := resources.Update(root, func(profile *resources.Profile) error {
+				changed := false
+				for _, def := range resources.Defs() {
+					raw, ok := args[def.ID]
+					if !ok {
+						continue
+					}
+					value, isBool := raw.(bool)
+					if !isBool {
+						return fmt.Errorf("%s must be a boolean", def.ID)
+					}
+					if err := resources.SetAnswer(profile, def.ID, value); err != nil {
+						return err
+					}
+					changed = true
+				}
+				if track := argString(args, "track"); track != "" {
+					resolved, ok := resources.LookupTrack(track)
+					if !ok {
+						return fmt.Errorf("unknown track %q", track)
+					}
+					profile.Track = resolved.ID
+					changed = true
+				}
+				if note := argString(args, "note"); note != "" {
+					profile.Note = note
+					changed = true
+				}
+				if !changed {
+					return fmt.Errorf("provide at least one provider flag, track or note")
+				}
+				return nil
+			})
 			if err != nil {
-				return mcp.Fail(trace(ctx), err.Error()), nil
-			}
-			changed := false
-			for _, def := range resources.Defs() {
-				raw, ok := args[def.ID]
-				if !ok {
-					continue
-				}
-				value, isBool := raw.(bool)
-				if !isBool {
-					return mcp.Fail(trace(ctx), fmt.Sprintf("%s must be a boolean", def.ID)), nil
-				}
-				if err := resources.SetAnswer(&profile, def.ID, value); err != nil {
-					return mcp.Fail(trace(ctx), err.Error()), nil
-				}
-				changed = true
-			}
-			if track := argString(args, "track"); track != "" {
-				resolved, ok := resources.LookupTrack(track)
-				if !ok {
-					return mcp.Fail(trace(ctx), fmt.Sprintf("unknown track %q", track)), nil
-				}
-				profile.Track = resolved.ID
-				changed = true
-			}
-			if note := argString(args, "note"); note != "" {
-				profile.Note = note
-				changed = true
-			}
-			if !changed {
-				return mcp.Fail(trace(ctx), "provide at least one provider flag, track or note"), nil
-			}
-			if err := resources.Save(root, profile); err != nil {
 				return mcp.Fail(trace(ctx), err.Error()), nil
 			}
 			envelope := resourcesEnvelope(ctx, d, "", "")

@@ -48,6 +48,28 @@ set_key() {
   printf '%s' "$2" | sh "$ROOT/scripts/env-set.sh" "$ROOT/.env" "$1"
 }
 
+# Publish multi-key provider credentials as one update. Cooperate with individual
+# env-set writes on the live path while the helper edits a private staging file.
+set_provider_keys() (
+  env_file="$ROOT/.env"
+  . "$ROOT/scripts/file-lock.sh"
+  acquire_file_lock "$env_file.write-lock" || exit 1
+  if [ -L "$env_file" ] || { [ -e "$env_file" ] && [ ! -f "$env_file" ]; }; then
+    echo "[resources] refusing a non-regular .env" >&2
+    exit 1
+  fi
+  stage=$(mktemp "$env_file.provider.XXXXXX") || exit 1
+  trap 'rm -f "$stage" "$stage.write-lock"' EXIT
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
+  if [ -f "$env_file" ]; then cp "$env_file" "$stage" || exit 1; fi
+  while [ "$#" -gt 0 ]; do
+    printf '%s' "$2" | sh "$ROOT/scripts/env-set.sh" "$stage" "$1" || exit 1
+    shift 2
+  done
+  mv "$stage" "$env_file"
+)
+
 on_interrupt() {
   restore_echo
   exit 130
@@ -104,11 +126,15 @@ if [ "$NVIDIA" = 1 ] && ! set_key NVIDIA_API_KEY "$(read_secret 'NVIDIA_API_KEY 
   NVIDIA=0
 fi
 if [ "$TELEGRAM" = 1 ]; then
-  if ! set_key TELEGRAM_BOT_TOKEN "$(read_secret 'TELEGRAM_BOT_TOKEN (empty to skip)')"; then
-    TELEGRAM=0
+  bot_token=$(read_secret 'TELEGRAM_BOT_TOKEN (empty to skip)')
+  chat_id=""
+  if [ -n "$bot_token" ]; then chat_id=$(read_secret 'TELEGRAM_CHAT_ID (empty to skip)'); fi
+  if [ -n "$bot_token" ] && [ -n "$chat_id" ]; then
+    set_provider_keys TELEGRAM_BOT_TOKEN "$bot_token" TELEGRAM_CHAT_ID "$chat_id"
   else
-    set_key TELEGRAM_CHAT_ID "$(read_secret 'TELEGRAM_CHAT_ID (empty to skip)')" || true
+    TELEGRAM=0
   fi
+  unset bot_token chat_id
 fi
 if [ "$POSTGRES" = 1 ] && ! set_key POSTGRES_DSN "$(read_secret 'POSTGRES_DSN (empty to skip)')"; then
   POSTGRES=0
@@ -116,13 +142,16 @@ fi
 if [ "$MINIO" = 1 ]; then
   # MinIO needs all three keys; claim it only when the full set was stored,
   # otherwise resources.json would advertise a provider that cannot authenticate.
-  if ! set_key MINIO_ENDPOINT "$(read_secret 'MINIO_ENDPOINT (empty to skip)')"; then
-    MINIO=0
-  elif ! set_key MINIO_ACCESS_KEY "$(read_secret 'MINIO_ACCESS_KEY (empty to skip)')"; then
-    MINIO=0
-  elif ! set_key MINIO_SECRET_KEY "$(read_secret 'MINIO_SECRET_KEY (empty to skip)')"; then
+  endpoint=$(read_secret 'MINIO_ENDPOINT (empty to skip)')
+  access_key=""; secret_key=""
+  if [ -n "$endpoint" ]; then access_key=$(read_secret 'MINIO_ACCESS_KEY (empty to skip)'); fi
+  if [ -n "$access_key" ]; then secret_key=$(read_secret 'MINIO_SECRET_KEY (empty to skip)'); fi
+  if [ -n "$endpoint" ] && [ -n "$access_key" ] && [ -n "$secret_key" ]; then
+    set_provider_keys MINIO_ENDPOINT "$endpoint" MINIO_ACCESS_KEY "$access_key" MINIO_SECRET_KEY "$secret_key"
+  else
     MINIO=0
   fi
+  unset access_key secret_key
 fi
 
 SPEC="openai_api=$([ "$OPENAI" = 1 ] && echo true || echo false)"
@@ -135,7 +164,10 @@ if [ -n "$TRACK" ]; then
   SPEC="$SPEC,track=$TRACK"
 fi
 
-mcp --resources-set "$SPEC" >/dev/null
+mcp --resources-set "$SPEC" >/dev/null || {
+  echo "[resources] profile save failed; supplied keys are in .env" >&2
+  exit 1
+}
 
 echo "[resources] saved profile:"
 mcp --resources

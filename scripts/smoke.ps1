@@ -2,7 +2,7 @@ param(
   [switch]$Quiet,
   [ValidateSet("auto", "local", "docker")][string]$Runtime = "auto"
 )
-$ErrorActionPreference = "Continue"
+$ErrorActionPreference = "Stop"
 if (-not $PSCommandPath) {
   Write-Error "[smoke] PSCommandPath is empty; run this script as a file, not dot-sourced"
   exit 1
@@ -40,92 +40,22 @@ $useLocal = switch ($Runtime) {
 if (-not $Quiet) {
   Write-Host ("[smoke] runtime: " + $(if ($useLocal) { "local" } else { "docker" }))
 }
+. (Join-Path $PSScriptRoot "native-probe.ps1")
 if ($useLocal) {
-  # Run with a bounded wait and inspect the exit code: a server that prints
-  # three replies and then crashes (or hangs) must not pass.
-  $inFile = [System.IO.Path]::GetTempFileName()
-  $outFile = [System.IO.Path]::GetTempFileName()
-  try {
-    Set-Content -LiteralPath $inFile -Value $requests -NoNewline
-    $proc = $null
-    try {
-      $proc = Start-Process -FilePath $binary -ArgumentList @("--repo-root", "`"$root`"") `
-        -RedirectStandardInput $inFile -RedirectStandardOutput $outFile -PassThru -NoNewWindow
-    } catch {
-      if (-not $Quiet) { Write-Host "[smoke] failed to start the MCP binary: $($_.Exception.Message)" }
-      exit 1
-    }
-    if (-not $proc) {
-      if (-not $Quiet) { Write-Host "[smoke] failed to start the MCP binary" }
-      exit 1
-    }
-    if (-not $proc.WaitForExit(60000)) {
-      try {
-        if (-not $proc.HasExited) { $proc.Kill() }
-        $proc.WaitForExit()
-      } catch {
-        # The process exited between the timeout check and Kill; ignore.
-      }
-      if (-not $Quiet) { Write-Host "[smoke] MCP server timed out after 60s" }
-      exit 1
-    }
-    if ($proc.ExitCode -ne 0) {
-      if (-not $Quiet) { Write-Host "[smoke] MCP server exited with code $($proc.ExitCode)" }
-      exit 1
-    }
-    $output = Get-Content -LiteralPath $outFile
-  } finally {
-    Remove-Item -LiteralPath $inFile, $outFile -Force -ErrorAction SilentlyContinue
-  }
+  $result = Invoke-NativeProbe $binary @("--repo-root", $root) $requests $root 60000
 } else {
-  $docker = Get-Command docker -ErrorAction SilentlyContinue
-  if (-not $docker) {
-    if (-not $Quiet) { Write-Host "[smoke] no MCP runtime available (build bin/ or start docker)" }
-    exit 1
-  }
-  $inFile = [System.IO.Path]::GetTempFileName()
-  $outFile = [System.IO.Path]::GetTempFileName()
-  $composeFile = Join-Path $root "docker-compose.yml"
-  # An explicit project name keeps the one-off run container addressable and
-  # isolated from concurrent runs.
-  $composeProject = "hackathonkit-smoke-$PID"
+  $docker = (Get-Command docker -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
+  $project = "hackathonkit-smoke-$PID"
+  $composeArgs = @("compose", "-p", $project, "-f", (Join-Path $root "docker-compose.yml"))
   try {
-    Set-Content -LiteralPath $inFile -Value $requests -NoNewline
-    $proc = $null
-    try {
-      $proc = Start-Process -FilePath "docker" -ArgumentList @("compose", "-p", $composeProject, "-f", "`"$composeFile`"", "run", "--rm", "-T", "hackathonkit-mcp") `
-        -WorkingDirectory $root -RedirectStandardInput $inFile -RedirectStandardOutput $outFile -PassThru -NoNewWindow
-    } catch {
-      if (-not $Quiet) { Write-Host "[smoke] failed to start docker compose: $($_.Exception.Message)" }
-      exit 1
-    }
-    if (-not $proc) {
-      if (-not $Quiet) { Write-Host "[smoke] failed to start docker compose" }
-      exit 1
-    }
-    if (-not $proc.WaitForExit(120000)) {
-      try {
-        if (-not $proc.HasExited) { $proc.Kill() }
-        $proc.WaitForExit()
-      } catch {
-        # The process exited between the timeout check and Kill; ignore.
-      }
-      if (-not $Quiet) { Write-Host "[smoke] docker compose timed out after 120s" }
-      exit 1
-    }
-    if ($proc.ExitCode -ne 0) {
-      if (-not $Quiet) { Write-Host "[smoke] docker compose exited with code $($proc.ExitCode)" }
-      exit 1
-    }
-    $output = Get-Content -LiteralPath $outFile
+    $result = Invoke-NativeProbe $docker ($composeArgs + @("run", "--rm", "-T", "hackathonkit-mcp")) $requests $root 180000
   } finally {
-    Remove-Item -LiteralPath $inFile, $outFile -Force -ErrorAction SilentlyContinue
-    # Tear the project down on every exit path: `run` starts the depends_on
-    # services and creates the project network, so a success or non-zero exit
-    # would otherwise leak postgres/minio and the network.
-    & docker compose -p $composeProject -f $composeFile down --remove-orphans *> $null
+    $down = Invoke-NativeProbe $docker ($composeArgs + @("down", "--remove-orphans")) "" $root 60000
+    if ($down.Code -ne 0) { throw "[smoke] cleanup of Compose project $project failed (exit $($down.Code))" }
   }
 }
+if ($result.Code -ne 0) { throw "[smoke] MCP exited with code $($result.Code)" }
+$output = $result.Out -split '\r?\n'
 
 $lines = @($output | Where-Object { $_ -and $_.Trim() -ne "" })
 $ok = $true

@@ -18,12 +18,12 @@ function Resolve-LinkTarget([string]$Path) {
   throw "too many reparse points resolving $Path"
 }
 
-$codexCmd = Get-Command codex -CommandType Application -ErrorAction SilentlyContinue
+$codexCmd = Get-Command codex -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
 if (-not $codexCmd) {
   Write-Host "[plugin-check] codex executable not found on PATH"
   exit 1
 }
-$json = (& codex plugin list --json 2>$null) -join "`n"
+$json = (& $codexCmd.Source plugin list --json 2>$null) -join "`n"
 $codexExit = $LASTEXITCODE
 if ($codexExit -ne 0 -or -not $json) {
   Write-Host "[plugin-check] codex plugin list is unavailable (exit $codexExit)"
@@ -81,6 +81,13 @@ if (-not $server -or -not $server.command) {
 }
 $cmd = [string]$server.command
 $argList = @($server.args | ForEach-Object { [string]$_ })
+$isNodeLauncher = $cmd -ceq "node"
+if ($isNodeLauncher) {
+  if ($argList.Count -lt 1 -or [IO.Path]::GetFileName($argList[0]) -cne "hackathonkit-mcp-launcher.js") {
+    throw "[plugin-check] expected the Hackathon Agent Kit Node launcher as the first argument"
+  }
+  $cmd = $argList[0]
+}
 try {
   if (-not [System.IO.Path]::IsPathRooted($cmd)) {
     $cmd = Join-Path $sourcePath $cmd
@@ -91,7 +98,7 @@ try {
   Write-Host "[plugin-check] cannot resolve the installed plugin command path: $($_.Exception.Message)"
   exit 1
 }
-if (-not (Test-Path -LiteralPath $cmdFull)) {
+if (-not (Test-Path -LiteralPath $cmdFull -PathType Leaf)) {
   Write-Host "[plugin-check] MCP command does not exist: $cmdFull"
   exit 1
 }
@@ -111,9 +118,31 @@ if (-not $cmdResolved.StartsWith($sourcePrefix, $comparison)) {
   Write-Host "[plugin-check] refusing to execute a command outside the installed plugin: $cmdResolved"
   exit 1
 }
-$cmd = $cmdResolved
+if ($isNodeLauncher) {
+  $node = Get-Command node -CommandType Application -ErrorAction Stop | Select-Object -First 1
+  $argList[0] = $cmdResolved
+  $cmd = $node.Source
+} else { $cmd = $cmdResolved }
 
-$temp = Join-Path $env:TEMP ("hackathonkit-plugin-check-" + [guid]::NewGuid().ToString("N"))
+$childEnv = @{}
+$supportedEnv = @(
+  "OPENAI_API_KEY","OPENAI_BASE_URL","OPENAI_TIMEOUT_SEC","OPENAI_MODEL",
+  "NVIDIA_API_KEY","NVIDIA_BASE_URL","POSTGRES_DSN","MINIO_ENDPOINT",
+  "MINIO_ACCESS_KEY","MINIO_SECRET_KEY","MINIO_BUCKET","MINIO_USE_SSL",
+  "TELEGRAM_BOT_TOKEN","TELEGRAM_CHAT_ID","TELEGRAM_ALLOWED_CHAT_IDS",
+  "TELEGRAM_API_BASE","TELEGRAM_TIMEOUT_SEC","HACKATHONKIT_BACKEND_TIMEOUT_SEC"
+)
+if ($null -ne $server.env) {
+  if ($server.env -isnot [PSCustomObject]) { throw "[plugin-check] expected an object for manifest env" }
+  foreach ($property in $server.env.PSObject.Properties) {
+    if ($property.Name -cnotin $supportedEnv -or $property.Value -isnot [string]) {
+      throw "[plugin-check] unsupported manifest env setting or value"
+    }
+    $childEnv[$property.Name] = $property.Value
+  }
+}
+
+$temp = Join-Path ([IO.Path]::GetTempPath()) ("hackathonkit-plugin-check-" + [guid]::NewGuid().ToString("N"))
 try {
   New-Item -ItemType Directory -Path $temp -ErrorAction Stop | Out-Null
 } catch {
@@ -127,69 +156,15 @@ $requests = @(
   '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"system.context","arguments":{}}}'
 ) -join "`n"
 
-$stderrPath = Join-Path $temp "stderr.txt"
-$codePath = Join-Path $temp "exitcode.txt"
-$out = @()
-$exitCode = -1
-$exitCodeError = ""
-$stderrText = ""
+. (Join-Path $PSScriptRoot "native-probe.ps1")
 try {
-  # Run in a job so a hung server cannot block the check forever.
-  $job = Start-Job -ScriptBlock {
-    param($exe, $exeArgs, $payload, $workDir, $errPath, $codePath)
-    Set-Location -LiteralPath $workDir
-    $payload | & $exe @exeArgs 2>$errPath
-    # $LASTEXITCODE does not survive Receive-Job; persist it for the caller.
-    $code = if ($null -eq $LASTEXITCODE) { "" } else { "$LASTEXITCODE" }
-    Set-Content -LiteralPath $codePath -Value $code -ErrorAction Stop
-  } -ArgumentList $cmd, $argList, $requests, $temp, $stderrPath, $codePath
-  if (-not $job) {
-    Remove-Item -LiteralPath $temp -Recurse -Force -ErrorAction SilentlyContinue
-    Write-Host "[plugin-check] FAIL: could not start the MCP check job (job subsystem unavailable)"
-    exit 1
-  }
-  if (-not (Wait-Job $job -Timeout 120)) {
-    Stop-Job $job -ErrorAction SilentlyContinue
-    Remove-Job $job -Force -ErrorAction SilentlyContinue
-    Remove-Item -LiteralPath $temp -Recurse -Force -ErrorAction SilentlyContinue
-    Write-Host "[plugin-check] FAIL: MCP command timed out after 120s"
-    exit 1
-  }
-  $out = @(Receive-Job $job)
-  if ($job.State -ne "Completed") {
-    $exitCodeError = "the job did not complete (state: $($job.State))"
-  } elseif (-not (Test-Path -LiteralPath $codePath)) {
-    # Missing side file: do not assume success.
-    $exitCodeError = "the job did not report an exit code"
-  } else {
-    $captured = Get-Content -LiteralPath $codePath -ErrorAction SilentlyContinue | Select-Object -First 1
-    $parsed = 0
-    if ($null -eq $captured -or "$captured".Trim() -eq "") {
-      $exitCodeError = "the job reported an empty exit code"
-    } elseif (-not [int]::TryParse("$captured".Trim(), [ref]$parsed)) {
-      $exitCodeError = "the job reported a non-numeric exit code: '$captured'"
-    } else {
-      $exitCode = $parsed
-    }
-  }
-  Remove-Job $job -Force -ErrorAction SilentlyContinue
-} finally {
-  if (Test-Path -LiteralPath $stderrPath) {
-    $stderrText = ((Get-Content -LiteralPath $stderrPath -Tail 5 -ErrorAction SilentlyContinue) -join "`n")
-  }
-  Remove-Item -LiteralPath $temp -Recurse -Force -ErrorAction SilentlyContinue
-}
-
-if ($exitCodeError) {
-  Write-Host "[plugin-check] FAIL: MCP command result could not be verified: $exitCodeError"
-  if ($stderrText) { Write-Host "[plugin-check] server stderr: $stderrText" }
+  $probe = Invoke-NativeProbe $cmd $argList ($requests + "`n") $temp 120000 $childEnv
+  if ($probe.Code -ne 0) { throw "MCP exited with code $($probe.Code)" }
+  $out = $probe.Out -split '\r?\n'
+} catch {
+  Write-Host "[plugin-check] MCP verification failed: $_"
   exit 1
-}
-if ($exitCode -ne 0) {
-  Write-Host "[plugin-check] FAIL: MCP command exited with code $exitCode"
-  if ($stderrText) { Write-Host "[plugin-check] server stderr: $stderrText" }
-  exit 1
-}
+} finally { Remove-Item -LiteralPath $temp -Recurse -Force -ErrorAction SilentlyContinue }
 
 $responses = @{}
 foreach ($line in @($out | Where-Object { $_ -and $_.Trim() -ne "" })) {
@@ -199,6 +174,7 @@ foreach ($line in @($out | Where-Object { $_ -and $_.Trim() -ne "" })) {
   try { $obj = $line | ConvertFrom-Json } catch { $obj = $null }
   if ($null -eq $obj) { continue }
   if ($obj.id -in @(1, 2, 3)) {
+    if ($responses.ContainsKey([string]$obj.id)) { throw "[plugin-check] duplicate response id $($obj.id)" }
     $responses[[string]$obj.id] = $obj
     if ($obj.error) {
       Write-Host "[plugin-check] FAIL: error response for id=$($obj.id): $($obj.error.message)"
@@ -210,11 +186,10 @@ foreach ($want in @(1, 2, 3)) {
   $obj = $responses[[string]$want]
   if (-not $obj) {
     Write-Host "[plugin-check] FAIL: missing JSON-RPC response for id=$want from a foreign working directory"
-    if ($stderrText) { Write-Host "[plugin-check] server stderr: $stderrText" }
     exit 1
   }
   $hasResult = $obj.PSObject.Properties.Name -contains "result"
-  if (-not $hasResult) {
+  if (-not $hasResult -or $null -eq $obj.result -or ($want -eq 2 -and $obj.result.tools -isnot [array])) {
     Write-Host "[plugin-check] FAIL: response for id=$want has no result"
     exit 1
   }

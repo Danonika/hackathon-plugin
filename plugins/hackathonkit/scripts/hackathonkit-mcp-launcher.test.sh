@@ -31,7 +31,7 @@ cp "$LAUNCHER" "$REPO/plugins/hackathonkit/scripts/hackathonkit-mcp-launcher.sh"
 # Make the copied launcher executable so it is invoked via its shebang below,
 # exercising the interpreter/exec-bit path rather than always `sh <file>`.
 chmod +x "$REPO/plugins/hackathonkit/scripts/hackathonkit-mcp-launcher.sh"
-printf 'module example.test/repo\n' > "$REPO/go.mod"
+printf 'module hackathonkit.local/agentkit\n' > "$REPO/go.mod"
 printf 'services: {}\n' > "$REPO/docker-compose.yml"
 
 cat > "$TMP/bin/docker" <<'EOF'
@@ -41,7 +41,8 @@ printf 'docker %s\n' "$*" >> "$DOCKER_MARKER"
 # subcommand (compose version, ...) must succeed regardless of DOCKER_STATUS.
 case " $* " in
   *" run "*) exit "${DOCKER_STATUS:-0}" ;;
-  *) exit 0 ;;
+  *" version "*) exit "${DOCKER_VERSION_STATUS:-0}" ;;
+  *) exit 1 ;;
 esac
 EOF
 chmod +x "$TMP/bin/docker"
@@ -51,31 +52,43 @@ cat > "$REPO/bin/hackathonkit-mcp" <<'EOF'
 printf 'local %s\n' "$*" >> "$LOCAL_MARKER"
 exit "${LOCAL_STATUS:-0}"
 EOF
-chmod +x "$REPO/bin/hackathonkit-mcp"
+chmod 755 "$REPO/bin" "$REPO/bin/hackathonkit-mcp"
 
 run_launcher() {
   PATH="$TMP/bin:$PATH" \
   LOCAL_MARKER="$TMP/local" \
   LOCAL_STATUS="${LOCAL_STATUS:-0}" \
   DOCKER_MARKER="$TMP/docker" \
-  DOCKER_STATUS="${DOCKER_STATUS:-0}" \
+  DOCKER_STATUS="${DOCKER_STATUS:-0}" DOCKER_VERSION_STATUS="${DOCKER_VERSION_STATUS:-0}" \
   "$REPO/plugins/hackathonkit/scripts/hackathonkit-mcp-launcher.sh" "$@"
 }
 
 # --- Local executable binary wins and receives the derived root -------------
 : > "$TMP/local"
 : > "$TMP/docker"
-run_launcher --list-tools
+if ! run_launcher --list-tools; then check "local launcher invocation" 0; fi
 # Assert the tokens independently instead of one order-sensitive substring.
-if grep -q "^local --repo-root $REPO" "$TMP/local" && grep -q -- "--list-tools" "$TMP/local"; then
+if grep -Fq "local --repo-root $REPO" "$TMP/local" && grep -q -- "--list-tools" "$TMP/local"; then
   check "local binary is preferred with --repo-root and args" 1
 else
   check "local binary is preferred with --repo-root and args" 0 "marker=$(cat "$TMP/local")"
 fi
 check "docker is not invoked when the local binary exists" "$( [ -s "$TMP/docker" ] && echo 0 || echo 1 )"
 
+# A cached plugin must use the explicitly configured checkout for local runs.
+CACHED="$TMP/cached plugin/plugins/hackathonkit/scripts"
+mkdir -p "$CACHED"
+cp "$LAUNCHER" "$CACHED/hackathonkit-mcp-launcher.sh"
+: > "$TMP/local"
+if HACKATHONKIT_REPO_ROOT="$REPO" LOCAL_MARKER="$TMP/local" sh "$CACHED/hackathonkit-mcp-launcher.sh" --list-tools &&
+   grep -Fq "local --repo-root $REPO --list-tools" "$TMP/local"; then
+  check "cached launcher honors the configured checkout" 1
+else
+  check "cached launcher honors the configured checkout" 0
+fi
+
 # --- Local exit status is propagated ----------------------------------------
-chmod +x "$REPO/bin/hackathonkit-mcp"
+chmod 755 "$REPO/bin" "$REPO/bin/hackathonkit-mcp"
 if LOCAL_STATUS=5 run_launcher --list-tools; then
   local_status=0
 else
@@ -86,8 +99,8 @@ check "local exit status is propagated" "$( [ "$local_status" = "5" ] && echo 1 
 # --- Non-executable local binary falls through to docker compose ------------
 chmod -x "$REPO/bin/hackathonkit-mcp"
 : > "$TMP/docker"
-run_launcher --list-tools
-if grep -q "docker compose -f $REPO/docker-compose.yml run --rm -T hackathonkit-mcp --list-tools" "$TMP/docker"; then
+if ! run_launcher --list-tools; then check "docker launcher invocation" 0; fi
+if grep -Fq "docker compose -f $REPO/docker-compose.yml run --rm -T hackathonkit-mcp --list-tools" "$TMP/docker"; then
   check "non-executable binary falls back to docker compose" 1
 else
   check "non-executable binary falls back to docker compose" 0 "marker=$(cat "$TMP/docker")"
@@ -106,7 +119,7 @@ fi
 check "docker exit status is propagated" "$( [ "$status" = "7" ] && echo 1 || echo 0 )" "status=$status"
 
 # --- Caller-supplied --repo-root is rejected --------------------------------
-chmod +x "$REPO/bin/hackathonkit-mcp"
+chmod 755 "$REPO/bin" "$REPO/bin/hackathonkit-mcp"
 if run_launcher --repo-root /tmp >/dev/null 2>"$TMP/err"; then
   dup=0
 else
@@ -143,7 +156,14 @@ if [ "$dup" -ne 0 ] && grep -q "must not be passed again" "$TMP/err3"; then
 else
   check "duplicate --repo-root is rejected on the docker path" 0 "status=$dup err=$(cat "$TMP/err3")"
 fi
-chmod +x "$REPO/bin/hackathonkit-mcp"
+chmod 755 "$REPO/bin" "$REPO/bin/hackathonkit-mcp"
+
+chmod -x "$REPO/bin/hackathonkit-mcp"
+if DOCKER_VERSION_STATUS=3 run_launcher >/dev/null 2>"$TMP/err"; then
+  check "a failed compose preflight stops the launcher" 0
+else
+  check "failed compose preflight is diagnosed" "$(grep -q 'compose (v2) is unavailable' "$TMP/err" && echo 1)"
+fi
 
 if [ "$FAIL" -gt 0 ]; then
   echo "[launcher-test] $FAIL assertion(s) failed"

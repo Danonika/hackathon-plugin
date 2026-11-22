@@ -80,20 +80,16 @@ func runCheck(ctx context.Context, root string, spec checkSpec) Check {
 	runCtx, cancel := context.WithTimeout(ctx, spec.timeout)
 	defer cancel()
 	start := time.Now()
-	cmd := exec.CommandContext(runCtx, spec.command[0], spec.command[1:]...)
+	cmd := exec.Command(spec.command[0], spec.command[1:]...)
 	cmd.Dir = root
 	cmd.Env = buildEnv()
 	configureProcessGroup(cmd)
-	cmd.Cancel = func() error {
-		killProcessGroup(cmd)
-		return cmd.Process.Kill()
-	}
 	// Bound the wait even when a grandchild keeps stdout/stderr open.
 	cmd.WaitDelay = 10 * time.Second
 	var captured cappedBuffer
 	cmd.Stdout = &captured
 	cmd.Stderr = &captured
-	err := cmd.Run()
+	err := runGrouped(runCtx, cmd)
 	check.DurationMS = time.Since(start).Milliseconds()
 	check.Output = tail(captured.String(), 2000)
 	switch {
@@ -123,6 +119,28 @@ func runCheck(ctx context.Context, root string, spec checkSpec) Check {
 		check.Status = "failed"
 	}
 	return check
+}
+
+// Hold a stable group identity until both Wait and output-drain cleanup finish.
+func runGrouped(ctx context.Context, cmd *exec.Cmd) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	kill, release := ownGroup(cmd)
+	defer release()
+	done := make(chan struct{})
+	stop := context.AfterFunc(ctx, func() { kill(); _ = cmd.Process.Kill(); close(done) })
+	err := cmd.Wait()
+	if !stop() {
+		<-done
+	}
+	if errors.Is(err, exec.ErrWaitDelay) {
+		kill()
+	}
+	return err
 }
 
 // buildEnv returns the current environment with -buildvcs=false appended to
@@ -288,6 +306,9 @@ func LatestReport(root string) (Report, bool, error) {
 		gatePath := filepath.Join(Dir(root), entry.Name(), "gate.json")
 		gateInfo, gateErr := os.Stat(gatePath)
 		if gateErr != nil {
+			if os.IsNotExist(gateErr) {
+				continue
+			}
 			if firstErr == nil {
 				firstErr = gateErr
 			}
@@ -348,6 +369,15 @@ func GitSHA(root string) string {
 	ref := strings.TrimSpace(strings.TrimPrefix(value, "ref: "))
 	if !strings.HasPrefix(ref, "refs/") || strings.Contains(ref, "..") {
 		return "unknown"
+	}
+	if data, err := os.ReadFile(filepath.Join(gitDir, "commondir")); err == nil {
+		common := strings.TrimSpace(string(data))
+		if common != "" {
+			if !filepath.IsAbs(common) {
+				common = filepath.Join(gitDir, common)
+			}
+			gitDir = filepath.Clean(common)
+		}
 	}
 	refPath := filepath.Join(gitDir, filepath.FromSlash(ref))
 	if !strings.HasPrefix(refPath, gitDir+string(filepath.Separator)) {

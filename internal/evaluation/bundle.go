@@ -73,11 +73,11 @@ func normalizeProfile(profile string) string {
 // must never be copied from the repository, or a repository file of the same
 // name would overwrite the marker/metadata and render the bundle unusable.
 var bundleReserved = map[string]bool{
-	".hackathonkit-bundle":   true,
-	"git-sha.txt":        true,
-	"rubric-version.txt": true,
-	"bundle.json":        true,
-	"bundle-hash.txt":    true,
+	".hackathonkit-bundle": true,
+	"git-sha.txt":          true,
+	"rubric-version.txt":   true,
+	"bundle.json":          true,
+	"bundle-hash.txt":      true,
 }
 
 func demoIncluded(rel string) bool {
@@ -188,7 +188,11 @@ func FreezeBundle(opts BundleOptions) (Bundle, error) {
 	if rel, rerr := filepath.Rel(rootResolved, resolveExistingPath(tmpAbs)); rerr == nil {
 		tmpRel = filepath.ToSlash(rel)
 	}
-	if err := os.WriteFile(filepath.Join(tmpAbs, ".hackathonkit-bundle"), []byte(outAbs+"\n"), 0o644); err != nil {
+	manifestMode := os.FileMode(0o644)
+	if opts.ReadOnly {
+		manifestMode = 0o444
+	}
+	if err := os.WriteFile(filepath.Join(tmpAbs, ".hackathonkit-bundle"), []byte(outAbs+"\n"), manifestMode); err != nil {
 		return Bundle{}, err
 	}
 
@@ -282,10 +286,6 @@ func FreezeBundle(opts BundleOptions) (Bundle, error) {
 	if err != nil {
 		return Bundle{}, err
 	}
-	manifestMode := os.FileMode(0o644)
-	if opts.ReadOnly {
-		manifestMode = 0o444
-	}
 	if err := os.WriteFile(filepath.Join(tmpAbs, "bundle.json"), append(manifestData, '\n'), manifestMode); err != nil {
 		return Bundle{}, err
 	}
@@ -315,17 +315,12 @@ func FreezeBundle(opts BundleOptions) (Bundle, error) {
 	if err := os.Rename(tmpAbs, outAbs); err != nil {
 		if hadPrevious {
 			if rberr := os.Rename(backupAbs, outAbs); rberr != nil {
-				return Bundle{}, fmt.Errorf("bundle install failed (%v) and rollback failed: %w", err, rberr)
+				return Bundle{}, fmt.Errorf("bundle install failed (%w) and rollback failed: %w", err, rberr)
 			}
 		}
 		return Bundle{}, err
 	}
-	if hadPrevious {
-		if err := os.RemoveAll(backupAbs); err != nil {
-			return Bundle{}, err
-		}
-	}
-	return Bundle{
+	installed := Bundle{
 		Dir:           outAbs,
 		BundleHash:    bundleHash,
 		GitSHA:        gitSHA,
@@ -335,7 +330,13 @@ func FreezeBundle(opts BundleOptions) (Bundle, error) {
 		Files:         len(entries),
 		Bytes:         hashedBytes,
 		Excluded:      excludes,
-	}, nil
+	}
+	if hadPrevious {
+		if err := os.RemoveAll(backupAbs); err != nil {
+			return installed, fmt.Errorf("bundle installed but backup cleanup failed: %w", err)
+		}
+	}
+	return installed, nil
 }
 
 // verifyOwnedBundle checks that a path this tool wants to replace is a bundle

@@ -2,15 +2,18 @@ package tools
 
 import "strings"
 
-// redactBackendError strips credentials from a driver/connection error before
+// RedactBackendError strips credentials from a driver/connection error before
 // it is surfaced to an MCP caller (DSNs can appear in Postgres and MinIO
-// errors). It mirrors the cmd/hackathonkit-mcp helper so tool warnings do not leak
-// secrets or backend details across the tool boundary.
-func redactBackendError(err error) string {
+// errors). CLI logs and MCP responses share this implementation.
+func RedactBackendError(err error) string {
 	if err == nil {
 		return ""
 	}
-	text := redactURLUserinfo(err.Error())
+	return redactSensitiveText(err.Error())
+}
+
+func redactSensitiveText(input string) string {
+	text := redactURLUserinfo(input)
 	// Longest keys first so "secret key" is not consumed by "secret".
 	for _, key := range []string{
 		"secret_key", "secret key", "access_key", "access key",
@@ -54,6 +57,18 @@ func redactURLUserinfo(text string) string {
 			}
 		}
 		authority := rest[:end]
+		if !strings.Contains(authority, "@") {
+			if colon := strings.IndexByte(authority, ':'); colon > 0 && !strings.ContainsAny(authority[:colon], "/?#") {
+				tail := rest[end:]
+				if bound := strings.IndexAny(tail, "\n\r\"'"); bound >= 0 {
+					tail = tail[:bound]
+				}
+				if at := strings.IndexByte(tail, '@'); at >= 0 && !strings.Contains(tail[:at], "://") {
+					end += at + 1
+					authority = rest[:end]
+				}
+			}
+		}
 		if at := strings.LastIndex(authority, "@"); at > 0 {
 			b.WriteString("[redacted]")
 			b.WriteString(authority[at:])
