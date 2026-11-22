@@ -126,7 +126,7 @@ $runtime = "binary"
 if ($dockerOk) {
   $runtime = "docker"
   Write-Host "[setup] building MCP image"
-  docker compose -f (Join-Path $root "docker-compose.yml") build hackathonkit-mcp
+  docker compose -f (Join-Path $root "docker-compose.yml") build hackathonkit-mcp minio
   if ($LASTEXITCODE -ne 0) { Fail "[setup] docker compose build failed" }
   Write-Host "[setup] starting infrastructure (postgres, redis, minio)"
   docker compose -f (Join-Path $root "docker-compose.yml") up -d --wait postgres redis minio

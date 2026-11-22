@@ -55,7 +55,7 @@ claim of "it works" must be backed by command output.
    - `security.review` on changed YAML/env/scripts (secrets, injection, suspicious content).
    - Containers run non-root (`HACKATHONKIT_UID`/`HACKATHONKIT_GID`); no secret is baked into an image; `.dockerignore` excludes `.env`, `data/`, `logs/`, `evals/`.
 4. Build and bring up, one step at a time:
-   - `docker compose build hackathonkit-mcp` (then `demo-api`, then the `quality` target when needed).
+   - Run `docker compose build hackathonkit-mcp demo-api minio`. Build the `quality` target when needed.
    - `docker compose up -d postgres redis minio`.
    - `docker compose run --rm quality` for the Go-enabled gate image.
 5. Prove the stack works:
@@ -73,7 +73,7 @@ claim of "it works" must be backed by command output.
 | `docker compose config` fails | Fix YAML or the missing `${VAR:?}` value in `.env`; never commit the value |
 | `build.target` has no Dockerfile stage | Add the stage or fix the target; re-run `docker compose build <service>` |
 | `permission denied` on `data/` or `logs/` | Re-run `scripts/setup.sh` so `HACKATHONKIT_UID`/`HACKATHONKIT_GID` match the host user |
-| Image pull denied | Check the registry; MinIO is pulled from `quay.io` because the Docker Hub namespace may be unavailable |
+| Image pull denied | Check base-image access. For MinIO, run `docker compose build minio` and inspect the source download and checksum. |
 | Port already in use | Find the owner (`ss -ltnp` / `netstat`), stop it or change the loopback port; never bind `0.0.0.0` to dodge a conflict |
 | Healthcheck failing | Read `docker compose logs <service>`, then the service's own startup log; fix the cause, do not remove the healthcheck |
 | MCP handshake fails in Docker but works from `bin/` | Compare `.mcp.json` and the launcher; regenerate with `scripts/gen-mcp-manifest.sh` |

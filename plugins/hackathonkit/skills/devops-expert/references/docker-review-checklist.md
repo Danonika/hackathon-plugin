@@ -5,6 +5,7 @@ Run top to bottom; each item is either proven by a command or reported as a gap.
 ## Files and Ownership
 
 - [ ] `Dockerfile` inspected: stages `build`, `runtime-base`, `hackathonkit-mcp`, `demo-api`, `quality`.
+- [ ] Check the pinned source archive and checksum in `docker/minio/Dockerfile`.
 - [ ] `docker-compose.yml` inspected: services `hackathonkit-mcp`, `demo-api`, `quality` (profile `quality`), `postgres`, `redis`, `minio`.
 - [ ] `hackathonkit-mcp` and `demo-api` mount `./evals:/workspace/evals` so plans, decisions, rankings and gate evidence survive `run --rm`.
 - [ ] `./data` is mounted, which persists `data/judge-bundles` (the default `eval.freeze_bundle` output) and `data/control`.
@@ -53,7 +54,7 @@ EOF
 
 ```sh
 docker compose build hackathonkit-mcp
-docker compose build demo-api
+docker compose build demo-api minio
 docker compose --profile quality build quality
 ```
 

@@ -83,8 +83,8 @@ trap diagnostics EXIT
 echo "[docker-check] compose config"
 docker compose config --quiet
 
-echo "[docker-check] build hackathonkit-mcp and demo-api"
-docker compose build hackathonkit-mcp demo-api
+echo "[docker-check] build hackathonkit-mcp, demo-api and MinIO"
+docker compose build hackathonkit-mcp demo-api minio
 
 if [ "$MODE" = "full" ]; then
   echo "[docker-check] build quality image"
@@ -166,6 +166,16 @@ else
     exit 1
   fi
 fi
+
+echo "[docker-check] verify MinIO release and authenticated S3 access"
+minio_version=$(docker compose exec -T minio minio --version)
+printf '%s\n' "$minio_version" | grep -F 'RELEASE.2025-09-07T16-13-09Z (commit-id=07c3a429bfed433e49018cb0f78a52145d4bedeb)' >/dev/null
+# curl imports these variables inside the container; credential values never
+# enter the command line or output. GET / is the S3 ListBuckets operation.
+docker compose exec -T minio curl -fsS -o /dev/null \
+  --aws-sigv4 aws:amz:us-east-1:s3 \
+  --variable %MINIO_ROOT_USER --variable %MINIO_ROOT_PASSWORD \
+  --expand-user '{{MINIO_ROOT_USER}}:{{MINIO_ROOT_PASSWORD}}' http://127.0.0.1:9000/
 
 echo "[docker-check] MCP selftest in the container"
 docker compose run --rm -T hackathonkit-mcp --selftest >/dev/null

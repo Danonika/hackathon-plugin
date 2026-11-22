@@ -30,7 +30,7 @@ command. Never "fix" by deleting data, volumes or healthchecks.
 | Container exits with code 1 immediately | missing entrypoint binary or incomplete env | `docker compose logs <service>`; verify the binary path and required env |
 | Writes to `data/` or `logs/` fail | UID/GID mismatch on bind mounts | re-run `scripts/setup.sh` to record `HACKATHONKIT_UID`/`HACKATHONKIT_GID` |
 | Healthcheck flapping | service starts slower than `start-period`, or dependency not ready | raise `start-period`, add a dependency check; keep the healthcheck |
-| `pull access denied` for MinIO | Docker Hub namespace unavailable in some regions | use `quay.io/minio/minio` as pinned in compose |
+| MinIO source build fails | Base image, upstream archive or Go dependency download failed | Run `docker compose build minio`; check the first failing download and its checksum. |
 | Docker Desktop on Windows errors | WSL2 backend disabled | enable WSL2, restart Docker Desktop, re-run `scripts/setup.ps1` |
 | MCP handshake works from `bin/` but not via compose | stale `plugins/hackathonkit/.mcp.json` | `sh scripts/gen-mcp-manifest.sh` and re-run the plugin check |
 

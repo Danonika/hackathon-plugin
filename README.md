@@ -419,7 +419,7 @@ Artifacts always land in `data/artifacts` (offline-safe). With the environment c
 - `POSTGRES_DSN` - artifact registry, routing runs, fly predictions and eval runs (`artifacts`, `routing_runs`, `fly_predictions`, `eval_runs`; schema is created on connect).
 - `MINIO_ENDPOINT`, `MINIO_ACCESS_KEY`, `MINIO_SECRET_KEY`, `MINIO_BUCKET`, `MINIO_USE_SSL` - artifact blob mirror; reads fall back to MinIO when a local file is missing and rehydrate the local cache. Compose drives both sides from `MINIO_ROOT_USER`/`MINIO_ROOT_PASSWORD` (mapped to the client's `MINIO_ACCESS_KEY`/`MINIO_SECRET_KEY`), so set those two in `.env`.
 
-`docker compose` passes both to the MCP and demo-api services. Without them everything degrades to the filesystem with a warning in the logs. MinIO is pulled from `quay.io/minio/minio` because the `minio/minio` Docker Hub namespace may be unavailable in some regions.
+Compose builds MinIO locally from the checksum-verified upstream source for `RELEASE.2025-09-07T16-13-09Z`. Run `docker compose build minio` to build it separately. The server uses the existing `miniodata` volume and loopback ports 9000 and 9001. On the first build, Docker downloads the source archive and Go dependencies. [MinIO build recipe](docker/minio/Dockerfile)
 
 ## Configuration
 

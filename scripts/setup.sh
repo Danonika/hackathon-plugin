@@ -66,7 +66,7 @@ mkdir -p "$ROOT/logs" "$ROOT/evals" "$ROOT/data/artifacts" "$ROOT/data/index" "$
 
 RUNTIME="binary"
 if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
-  if docker compose -f "$ROOT/docker-compose.yml" build hackathonkit-mcp &&
+  if docker compose -f "$ROOT/docker-compose.yml" build hackathonkit-mcp minio &&
     docker compose -f "$ROOT/docker-compose.yml" up -d postgres redis minio; then
     RUNTIME="docker"
     echo "[setup] MCP image built, infrastructure started"
