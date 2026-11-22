@@ -5,7 +5,9 @@ import (
 	"path/filepath"
 	"testing"
 
+	"hackathonkit.local/agentkit/internal/config"
 	"hackathonkit.local/agentkit/internal/evaluation"
+	"hackathonkit.local/agentkit/internal/mcp"
 )
 
 func inlineReport(judgeID, sha string, total float64) map[string]any {
@@ -176,6 +178,24 @@ func TestEvalFreezeBundle(t *testing.T) {
 	}
 	if len(env.Warnings) == 0 {
 		t.Fatal("missing git sha should warn")
+	}
+}
+
+func TestEvalFreezeBundleReportsPathInsideAliasedRoot(t *testing.T) {
+	root := t.TempDir()
+	mustWrite(t, filepath.Join(root, "README.md"), "# demo\n")
+	alias := filepath.Join(t.TempDir(), "workspace")
+	if err := os.Symlink(root, alias); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	reg := mcp.NewRegistry()
+	registerEvaluation(reg, Deps{Cfg: config.NewManager(alias)})
+	env := call(t, reg, "eval.freeze_bundle", nil)
+	if env.Status != "ok" {
+		t.Fatalf("freeze failed: %v", env.Warnings)
+	}
+	if got := env.Data.(map[string]any)["bundle_path"]; got != "data/judge-bundles" {
+		t.Fatalf("bundle_path = %v", got)
 	}
 }
 

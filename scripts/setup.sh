@@ -44,18 +44,6 @@ echo "[setup] repository root: $ROOT (profile: $PROFILE)"
 
 sh "$ROOT/scripts/prepare-env.sh"
 
-# A deterministic demo token protects the demo API without manual steps.
-if ! awk '/^HACKATHONKIT_DEMO_TOKEN=/ { sub(/^[^=]*=/,""); gsub(/^[[:space:]]+|[[:space:]]+$/,""); if (length && $0 != "change-me" && $0 != "change-me-in-production" && $0 != "my-token" && $0 != "secret" && $0 != "\"\"") valid=1 } END {exit !valid}' .env; then
-  TOKEN=$(od -An -N16 -tx1 /dev/urandom 2>/dev/null | tr -d ' \n' || true)
-  if [ -n "$TOKEN" ]; then
-    # Pass the secret on stdin so it never appears in the process argv.
-    printf '%s' "$TOKEN" | sh "$ROOT/scripts/env-set.sh" .env HACKATHONKIT_DEMO_TOKEN
-    echo "[setup] generated HACKATHONKIT_DEMO_TOKEN for the demo API"
-  else
-    echo "[setup] warning: could not generate a demo token (od/urandom unavailable); set HACKATHONKIT_DEMO_TOKEN manually" >&2
-  fi
-fi
-
 # Persist the host UID/GID so non-root containers can write through bind mounts.
 if command -v id >/dev/null 2>&1; then
   sh "$ROOT/scripts/env-set.sh" .env HACKATHONKIT_UID "$(id -u)"

@@ -97,6 +97,7 @@ type BundleFile struct {
 
 type Bundle struct {
 	Dir           string   `json:"dir"`
+	RelativeDir   string   `json:"-"` // Slash-separated, relative to the canonical repository root.
 	BundleHash    string   `json:"bundle_hash"`
 	GitSHA        string   `json:"git_sha"`
 	Model         string   `json:"model,omitempty"`
@@ -322,6 +323,7 @@ func FreezeBundle(opts BundleOptions) (Bundle, error) {
 	}
 	installed := Bundle{
 		Dir:           outAbs,
+		RelativeDir:   outRel,
 		BundleHash:    bundleHash,
 		GitSHA:        gitSHA,
 		Model:         opts.Model,

@@ -604,8 +604,16 @@ func TestPartialUpsertRetainsRiskAndCorruptDateIsReported(t *testing.T) {
 	}
 }
 
+func TestDSNEscapesReservedFilenameCharacters(t *testing.T) {
+	for _, readOnly := range []bool{false, true} {
+		if got := dsn("state?#%.db", readOnly); !strings.HasPrefix(got, "file:state%3F%23%25.db?") {
+			t.Fatalf("unescaped SQLite filename in %q", got)
+		}
+	}
+}
+
 func TestLegacyTimestampOrderingOnReadOnlyAndMigration(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "state?#%.db")
+	path := filepath.Join(t.TempDir(), "state#%.db")
 	s, err := Open(path)
 	if err != nil {
 		t.Fatal(err)

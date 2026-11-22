@@ -24,8 +24,12 @@ func TestNativeIntBounds(t *testing.T) {
 func TestRelativeRepositoryRoot(t *testing.T) {
 	root := t.TempDir()
 	t.Chdir(root)
+	canonicalRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		t.Fatal(err)
+	}
 	got, err := resolveRepoPath(".", "sub/file")
-	if err != nil || got != filepath.Join(root, "sub", "file") {
+	if err != nil || got != filepath.Join(canonicalRoot, "sub", "file") {
 		t.Fatalf("got %q, %v", got, err)
 	}
 }

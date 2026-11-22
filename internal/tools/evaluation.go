@@ -308,12 +308,8 @@ func registerEvaluation(reg *mcp.Registry, d Deps) {
 			if d.Metrics != nil {
 				d.Metrics.Inc("eval_bundles_total")
 			}
-			rel, relErr := filepath.Rel(root, bundle.Dir)
-			if relErr != nil {
-				rel = bundle.Dir
-			}
 			data := map[string]any{
-				"bundle_path":    filepath.ToSlash(rel),
+				"bundle_path":    bundle.RelativeDir,
 				"bundle_hash":    bundle.BundleHash,
 				"git_sha":        bundle.GitSHA,
 				"model":          bundle.Model,

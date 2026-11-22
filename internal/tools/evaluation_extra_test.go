@@ -196,7 +196,11 @@ func TestPathSegmentAndResolveRepoPath(t *testing.T) {
 	if _, err := resolveRepoPath(root, "../escape"); err == nil {
 		t.Fatal("traversal must fail")
 	}
-	if got, err := resolveRepoPath(root, "a/b.json"); err != nil || got != filepath.Join(root, "a", "b.json") {
+	canonicalRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := resolveRepoPath(root, "a/b.json"); err != nil || got != filepath.Join(canonicalRoot, "a", "b.json") {
 		t.Fatalf("resolveRepoPath = %q, %v", got, err)
 	}
 	if _, err := writeRepoJSON(root, "../escape.json", map[string]any{"a": 1}); err == nil {
